@@ -49,7 +49,7 @@ guardrail, and only then signs + submits — or vetoes. **Hermes proposes; the E
   crypto/finance up-down markets.
 - ⚠ **SIGNING PATH (build-gating, verify FIRST — POL S2):** plain EOA (`sigtype-0`) is **REJECTED**
   since 2026-04-28. Use the **Magic/proxy wallet** (sigtype 1/2) or the **official Rust client**
-  (correct EIP-1271 wrapping). The `POLY_1271` / sigtype-3 path has an open bug. The whole executor
+  (correct EIP-1271 wrapping). The `POLY_1271` / sigtype-3 path has an open bug. **VERIFIED 2026-06-24: the Python/TS V2 SDKs are broken for new deposit wallets (py `#70`/`#77`, ts `#64` open) and EOA/Magic-proxy are rejected — build the signer on the official Rust client `Polymarket/rs-clob-client-v2`; see [`VERIFICATION-2026-06-24.md`](VERIFICATION-2026-06-24.md).** The whole executor
   design depends on this — prove a tiny order signs+posts before building anything else.
 - ⚠ **FEES (changed 2026-03-30):** broad taker fees now apply — ~$0.75 sports → $1.80 crypto per 100
   shares (`fee = C·0.03·p·(1−p)`, peaks at p=0.5). **Only geopolitics/world-events is free.** Makers
