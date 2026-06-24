@@ -1,0 +1,42 @@
+# ── Secrets — NEVER commit ──────────────────────────────────────────────
+.env
+.env.*
+*.key
+*.pem
+secrets/
+**/secret*
+wallet*.json
+keystore/
+config/caps.signed*
+config/*.local.*
+
+# ── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# ── Node (if any TS tooling / Rust-client bindings) ─────────────────────
+node_modules/
+dist/
+*.log
+
+# ── Data / runtime (self-snapshotted market memory, shadow runs) ────────
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+market-memory/
+shadow-runs/
+logs/
+
+# ── OS / editor ─────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
