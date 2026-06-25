@@ -23,6 +23,10 @@ class LocalBook:
         self._asks = self._levels(message.get("asks", []))
 
     def apply_price_change(self, message):
+        # TODO(S1): no sequence-gap detection yet. Polymarket price_change carries
+        # a book hash/timestamp; a dropped delta silently corrupts this book until
+        # the next snapshot. Until gap-detection + a staleness flag exist, the ERS
+        # must NOT size off an unverified book between snapshots.
         for change in message.get("changes", []):
             price = Decimal(change["price"])
             size = Decimal(change["size"])
@@ -40,8 +44,8 @@ class LocalBook:
 
     def midpoint(self):
         bid, ask = self.best_bid(), self.best_ask()
-        if bid is None or ask is None:
-            return None
+        if bid is None or ask is None or bid >= ask:
+            return None  # empty side or crossed/locked book => no usable midpoint
         return (bid + ask) / 2
 
     @staticmethod
