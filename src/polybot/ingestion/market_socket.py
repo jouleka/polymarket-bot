@@ -51,6 +51,7 @@ class MarketSocket:
                     self._dispatch(frame)
                 failures = 0  # a clean close resets the backoff
             except self._reconnect_on:
+                self._stream.mark_all_stale()  # books untrusted until the resync snapshot
                 failures += 1
                 await self._sleep(self._backoff_delay(failures))
 
