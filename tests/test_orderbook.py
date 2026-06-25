@@ -29,9 +29,7 @@ def test_price_change_adds_a_new_best_level():
     book = LocalBook()
     book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "150")]))
 
-    book.apply_price_change(
-        {"asset_id": "123", "changes": [{"price": "0.61", "side": "BUY", "size": "80"}]}
-    )
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "80"}])
 
     assert book.best_bid() == Decimal("0.61")
 
@@ -40,9 +38,7 @@ def test_price_change_with_zero_size_removes_a_level():
     book = LocalBook()
     book.apply_book(_snapshot(bids=[("0.60", "100"), ("0.61", "50")], asks=[("0.62", "150")]))
 
-    book.apply_price_change(
-        {"asset_id": "123", "changes": [{"price": "0.61", "side": "BUY", "size": "0"}]}
-    )
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "0"}])
 
     assert book.best_bid() == Decimal("0.60")
 
@@ -80,9 +76,7 @@ def test_book_is_fresh_after_a_snapshot():
 
 def test_price_change_before_a_snapshot_stays_stale():
     book = LocalBook()
-    book.apply_price_change(
-        {"asset_id": "A", "changes": [{"price": "0.61", "side": "BUY", "size": "50"}]}
-    )
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "50"}])
 
     assert book.is_stale()  # deltas without a baseline are not a trustworthy book
 
@@ -106,3 +100,97 @@ def test_book_snapshot_replaces_previous_state():
 
     assert book.best_bid() == Decimal("0.60")
     assert book.best_ask() == Decimal("0.62")
+
+
+# --- mid-stream sequence-gap detection (live price_change format) -------------
+# Live frames (probed 2026-06-25) carry per-asset level changes as a list of
+# {price, side, size, ...} dicts, each with the venue's resulting top-of-book in
+# best_bid/best_ask. apply_price_change now takes that list directly; a dropped or
+# misapplied delta makes our reconstructed top-of-book disagree with the venue's
+# reported best_bid/best_ask -> verify_top_of_book marks the book stale (resync).
+
+
+def test_apply_price_change_takes_a_list_of_level_changes():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "150")]))
+
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "80"}])
+
+    assert book.best_bid() == Decimal("0.61")
+
+
+def test_apply_price_change_list_zero_size_removes_level():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100"), ("0.61", "50")], asks=[("0.62", "150")]))
+
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "0"}])
+
+    assert book.best_bid() == Decimal("0.60")
+
+
+def test_apply_price_change_applies_multiple_levels_in_one_call():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "100")]))
+
+    book.apply_price_change([
+        {"price": "0.61", "side": "BUY", "size": "80"},
+        {"price": "0.63", "side": "SELL", "size": "40"},
+    ])
+
+    assert book.best_bid() == Decimal("0.61")
+    assert book.best_ask() == Decimal("0.62")  # 0.63 ask is worse than existing 0.62
+
+
+def test_verify_top_of_book_consistent_keeps_book_fresh():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "100")]))
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "50"}])
+
+    # Venue's resulting top-of-book matches our reconstruction -> in sync.
+    assert book.verify_top_of_book(best_bid="0.61", best_ask="0.62") is True
+    assert not book.is_stale()
+    assert book.midpoint() == Decimal("0.615")
+
+
+def test_verify_top_of_book_divergence_marks_stale():
+    # Models a DROPPED delta: we applied the one delta we saw (best bid -> 0.61),
+    # but the venue's authoritative top is 0.63 because an intervening update never
+    # reached us. The reconstruction has silently diverged -> mark stale + resync.
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "100")]))
+    book.apply_price_change([{"price": "0.61", "side": "BUY", "size": "50"}])
+
+    assert book.verify_top_of_book(best_bid="0.63", best_ask="0.62") is False
+    assert book.is_stale()
+    assert book.midpoint() is None  # ERS must never size off a diverged book
+
+
+def test_verify_top_of_book_matches_when_a_side_is_empty():
+    # One-sided book: the venue reports an empty ask (""), and we also have none.
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[]))
+
+    assert book.best_ask() is None
+    assert book.verify_top_of_book(best_bid="0.60", best_ask="") is True
+    assert not book.is_stale()
+
+
+def test_verify_top_of_book_divergence_when_venue_has_a_side_we_lack():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[]))
+
+    # Venue reports an ask we don't have -> we missed the update that added it.
+    assert book.verify_top_of_book(best_bid="0.60", best_ask="0.62") is False
+    assert book.is_stale()
+
+
+def test_verify_top_of_book_treats_zero_as_an_empty_side():
+    # Polymarket order prices live in (0, 1); 0 is never a real top-of-book level.
+    # If the venue encodes an empty side as "0" (rather than ""), it must read as
+    # empty -> match our empty side, not false-diverge into a perpetual gap.
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[]))
+
+    assert book.best_ask() is None
+    assert book.verify_top_of_book(best_bid="0.60", best_ask="0") is True
+    assert not book.is_stale()
