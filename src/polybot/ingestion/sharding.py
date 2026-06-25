@@ -14,9 +14,23 @@ tears down the whole group — fail-loud, since a venue format change is global.
 INVARIANT: the shared ``sink`` MUST be synchronous (no ``await``). ``MarketStream.
 ingest`` stamps observed_at, mutates the shard's book, and calls the sink with no
 suspension point in between; that atomicity (and thus deterministic cross-shard
-ordering) holds only while the sink does not yield the loop. (A blocking
-synchronous sink is safe for ordering but can stall sibling shards — batching /
-off-loop writes are a separate follow-up before scaling to many shards.)
+ordering) holds only while the sink does not yield the loop. A blocking synchronous
+sink is safe for ordering but can stall sibling shards, so the production sink must
+also be FAST.
+
+OFF-LOOP WRITES (POL-12 / C2): a per-frame ``EventStore.append`` commit IS slow and,
+on the loop, stalled sibling shards — which is why prod shards were capped at 2. The
+fix keeps the sink synchronous but fast: wrap the store in
+``storage.event_writer.QueuedEventWriter`` so ``PersistingSink``'s ``append`` only
+enqueues (microseconds, no I/O) and a dedicated thread commits off the loop. The
+synchronous-sink invariant above is preserved (enqueue does not await); with the
+writer in place the shard count may rise past the previously-cap-of-2.
+
+Two caveats when raising the shard count: (1) all shards funnel into ONE writer thread,
+so the cap is now bounded by that single committer's sustained throughput — exceed it and
+the backlog hits ``max_queued`` and HALTs (fail-loud, by design), not silently. (2) the
+off-loop writer adds a small hard-crash data-loss window (rows queued but not yet
+committed) that the old on-loop commit did not have; see ``event_writer`` for the trade.
 """
 
 import asyncio
