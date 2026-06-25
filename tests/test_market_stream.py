@@ -388,3 +388,63 @@ def test_ingest_price_change_malformed_later_entry_halts_atomically():
 
     assert stream.book_for("A").best_bid() == Decimal("0.60")  # A NOT mutated
     assert seen == []                                          # nothing partially persisted
+
+
+# --- synthetic events emitted from book deltas --------------------------------
+
+
+def _detector(**kw):
+    from polybot.ingestion.synthetic import SyntheticDetector
+    return SyntheticDetector(**kw)
+
+
+def test_price_change_emits_large_print_to_the_synthetic_sink():
+    market, synth = [], []
+    det = _detector(large_print_size="5000", min_evaporation_size="1000000")  # isolate large_print
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=market.append,
+                          detector=det, synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "8000")], [("0.62", "100")]))
+    market.clear()
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "500", "0.60", "0.62")))  # removes 7500 at the touch
+
+    assert [o.event_type for o in market] == ["price_change"]    # book stream unchanged
+    assert [o.event_type for o in synth] == ["large_print"]      # synthetic goes to its own sink
+    ev = synth[0]
+    assert ev.asset_id == "A" and ev.message["size_removed"] == "7500"
+    assert ev.observed_at > market[0].observed_at               # its own fresh, later stamp
+    assert ev.message["triggered_at"] == market[0].observed_at  # ties back to the frame
+
+
+def test_no_detector_means_no_synthetic_events():
+    synth = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "8000")], [("0.62", "100")]))
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "500", "0.60", "0.62")))
+
+    assert synth == []
+
+
+def test_below_threshold_delta_emits_no_synthetic_event():
+    synth = []
+    det = _detector(large_print_size="1000000", min_evaporation_size="1000000")
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), detector=det, synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "8000")], [("0.62", "100")]))
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "7000", "0.60", "0.62")))  # removes only 1000
+
+    assert synth == []
+
+
+def test_evaporation_fires_when_best_bid_is_consumed():
+    synth = []
+    det = _detector(large_print_size="1000000", min_evaporation_size="1000")  # isolate evaporation
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), detector=det, synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "5000"), ("0.58", "200")], [("0.62", "100")]))
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "0", "0.58", "0.62")))  # best bid 0.60 removed
+
+    assert [o.event_type for o in synth] == ["liquidity_evaporation"]
+    assert synth[0].message["price"] == "0.60" and synth[0].message["size_removed"] == "5000"
+    assert not stream.book_for("A").is_stale()  # consistent venue top -> no gap
