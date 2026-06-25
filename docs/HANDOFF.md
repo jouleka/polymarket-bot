@@ -140,9 +140,19 @@ escape `run()` (no reconnect, no `mark_all_stale`). Added `transport.WS_RECONNEC
 (core stays transport-agnostic) and wired the live script to it (`tests/test_transport.py` guards the tuple).
 
 ## 9. Remaining POL-3 work after that (rough order)
-1. WS **sharding** (≤ ~500 assets per connection; one `MarketStream`/`MarketSocket` set per shard sharing the
-   one stamper). The keepalive is per-socket, so each shard's `MarketSocket` runs its own PING sender
-   independently — and this is where the deferred stamper **thread-lock** becomes reachable and testable.
+1. ~~WS **sharding**~~ **DONE ✅** — `ingestion/sharding.py` `ShardedMarketCollector`: splits assets into
+   ≤`max_assets_per_shard` chunks (default 500), one `MarketStream`+`MarketSocket` per shard, ALL sharing the
+   one stamper + one sink; concurrent shard tasks under a `TaskGroup` (a HALT in any shard tears down the group);
+   per-shard staleness isolation; unified `book_for`. Fail-loud on empty/duplicate asset_ids. `MarketSocket.run`
+   now supports `max_connections=None` (unbounded reconnect = the 24/7 production mode). The stamper got its
+   `threading.Lock` (correctness must not rest on the GIL; free-threaded 3.13t ships). Live-verified: 2 shards /
+   2 concurrent connections, both books built, observed_at globally ordered+unique, bounded AND unbounded modes.
+   Independent Opus review (2-lens panel + closing pass): SHIP.
+   - ⚠ **C2 FOLLOW-UP before scaling shard count past 2:** `EventStore.append` does a synchronous `commit()`
+     per frame ON the event loop; with many shards that stalls sibling receive loops + keepalives (idle-drop
+     risk). Pre-existing (single-stream had it); ordering is still correct. Fix = batched commits / single-writer
+     queue / off-loop writer. The sink-MUST-be-synchronous invariant is documented in `sharding.py`. **Do not
+     raise production shard count beyond the live-verified 2 until this lands.**
 2. **Mid-stream sequence-gap detection** (the remaining `orderbook.py` TODO; the staleness flag itself is
    DONE — `is_stale`/`mark_stale`, midpoint gated, disconnect marks stale). Capture the per-asset book
    hash/timestamp from `price_change` and `mark_stale()` on a hash mismatch / dropped delta — once you've
