@@ -12,8 +12,14 @@ from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.market_stream import MarketStream
+from polybot.ingestion.orderbook import LocalBook
 from polybot.ingestion.persistence import PersistingSink
-from polybot.ingestion.replay import reconstruct, reconstruct_from_store
+from polybot.ingestion.replay import (
+    book_fidelity_state,
+    fidelity_matches,
+    reconstruct,
+    reconstruct_from_store,
+)
 from polybot.storage.market_memory import EventStore
 
 
@@ -38,6 +44,70 @@ def _pc(asset_id, price, side, size, best_bid, best_ask, market="0xMKT", timesta
 
 def _top(book):
     return (str(book.best_bid()), str(book.best_ask()))
+
+
+def _fresh_book(bids, asks):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": p, "size": s} for p, s in bids],
+                     "asks": [{"price": p, "size": s} for p, s in asks]})
+    return book
+
+
+def test_book_fidelity_state_captures_levels_midpoint_and_staleness():
+    fresh = _fresh_book([("0.60", "100")], [("0.62", "100")])
+    assert book_fidelity_state(fresh) == {
+        "bid": Decimal("0.60"), "ask": Decimal("0.62"),
+        "mid": Decimal("0.61"), "stale": False,
+    }
+
+    fresh.mark_stale()
+    stale = book_fidelity_state(fresh)
+    assert stale["stale"] is True
+    assert stale["mid"] is None             # stale -> no usable midpoint
+    assert stale["bid"] == Decimal("0.60")  # ...but the last-known levels remain
+
+    assert book_fidelity_state(None) is None
+
+
+def test_fidelity_match_requires_top_of_book_and_full_state_when_live_is_fresh():
+    a = book_fidelity_state(_fresh_book([("0.60", "100")], [("0.62", "100")]))
+    same = book_fidelity_state(_fresh_book([("0.60", "100")], [("0.62", "100")]))
+    diff_bid = book_fidelity_state(_fresh_book([("0.59", "100")], [("0.62", "100")]))
+
+    assert fidelity_matches(a, same) is True
+    assert fidelity_matches(a, diff_bid) is False
+    assert fidelity_matches(None, None) is True
+    assert fidelity_matches(a, None) is False
+    assert fidelity_matches(None, a) is False
+
+
+def test_fidelity_match_relaxes_midpoint_when_live_book_is_stale():
+    # The pre-existing live-reconnect-staleness asymmetry: the LIVE book went stale via
+    # a socket reconnect (not a persisted row), so its midpoint is None; the data-only
+    # replay reconstructs a fresh midpoint. bid/ask match exactly -> NOT a fidelity
+    # violation, so this MATCHES (midpoint relaxed only because the live book is stale).
+    live_stale = _fresh_book([("0.998", "100")], [("0.999", "100")])
+    live_stale.mark_stale()
+    live = book_fidelity_state(live_stale)
+    replay_fresh = book_fidelity_state(_fresh_book([("0.998", "100")], [("0.999", "100")]))
+
+    assert live["mid"] is None and replay_fresh["mid"] == Decimal("0.9985")
+    assert fidelity_matches(live, replay_fresh) is True  # relaxed: live stale, bid/ask match
+
+    # ...but a different top-of-book is STILL a real mismatch even when live is stale.
+    replay_diff = book_fidelity_state(_fresh_book([("0.997", "100")], [("0.999", "100")]))
+    assert fidelity_matches(live, replay_diff) is False
+
+
+def test_fidelity_match_catches_replay_staleness_when_live_is_fresh():
+    # Teeth preserved: if the LIVE book is fresh but replay is stale (lost data / a gap
+    # the live stream did not have), the midpoints differ (real vs None) -> mismatch.
+    live = book_fidelity_state(_fresh_book([("0.60", "100")], [("0.62", "100")]))
+    replay_book = _fresh_book([("0.60", "100")], [("0.62", "100")])
+    replay_book.mark_stale()
+    replay = book_fidelity_state(replay_book)
+
+    assert fidelity_matches(live, replay) is False
 
 
 def test_reconstruct_book_from_snapshot_and_deltas():

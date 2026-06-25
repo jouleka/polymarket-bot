@@ -41,6 +41,7 @@ class QueuedEventWriter:
         # thread) race on them, and correctness must not rest on the GIL (cf.
         # MonotonicStamper, free-threaded 3.13t). Uncontended on the hot path (~tens of ns).
         self._pending = 0
+        self._peak_pending = 0  # high-water backlog, for 24/7 observability / endurance checks
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="event-writer", daemon=True)
         self._thread.start()
@@ -63,6 +64,8 @@ class QueuedEventWriter:
                     "(the writer thread is not draining fast enough)"
                 )
             self._pending += 1
+            if self._pending > self._peak_pending:
+                self._peak_pending = self._pending
         self._queue.put(envelope)
 
     def _run(self):
@@ -99,6 +102,12 @@ class QueuedEventWriter:
         self._store.close()
         if self._error is not None:
             raise RuntimeError("event-writer thread failed; ingestion HALTED") from self._error
+
+    def peak_pending(self):
+        """High-water backlog (max rows ever queued-but-not-yet-committed). ~0 in
+        steady state; rising toward max_queued means the writer can't keep up."""
+        with self._lock:
+            return self._peak_pending
 
     def __enter__(self):
         return self
