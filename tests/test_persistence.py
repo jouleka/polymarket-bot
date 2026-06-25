@@ -44,12 +44,23 @@ def test_persisting_sink_survives_restart(tmp_path):
         assert len(reopened.all()) == 1
 
 
-def test_persisting_sink_dedups_on_stable_frame_hash(tmp_path):
+def test_persisting_sink_records_repeat_content_as_distinct_observations(tmp_path):
+    # Each streamed frame is a distinct point-in-time observation. An identical
+    # book state seen again (X->Y->X, or a reconnect snapshot) must NOT be dropped
+    # by content dedup — that is silent data loss on a no-backfill substrate.
     store = EventStore(str(tmp_path / "mm.db"))
     stream = MarketStream(MonotonicStamper(clock=lambda: 5), sink=PersistingSink(store))
 
-    # Same frame (stable hash) re-delivered after a reconnect snapshot.
     stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")], hash="abc"))
     stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")], hash="abc"))
 
-    assert len(store.all()) == 1
+    assert len(store.all()) == 2
+
+
+def test_persisting_sink_captures_source_timestamp_as_published_at(tmp_path):
+    store = EventStore(str(tmp_path / "mm.db"))
+    stream = MarketStream(MonotonicStamper(clock=lambda: 5), sink=PersistingSink(store))
+
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")], timestamp="1719331200000"))
+
+    assert store.all()[0].published_at == 1719331200000

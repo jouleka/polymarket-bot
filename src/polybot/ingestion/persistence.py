@@ -2,8 +2,9 @@
 
 Adapts the dispatcher's Observation into a canonical Envelope and appends it to
 an EventStore, so live market data is captured durably from day one (it cannot
-be backfilled). Uses a stable frame hash/timestamp as the dedup key when present
-so a reconnect snapshot or re-delivered frame is not double-recorded.
+be backfilled). Each frame is a distinct point-in-time observation keyed on the
+unique observed_at — NO content dedup, so an identical book state seen twice (a
+revert, or a reconnect snapshot) is preserved rather than silently dropped.
 """
 
 
@@ -19,22 +20,28 @@ class PersistingSink:
         self._source_tier = source_tier
 
     def __call__(self, observation):
+        message = observation.message
         self._store.append(
             Envelope(
                 source=self._source,
                 source_tier=self._source_tier,
-                event_id=self._event_id(observation),
+                # Every streamed frame is a distinct point-in-time observation:
+                # key on the unique observed_at so an identical book state seen
+                # again is recorded, not silently dropped (no content dedup here).
+                event_id=f"{observation.asset_id}:{observation.event_type}:{observation.observed_at}",
                 observed_at=observation.observed_at,
-                content=json.dumps(observation.message, sort_keys=True),
+                content=json.dumps(message, sort_keys=True, default=str),
+                published_at=self._published_at(message),
                 market_links=(observation.asset_id,),
             )
         )
 
     @staticmethod
-    def _event_id(observation):
-        message = observation.message
-        # Prefer a stable id from the frame so a re-delivered snapshot dedups;
-        # fall back to the (unique) observed_at when the frame carries none.
-        stable = message.get("hash") or message.get("timestamp")
-        suffix = stable if stable is not None else observation.observed_at
-        return f"{observation.asset_id}:{observation.event_type}:{suffix}"
+    def _published_at(message):
+        ts = message.get("timestamp")
+        if ts is None:
+            return None
+        try:
+            return int(ts)
+        except (TypeError, ValueError):
+            return None
