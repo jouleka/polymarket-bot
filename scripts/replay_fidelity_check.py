@@ -32,6 +32,7 @@ from polybot.ingestion.market_stream import MarketStream
 from polybot.ingestion.persistence import PersistingSink
 from polybot.ingestion.replay import reconstruct_from_store
 from polybot.ingestion.transport import GAMMA_URL, WS_RECONNECT_ON, open_market_ws
+from polybot.storage.event_writer import QueuedEventWriter
 from polybot.storage.market_memory import EventStore
 
 WS_SECONDS = 35
@@ -93,9 +94,13 @@ class CapturingSink:
 
 async def capture(token_ids, db_path):
     stamper = MonotonicStamper()
-    store = EventStore(db_path)
+    # Persist through the off-loop single-writer (POL-12): the acceptance gate now
+    # exercises the production write path, proving replay fidelity + no-look-ahead
+    # still hold with the per-frame commit moved off the event loop. The store is
+    # opened check_same_thread=False so the writer thread can drive its connection.
+    writer = QueuedEventWriter(EventStore(db_path, check_same_thread=False))
     stream = MarketStream(stamper, asset_ids=token_ids)
-    sink = CapturingSink(PersistingSink(store), stream, token_ids)
+    sink = CapturingSink(PersistingSink(writer), stream, token_ids)
     stream._sink = sink  # wire the capturing sink (stream built first so the sink can read its books)
     socket = MarketSocket(open_market_ws, stream, asset_ids=token_ids, reconnect_on=WS_RECONNECT_ON)
     try:
@@ -103,7 +108,7 @@ async def capture(token_ids, db_path):
     except asyncio.TimeoutError:
         pass
     final_live = {a: state(stream.book_for(a)) for a in token_ids if stream.book_for(a) is not None}
-    store.close()
+    writer.close()  # drain the off-loop queue + close the store before any reconstruction reads
     return sink.checkpoints, final_live
 
 

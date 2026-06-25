@@ -4,6 +4,8 @@ Named acceptance criteria exercised here: the DB persists across restart, and
 replay is in observed_at order with no look-ahead.
 """
 
+import threading
+
 from polybot.core.models import Envelope
 from polybot.storage.market_memory import EventStore
 
@@ -68,6 +70,33 @@ def test_duplicate_event_id_append_is_idempotent(tmp_path):
 
     assert [e.event_id for e in events] == ["dup"]
     assert events[0].observed_at == 10  # the first observation is the one kept
+
+
+def test_store_can_be_driven_from_another_thread_when_opted_in(tmp_path):
+    # The off-loop single-writer (POL-12) constructs the connection on one thread
+    # and drives append() from a dedicated writer thread. SQLite ties a connection
+    # to its creating thread unless check_same_thread=False; opting in permits the
+    # writer-thread discipline. Default stays True (the check is only relaxed where
+    # we own single-thread access).
+    path = str(tmp_path / "mm.db")
+    store = EventStore(path, check_same_thread=False)
+
+    errors = []
+
+    def writer():
+        try:
+            store.append(_env("1", 10))
+        except Exception as exc:  # pragma: no cover - only hit on a regression
+            errors.append(exc)
+
+    t = threading.Thread(target=writer)
+    t.start()
+    t.join()
+    store.close()
+
+    assert errors == []  # cross-thread append did not raise sqlite ProgrammingError
+    with EventStore(path) as reopened:
+        assert [e.event_id for e in reopened.all()] == ["1"]
 
 
 def test_replay_until_excludes_later_observations(tmp_path):

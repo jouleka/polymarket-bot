@@ -31,6 +31,7 @@ from polybot.ingestion.transport import (
     make_httpx_fetch,
     open_market_ws,
 )
+from polybot.storage.event_writer import QueuedEventWriter
 from polybot.storage.market_memory import EventStore
 
 WS_SECONDS = 8
@@ -62,14 +63,19 @@ async def main():
     token_ids = [o.token_id for o in market.outcomes]
 
     stamper = MonotonicStamper()
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    db_path = tempfile.mktemp(suffix=".db")
+    # Persist through the off-loop single-writer (POL-12): both the REST poller and the
+    # WS sink hand rows to a background writer thread, so the event loop never blocks on
+    # a SQLite commit. check_same_thread=False lets that thread drive the connection.
+    writer = QueuedEventWriter(EventStore(db_path, check_same_thread=False))
+    try:
         print("\n2) DATA API poll /trades")
-        poller = DataApiPoller(make_httpx_fetch(DATA_API_URL), stamper, store)
+        poller = DataApiPoller(make_httpx_fetch(DATA_API_URL), stamper, writer)
         n = await poller.poll_once("/trades", params={"market": market.condition_id, "limit": 25})
         print(f"   persisted {n} trade observations")
 
         print(f"\n3) CLOB WS live book ({WS_SECONDS}s)")
-        stream = MarketStream(stamper, sink=PersistingSink(store), asset_ids=token_ids)
+        stream = MarketStream(stamper, sink=PersistingSink(writer), asset_ids=token_ids)
         socket = MarketSocket(open_market_ws, stream, asset_ids=token_ids,
                               reconnect_on=WS_RECONNECT_ON)
         try:
@@ -83,7 +89,10 @@ async def main():
                 continue
             print(f"   token {tid[:14]}...  bid={book.best_bid()} ask={book.best_ask()} "
                   f"mid={book.midpoint()}")
+    finally:
+        writer.close()  # drain the off-loop queue + close the store before reading back
 
+    with EventStore(db_path) as store:  # fresh main-thread connection, after the writer joined
         rows = store.all()
         print(f"\n   Market-Memory rows persisted: {len(rows)} "
               f"(sources: {sorted({e.source for e in rows})})")
