@@ -153,10 +153,29 @@ escape `run()` (no reconnect, no `mark_all_stale`). Added `transport.WS_RECONNEC
      risk). Pre-existing (single-stream had it); ordering is still correct. Fix = batched commits / single-writer
      queue / off-loop writer. The sink-MUST-be-synchronous invariant is documented in `sharding.py`. **Do not
      raise production shard count beyond the live-verified 2 until this lands.**
-2. **Mid-stream sequence-gap detection** (the remaining `orderbook.py` TODO; the staleness flag itself is
-   DONE — `is_stale`/`mark_stale`, midpoint gated, disconnect marks stale). Capture the per-asset book
-   hash/timestamp from `price_change` and `mark_stale()` on a hash mismatch / dropped delta — once you've
-   confirmed the exact frame hash format live (don't guess).
+2. **Mid-stream sequence-gap detection** — **DONE ✅** (branch `pol-3-orderbook-seqgap`).
+   - ⚠ **CRITICAL discovery (corrects §6):** the live `price_change` format had drifted from what the code
+     assumed. It is NOT `{asset_id, changes:[…]}`; it is `{market, timestamp, price_changes:[{asset_id,
+     price, size, side, hash, best_bid, best_ask}, …]}` — **one frame fans out across a market's legs**, with
+     `asset_id` per-entry. The old `ingest` did `message["asset_id"]` → `KeyError` → `_dispatch` swallowed it,
+     so **every live delta was silently dropped (the book was snapshot-only)**. Fixed: `MarketStream.ingest`
+     fans a frame out to its tracked books, ignores untracked sibling legs (no phantom books), and HALTs on a
+     missing `price_changes` list / malformed or non-string entry (fail-loud format change).
+   - **Gap detector:** the venue book `hash` is NOT recomputable from the public stream (288 SHA-1
+     serializations vs a real `book` frame → 0 matches), so detection uses the per-entry **`best_bid`/
+     `best_ask`** (the venue's authoritative resulting top-of-book): after applying the deltas, a reconstructed
+     top that disagrees ⇒ dropped/misapplied delta ⇒ `LocalBook.verify_top_of_book` marks the book stale
+     (`midpoint()` → None). **Recovery = force a reconnect** (subscribe-on-connect == fresh snapshot == the
+     proven resync); re-subscribing on the SAME live socket did NOT resnapshot live, so reconnect is used. A
+     persistent re-divergence backs off and HALTs after `max_resyncs` (no zero-delay reconnect storm).
+   - **Verified:** `./.venv/bin/pytest` = **111 passing**; live read-only — WS-reconstructed book matched the
+     independent REST `/book` oracle 8/8 assets, 0 disagreements over ~600–800 applied deltas; live smoke check
+     persists clob-ws price_change rows. Two independent Opus reviews (4-lens panel + a focused re-review) →
+     SHIP; their findings (fail-loud detector fields, numeric-coercion symmetry, resync-storm backoff/HALT,
+     pre-snapshot persistence) were all fixed. Subscribed-but-unsnapshotted deltas are now archived (the store
+     cannot be backfilled). Open follow-ups (non-blocking, both fail-loud-direction): confirm a real
+     multi-entry-same-asset frame carries `best_bid/best_ask` on intermediate rows; an optional time-windowed
+     reconnect ceiling for a reconcile-one-then-rediverge flap.
 3. **Synthetic events** (liquidity-evaporation / large-print) emitted from book deltas.
 4. **Polygon on-chain log watcher** (V2 exchange + ConditionalTokens ERC-1155) as tamper-proof ground truth.
 5. **News fast-path** (curated primary-source allowlist + calendar pre-stager) + slow-path (one aggregator +

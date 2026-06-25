@@ -41,6 +41,10 @@ class MarketSocket:
         backoff_base=0.5,
         backoff_cap=30.0,
         ping_interval=10.0,
+        # After this many CONSECUTIVE resyncs with no clean delta in between, HALT:
+        # a book the resync can never reconcile is itself a fail-loud format-change
+        # signal, not something to reconnect against forever.
+        max_resyncs=8,
     ):
         self._connect = connect  # async () -> transport (async-iterable + .send)
         self._stream = stream
@@ -52,32 +56,80 @@ class MarketSocket:
         if ping_interval <= 0:
             raise ValueError("ping_interval must be > 0 (a non-positive value hot-loops the keepalive)")
         self._ping_interval = ping_interval
+        if max_resyncs <= 0:
+            raise ValueError("max_resyncs must be > 0")
+        self._max_resyncs = max_resyncs
 
     async def run(self, max_connections=1):
         # max_connections=None => reconnect forever (the 24/7 production mode); a
         # finite count bounds reconnect attempts (used by tests to terminate).
         connections = 0
         failures = 0
+        resync_failures = 0  # CONSECUTIVE resyncs with no clean delta between them
         while max_connections is None or connections < max_connections:
             connections += 1
             try:
                 transport = await self._connect()
                 await transport.send(self._subscribe_message())
                 keepalive = asyncio.create_task(self._keepalive(transport))
+                resync = False
                 try:
                     async for frame in transport:
                         self._dispatch(frame)
+                        if self._stream.consume_resync_request():
+                            resync = True
+                            break  # leave the receive loop to force a reconnect == resync
+                        if self._stream.consume_clean_progress():
+                            resync_failures = 0  # a reconciling delta clears the storm counter
                 finally:
                     keepalive.cancel()
                     try:
                         await keepalive
                     except asyncio.CancelledError:
                         pass
-                failures = 0  # a clean close resets the backoff
+                if resync:
+                    # A mid-stream sequence gap (a book diverged from the venue's
+                    # reported top-of-book) marked a book stale. Recover via the
+                    # PROVEN resync path: close and reconnect so subscribe-on-connect
+                    # pulls a fresh snapshot. Re-subscribing on the SAME live socket
+                    # does NOT reliably resnapshot (confirmed live 2026-06-25).
+                    resync_failures += 1
+                    self._stream.mark_all_stale()  # untrusted until the resync snapshot
+                    await self._safe_close(transport)
+                    if resync_failures >= self._max_resyncs:
+                        raise RuntimeError(
+                            f"order book failed to resync after {resync_failures} consecutive "
+                            f"attempts - HALT (irreconcilable divergence / likely format change)"
+                        )
+                    # Back off so a persistently re-diverging book can never become a
+                    # zero-delay reconnect hot-loop against the gateway; a single
+                    # transient gap is just the floor delay and is reset by the next
+                    # clean delta (consume_clean_progress above).
+                    await self._sleep(self._backoff_delay(resync_failures))
+                    failures = 0  # the connection was streaming; disconnect-backoff resets
+                    continue
+                failures = 0          # a clean close resets the backoff
+                resync_failures = 0
+                await self._safe_close(transport)  # don't leak a cleanly-exhausted transport
             except self._reconnect_on:
                 self._stream.mark_all_stale()  # books untrusted until the resync snapshot
                 failures += 1
+                resync_failures = 0  # a real disconnect is not a resync storm
                 await self._sleep(self._backoff_delay(failures))
+
+    async def _safe_close(self, transport):
+        """Close a transport we are abandoning for a resync. Tolerates a transport
+        with no ``close`` (the in-memory test double) and a close that fails because
+        the socket is already going down — the reconnect resyncs regardless."""
+        close = getattr(transport, "close", None)
+        if close is None:
+            return
+        try:
+            result = close()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            pass  # CancelledError (BaseException) is not swallowed
 
     async def _keepalive(self, transport):
         """Client-driven WS keepalive: the venue expects the CLIENT to send a bare
