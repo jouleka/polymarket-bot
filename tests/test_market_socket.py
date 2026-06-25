@@ -250,6 +250,41 @@ def test_socket_restarts_keepalive_on_each_connection():
     assert "PING" in t2.sent[1:]  # a fresh keepalive runs on the reconnected socket
 
 
+def test_socket_runs_unbounded_when_max_connections_is_none():
+    # 24/7 operation: max_connections=None reconnects forever. Prove it makes a
+    # SECOND connection after a disconnect (the bounded default would stop at one),
+    # so a flapping shard can never silently exhaust a budget and go dark.
+    t1 = FakeTransport([_book_frame("A", "0.60", "0.62"), FakeDisconnect()])
+    t2 = IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], reconnect_on=(FakeDisconnect,), sleep=RecordingSleep(),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=None))
+        try:
+            for _ in range(300):
+                if t2.sent:  # the reconnected socket re-subscribed
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert t2.sent and "A" in t2.sent[0]  # reconnected past the first connection -> unbounded
+
+
 def test_socket_skips_pong_keepalive_reply_without_halt():
     # The venue replies to our client "PING" with a bare "PONG" text frame. It is
     # not JSON, so it must be skipped (not forwarded to stream.ingest, where an
