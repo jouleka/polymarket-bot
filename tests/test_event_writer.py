@@ -229,6 +229,21 @@ def test_append_halts_when_backlog_exceeds_high_water_mark():
         writer.close()
 
 
+def test_peak_pending_tracks_the_high_water_backlog():
+    # Observability for the 24/7 writer: peak_pending() reports the high-water backlog so
+    # an operator (and the shard-endurance check) can see headroom against the ceiling.
+    # Wedge the store so nothing drains, append N, and the peak must equal N.
+    store = WedgedStore()
+    writer = QueuedEventWriter(store)
+    try:
+        for i in range(5):
+            writer.append(_env(str(i)))
+        assert writer.peak_pending() == 5
+    finally:
+        store.release.set()
+        writer.close()
+
+
 def test_append_does_not_block_on_a_slow_store_write():
     # The whole point of POL-12: the WS sink runs on the event loop, so append must
     # return immediately even when the SQLite write is slow. The writer thread takes
