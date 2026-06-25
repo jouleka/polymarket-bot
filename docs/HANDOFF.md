@@ -77,8 +77,9 @@ plus a REST `DataApiPoller`.
 - `storage/market_memory.py` — `EventStore` (SQLite WAL; persists across restart; ordered no-look-ahead
   replay via `replay_until`; idempotent dedup on `UNIQUE(source,event_id)`; context manager).
 - `ingestion/orderbook.py` — `LocalBook` (rebuild from `book` snapshot + `price_change` deltas; size-0
-  removes; crossed/locked book → no midpoint). **Has a TODO: no sequence-gap detection yet — the ERS must
-  NOT size off an unverified book between snapshots.**
+  removes; crossed/locked book → no midpoint). **Staleness gate done:** `is_stale()`/`mark_stale()`; a book
+  is stale until its first snapshot and after a disconnect, and `midpoint()` returns `None` while stale, so
+  the ERS can't size off an unverified book. Remaining TODO: mid-stream hash-based sequence-gap detection.
 - `ingestion/market_stream.py` — `MarketStream` dispatcher (routes to per-asset books; benign-event
   allowlist `{last_trade_price, tick_size_change}` skipped vs truly-unknown `event_type` → HALT; emits
   `Observation` to a sink).
@@ -153,9 +154,10 @@ Approach:
 1. WS **sharding** (≤ ~500 assets per connection; one `MarketStream`/`MarketSocket` set per shard sharing the
    one stamper). The pong responder is per-socket, so each shard's `MarketSocket` runs its own keepalive
    independently — and this is where the deferred stamper **thread-lock** becomes reachable and testable.
-2. **Sequence-gap detection + book staleness flag** (the `orderbook.py` TODO): capture the per-asset book
-   hash/timestamp from `price_change`; on a gap, mark the book stale / trigger a snapshot re-request so the
-   ERS can refuse to size off an unverified book.
+2. **Mid-stream sequence-gap detection** (the remaining `orderbook.py` TODO; the staleness flag itself is
+   DONE — `is_stale`/`mark_stale`, midpoint gated, disconnect marks stale). Capture the per-asset book
+   hash/timestamp from `price_change` and `mark_stale()` on a hash mismatch / dropped delta — once you've
+   confirmed the exact frame hash format live (don't guess).
 3. **Synthetic events** (liquidity-evaporation / large-print) emitted from book deltas.
 4. **Polygon on-chain log watcher** (V2 exchange + ConditionalTokens ERC-1155) as tamper-proof ground truth.
 5. **News fast-path** (curated primary-source allowlist + calendar pre-stager) + slow-path (one aggregator +

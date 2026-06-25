@@ -42,6 +42,11 @@ class MarketStream:
     def book_for(self, asset_id):
         return self._books.get(asset_id)
 
+    def mark_all_stale(self):
+        """Flag every book untrustworthy (e.g. on a socket disconnect)."""
+        for book in self._books.values():
+            book.mark_stale()
+
     def ingest(self, message):
         event_type = message["event_type"]
         if event_type in _BENIGN_IGNORED:

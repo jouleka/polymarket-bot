@@ -66,6 +66,37 @@ def test_midpoint_is_none_on_a_crossed_book():
     assert book.midpoint() is None
 
 
+def test_book_is_stale_until_first_snapshot():
+    # Without a full snapshot baseline the book can't be trusted for sizing.
+    assert LocalBook().is_stale()
+
+
+def test_book_is_fresh_after_a_snapshot():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "100")]))
+
+    assert not book.is_stale()
+
+
+def test_price_change_before_a_snapshot_stays_stale():
+    book = LocalBook()
+    book.apply_price_change(
+        {"asset_id": "A", "changes": [{"price": "0.61", "side": "BUY", "size": "50"}]}
+    )
+
+    assert book.is_stale()  # deltas without a baseline are not a trustworthy book
+
+
+def test_stale_book_yields_no_midpoint_but_keeps_levels():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "100")]))
+    book.mark_stale()
+
+    assert book.is_stale()
+    assert book.midpoint() is None        # ERS must not size off an unverified book
+    assert book.best_bid() == Decimal("0.60")  # last-known levels stay for diagnostics
+
+
 def test_book_snapshot_replaces_previous_state():
     # A re-requested snapshot after a reconnect must fully resync, not merge.
     book = LocalBook()

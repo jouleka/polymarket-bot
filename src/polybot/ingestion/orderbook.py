@@ -16,17 +16,27 @@ class LocalBook:
     def __init__(self):
         self._bids = {}  # Decimal price -> Decimal size
         self._asks = {}
+        self._stale = True  # no snapshot baseline yet -> not trustworthy
 
     def apply_book(self, message):
         """Full snapshot: replace state entirely (a reconnect resync resets)."""
         self._bids = self._levels(message.get("bids", []))
         self._asks = self._levels(message.get("asks", []))
+        self._stale = False  # fresh, verified baseline
+
+    def mark_stale(self):
+        """Flag the book untrustworthy (e.g. on disconnect, until a resync snapshot)."""
+        self._stale = True
+
+    def is_stale(self):
+        return self._stale
 
     def apply_price_change(self, message):
-        # TODO(S1): no sequence-gap detection yet. Polymarket price_change carries
-        # a book hash/timestamp; a dropped delta silently corrupts this book until
-        # the next snapshot. Until gap-detection + a staleness flag exist, the ERS
-        # must NOT size off an unverified book between snapshots.
+        # Staleness flag now guards untrusted books (no baseline / post-disconnect):
+        # midpoint() returns None when stale. STILL TODO: mid-stream sequence-gap
+        # detection — Polymarket price_change carries a book hash/timestamp, so a
+        # single dropped delta between snapshots is not yet detected (mark_stale on
+        # hash mismatch once the exact frame hash format is confirmed live).
         for change in message.get("changes", []):
             price = Decimal(change["price"])
             size = Decimal(change["size"])
@@ -44,8 +54,8 @@ class LocalBook:
 
     def midpoint(self):
         bid, ask = self.best_bid(), self.best_ask()
-        if bid is None or ask is None or bid >= ask:
-            return None  # empty side or crossed/locked book => no usable midpoint
+        if self._stale or bid is None or ask is None or bid >= ask:
+            return None  # stale, empty side, or crossed/locked => no usable midpoint
         return (bid + ask) / 2
 
     @staticmethod
