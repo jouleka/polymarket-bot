@@ -27,6 +27,7 @@ from polybot.ingestion.persistence import PersistingSink
 from polybot.ingestion.transport import (
     DATA_API_URL,
     GAMMA_URL,
+    WS_RECONNECT_ON,
     make_httpx_fetch,
     open_market_ws,
 )
@@ -70,7 +71,7 @@ async def main():
         print(f"\n3) CLOB WS live book ({WS_SECONDS}s)")
         stream = MarketStream(stamper, sink=PersistingSink(store))
         socket = MarketSocket(open_market_ws, stream, asset_ids=token_ids,
-                              reconnect_on=(OSError,))
+                              reconnect_on=WS_RECONNECT_ON)
         try:
             await asyncio.wait_for(socket.run(max_connections=1), timeout=WS_SECONDS)
         except asyncio.TimeoutError:

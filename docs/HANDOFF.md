@@ -119,40 +119,29 @@ midpoint matched Gamma's independent outcome price exactly; 25 real `/trades` pe
   history is lossy after resolution and cannot be backfilled); never let Hermes compute size or touch keys;
   always re-fetch the live book before submitting; bonding/hold-to-resolution = tail-risky; maker ≠ auto-safe.
 
-## 8. Your immediate task: WS app-level pong responder
-The market socket has **no app-level keepalive** (`transport.py` sets `ping_interval=None`, so the websockets
-library's protocol ping is OFF). For long-running ingestion the venue will drop an otherwise-idle connection.
-Implement a **pong responder** so the socket survives indefinitely.
+## 8. WS keepalive — DONE ✅ (was "pong responder"; empirically it's a client PING *sender*)
+**Live-verified 2026-06-25** (5 clean round-trips + a 50s endurance run): the CLOB market channel keepalive is
+**CLIENT-driven**, not server-initiated. The client sends a bare `"PING"` text frame (~every 10s); the server
+replies with a bare `"PONG"` text frame. The server **never** initiates pings (so there is nothing to "respond"
+to — the ticket's "pong responder" framing was wrong). An idle connection survived 45s with zero pings, so the
+docs' "drops after ~10s" is stale (as VERIFICATION warned) — but we still send `"PING"` for indefinite-connection
+robustness. Implemented as a **per-connection `MarketSocket._keepalive` task** (`ping_interval=10.0` default).
+The bare `"PONG"` reply is non-JSON, so `_dispatch`'s existing malformed-frame skip drops it — it never reaches
+`stream.ingest`, so it cannot HALT (locked by `test_socket_skips_pong_keepalive_reply_without_halt`); a *JSON*
+pong would still HALT, which is the desired fail-loud-on-format-change. The keepalive is best-effort (swallows
+`reconnect_on` send errors so it can't mask the receive loop's disconnect handling) and validates
+`ping_interval > 0`. Half-open detection (send buffers, recv stalls) is **out of scope** — that's the stale-mark
+watchdog's job (DECISIONS-S0). Tests: `tests/test_market_socket.py` (10 socket tests). Independent Opus review:
+3-lens panel + closing pass, verdict SHIP.
 
-**Architecture note (read `src/polybot/ingestion/market_socket.py` first):** `MarketSocket.run` does
-`async for frame in transport: self._dispatch(frame)`. `_dispatch` is SYNC and only has `self._stream`, so it
-cannot send. The pong reply is async (`await transport.send(...)`) and the transport is only in scope inside
-`run`'s loop — so **handle the keepalive there, in `run`, before `_dispatch`**: detect the keepalive frame,
-`await transport.send(<reply>)`, and `continue` (do NOT forward it to `_dispatch`/`stream.ingest`, which would
-HALT on an unknown `event_type`). Keep the HALT path intact for genuinely-unknown frames.
-
-Approach:
-1. **Discover the real protocol first — do not guess.** There is no documented format in this repo; verify
-   empirically. Add temporary logging to `scripts/live_ingestion_check.py` (e.g. `print(repr(frame[:120]))` in
-   a tiny wrapper around the dispatch, or log inside a throwaway transport) and bump `WS_SECONDS` to ~45 so the
-   connection idles long enough to receive a keepalive. Observe whether the market channel sends a bare
-   `"PING"` text frame, a JSON object (e.g. `{"event_type":"ping"}`), or relies on protocol pings. The likely
-   reply is the symmetric `"PONG"` / `{"type":"pong"}` — **confirm against what actually keeps the socket open**,
-   don't hard-code an unverified guess. (Polymarket dev docs: <https://docs.polymarket.com> — the WS/CLOB
-   sections — but treat live behavior as the source of truth; the docs have been stale before, see VERIFICATION.)
-2. **TDD the logic** in `tests/test_market_socket.py` using the existing `FakeTransport` (its `sent` list records
-   everything sent via `transport.send`). Add a new test, e.g. `test_socket_responds_to_keepalive`: feed a
-   keepalive frame, assert the correct reply appears in `transport.sent`, and assert the book was NOT mutated
-   (no spurious `LocalBook`) and the loop kept consuming. Reuse the `_stream()` helper so the shared stamper
-   stays monotonic across all frames. Then implement the minimal handling in `run` to pass it.
-3. **Verify live.** In `scripts/live_ingestion_check.py` bump `WS_SECONDS` to 45–60, add a received-frame
-   counter, and wrap `socket.run(...)` in `try/except` to log any disconnect exception. Success = the socket
-   stays open the full window and keeps updating the book (no early close, frames still arriving near the end).
-   Revert the temporary logging before committing.
+**Also fixed (a CRITICAL latent bug the review surfaced):** a real disconnect raises `websockets.ConnectionClosed`,
+which is **not** an `OSError`, so the old `reconnect_on=(OSError,)` wiring would have let the *normal* disconnect
+escape `run()` (no reconnect, no `mark_all_stale`). Added `transport.WS_RECONNECT_ON = (OSError, ConnectionClosed)`
+(core stays transport-agnostic) and wired the live script to it (`tests/test_transport.py` guards the tuple).
 
 ## 9. Remaining POL-3 work after that (rough order)
 1. WS **sharding** (≤ ~500 assets per connection; one `MarketStream`/`MarketSocket` set per shard sharing the
-   one stamper). The pong responder is per-socket, so each shard's `MarketSocket` runs its own keepalive
+   one stamper). The keepalive is per-socket, so each shard's `MarketSocket` runs its own PING sender
    independently — and this is where the deferred stamper **thread-lock** becomes reachable and testable.
 2. **Mid-stream sequence-gap detection** (the remaining `orderbook.py` TODO; the staleness flag itself is
    DONE — `is_stale`/`mark_stale`, midpoint gated, disconnect marks stale). Capture the per-asset book
