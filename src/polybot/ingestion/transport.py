@@ -7,10 +7,16 @@ the core stays network-free and these stay logic-free.
 
 import httpx
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
 DATA_API_URL = "https://data-api.polymarket.com"
 CLOB_MARKET_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+
+# The reconnect_on tuple a MarketSocket MUST use with the real ws transport: a
+# normal disconnect raises websockets.ConnectionClosed, which is NOT an OSError,
+# so OSError alone would let the disconnect escape run() (no reconnect / resync).
+WS_RECONNECT_ON = (OSError, ConnectionClosed)
 
 
 def make_httpx_fetch(base_url=DATA_API_URL, timeout=15.0, client=None):
@@ -38,7 +44,8 @@ async def open_market_ws(url=CLOB_MARKET_WS):
     """Connect to the public CLOB market channel; satisfies MarketSocket's
     transport interface (async-iterable of text frames + async send()).
 
-    ping_interval=None disables the library's protocol ping so the venue's
-    app-level keepalive (TODO: dedicated pong responder) governs liveness.
+    ping_interval=None disables the library's protocol ping; the venue's
+    app-level keepalive (client sends "PING", server replies "PONG" — driven by
+    MarketSocket's keepalive task) governs liveness instead.
     """
     return await websockets.connect(url, ping_interval=None)
