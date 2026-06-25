@@ -35,3 +35,15 @@ def sanitize(text, marker=_DEFAULT_MARKER):
     while marker in cleaned:
         cleaned = cleaned.replace(marker, "")
     return f"{marker}\n{cleaned}\n{marker}"
+
+
+def neutralize(text, marker=_DEFAULT_MARKER):
+    """For non-content PLUMBING fields (ids, links): strip control / format chars
+    (including the newline/tab that ``strip_dangerous_chars`` keeps) AND any embedded
+    spotlight marker, WITHOUT wrapping -- so a feed-controlled id or link can never
+    forge the UNTRUSTED delimiter or smuggle an invisible-char payload onto a field a
+    downstream consumer might read. Deterministic, so it is safe as a dedup key."""
+    cleaned = strip_dangerous_chars(text).replace("\n", "").replace("\t", "")
+    while marker in cleaned:
+        cleaned = cleaned.replace(marker, "")
+    return cleaned.strip()
