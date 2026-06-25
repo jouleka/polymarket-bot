@@ -8,6 +8,7 @@ windows does not double-record.
 """
 
 
+import asyncio
 import json
 
 from polybot.core.models import Envelope
@@ -45,6 +46,33 @@ class DataApiPoller:
             )
             persisted += 1
         return persisted
+
+    async def run(
+        self,
+        path,
+        *,
+        params=None,
+        source_tier="DATA",
+        interval=2.0,
+        limiter=None,
+        sleep=asyncio.sleep,
+        max_polls=None,
+    ):
+        """Continuously poll one endpoint: rate-limit, fetch+persist, wait `interval`.
+
+        limiter is an optional hard ceiling (token bucket); interval is the target
+        cadence. max_polls bounds the loop for tests/one-shot use; None runs forever.
+        """
+        polls = 0
+        while max_polls is None or polls < max_polls:
+            polls += 1
+            if limiter is not None:
+                delay = limiter.acquire_delay()
+                if delay > 0:
+                    await sleep(delay)
+            await self.poll_once(path, params=params, source_tier=source_tier)
+            if max_polls is None or polls < max_polls:
+                await sleep(interval)
 
     @staticmethod
     def _as_list(response):

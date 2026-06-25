@@ -7,6 +7,7 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.data_api import DataApiPoller
+from polybot.ingestion.ratelimit import RateLimiter
 from polybot.storage.market_memory import EventStore
 
 
@@ -114,3 +115,45 @@ def test_poll_once_captures_item_timestamp_as_published_at(tmp_path):
     asyncio.run(poller.poll_once("/trades", source_tier="DATA"))
 
     assert store.all()[0].published_at == 1719331200000
+
+
+def test_run_polls_repeatedly_until_max_polls(tmp_path):
+    calls = []
+
+    async def fetch(path, params):
+        calls.append(path)
+        return [{"id": f"t{len(calls)}", "conditionId": "0x1"}]
+
+    sleeps = []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    store = EventStore(str(tmp_path / "mm.db"))
+    poller = DataApiPoller(fetch, MonotonicStamper(clock=lambda: 1), store)
+
+    asyncio.run(poller.run("/trades", interval=2.0, sleep=sleep, max_polls=3))
+
+    assert len(calls) == 3
+    assert len(store.all()) == 3            # three distinct ids persisted
+    assert sleeps.count(2.0) >= 2           # interval slept between polls
+
+
+def test_run_waits_for_the_rate_limiter(tmp_path):
+    async def fetch(path, params):
+        return []
+
+    sleeps = []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    now = [0.0]
+    limiter = RateLimiter(rate_per_sec=1, capacity=1, clock=lambda: now[0])
+    store = EventStore(str(tmp_path / "mm.db"))
+    poller = DataApiPoller(fetch, MonotonicStamper(clock=lambda: 1), store)
+
+    asyncio.run(poller.run("/trades", interval=0, limiter=limiter, sleep=sleep, max_polls=2))
+
+    # capacity 1, frozen clock: 2nd poll must wait ~1s for a refilled token
+    assert any(d == pytest.approx(1.0) for d in sleeps)
