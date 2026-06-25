@@ -130,3 +130,23 @@ def test_socket_reconnects_with_backoff_after_a_disconnect():
     assert len(t1.sent) == 1 and len(t2.sent) == 1  # re-subscribed on reconnect (resync)
     assert stream.book_for("A").best_bid() == Decimal("0.61")  # latest snapshot wins
     assert sleep.delays and sleep.delays[0] > 0  # backoff applied, not a hot loop
+
+
+def test_socket_marks_books_stale_on_disconnect():
+    # Book built on t1, then a disconnect; t2 reconnects but sends no resync yet,
+    # so the book must read stale (ERS must not size off it until a fresh snapshot).
+    t1 = FakeTransport([_book_frame("A", "0.60", "0.62"), FakeDisconnect()])
+    t2 = FakeTransport([])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], reconnect_on=(FakeDisconnect,), sleep=RecordingSleep()
+    )
+
+    asyncio.run(socket.run(max_connections=2))
+
+    assert stream.book_for("A").is_stale()

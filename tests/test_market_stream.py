@@ -85,3 +85,15 @@ def test_ingest_truly_unknown_event_type_fails_loud():
 
     with pytest.raises(ValueError, match="event_type"):
         stream.ingest({"event_type": "wat", "asset_id": "A"})
+
+
+def test_mark_all_stale_marks_every_book():
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.ingest(_book("B", [("0.40", "100")], [("0.45", "100")]))
+    assert not stream.book_for("A").is_stale()
+
+    stream.mark_all_stale()
+
+    assert stream.book_for("A").is_stale()
+    assert stream.book_for("B").is_stale()
