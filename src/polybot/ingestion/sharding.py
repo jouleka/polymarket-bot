@@ -34,6 +34,8 @@ class ShardedMarketCollector:
         *,
         sink=None,
         max_assets_per_shard=500,
+        detector=None,
+        synthetic_sink=None,
         **socket_kwargs,
     ):
         if max_assets_per_shard <= 0:
@@ -49,7 +51,8 @@ class ShardedMarketCollector:
         self._stream_by_asset = {}  # asset_id -> owning shard's MarketStream
         for start in range(0, len(ids), max_assets_per_shard):
             chunk = ids[start:start + max_assets_per_shard]
-            stream = MarketStream(stamper, sink=sink, asset_ids=chunk)
+            stream = MarketStream(stamper, sink=sink, asset_ids=chunk,
+                                  detector=detector, synthetic_sink=synthetic_sink)
             socket = MarketSocket(connect, stream, asset_ids=chunk, **socket_kwargs)
             self._shards.append((stream, socket))
             for asset_id in chunk:

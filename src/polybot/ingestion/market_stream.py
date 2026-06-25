@@ -13,6 +13,7 @@ ordering, but revisit if batch-atomic timestamps are ever needed.
 
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from polybot.ingestion.orderbook import LocalBook
 
@@ -41,9 +42,15 @@ class Observation:
 
 
 class MarketStream:
-    def __init__(self, stamper, sink=None, asset_ids=None):
+    def __init__(self, stamper, sink=None, asset_ids=None, detector=None, synthetic_sink=None):
         self._stamper = stamper
         self._sink = sink
+        # Optional synthetic-event detector (liquidity-evaporation / large-print from
+        # book deltas) + its OWN sink. A separate sink (a distinct source) keeps these
+        # derived events out of the clob-ws replay stream, so reconstruction stays
+        # exact and ingest stays strictly fail-loud.
+        self._detector = detector
+        self._synthetic_sink = synthetic_sink
         self._books = {}  # asset_id -> LocalBook
         # The shard's subscription set, if known. Lets ingest distinguish a tracked
         # asset whose snapshot is merely in-flight (archive its pre-snapshot deltas --
@@ -140,6 +147,13 @@ class MarketStream:
                     stamps.append(observed_at)
                 continue
             observed_at = self._stamper.stamp()  # stamp before mutation, per tracked asset
+            if self._detector is not None:
+                before_top = book.top_of_book()
+                level_changes = [
+                    (c["side"], Decimal(c["price"]),
+                     book.size_at(c["side"], c["price"]), Decimal(c["size"]))
+                    for c in entries
+                ]
             book.apply_price_change(entries)
             # Gap-check against the LAST entry's top-of-book (the resulting state after
             # applying every level change for this asset in arrival order). NOTE: we
@@ -156,8 +170,22 @@ class MarketStream:
                     asset_id, "price_change", observed_at,
                     self._per_asset_message(message, asset_id, entries),
                 ))
+            if self._detector is not None:
+                self._emit_synthetic(self._detector.detect(
+                    asset_id, level_changes, before_top, book.top_of_book(), observed_at))
             stamps.append(observed_at)
         return stamps
+
+    def _emit_synthetic(self, events):
+        # Each synthetic event is its own point-in-time observation -> its own
+        # canonical (globally-unique, monotonic) stamp, distinct from the triggering
+        # price_change. Routed to the dedicated synthetic_sink (a separate source).
+        if self._synthetic_sink is None:
+            return
+        for event in events:
+            stamp = self._stamper.stamp()
+            event["observed_at"] = stamp
+            self._synthetic_sink(Observation(event["asset_id"], event["event_type"], stamp, event))
 
     @staticmethod
     def _group_by_asset(changes):

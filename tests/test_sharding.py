@@ -247,3 +247,27 @@ def test_sharded_collector_rejects_empty_asset_ids():
     stamper = MonotonicStamper(clock=lambda: 1)
     with pytest.raises(ValueError):
         ShardedMarketCollector(_connect_from([]), stamper, [])
+
+
+
+def test_collector_forwards_detector_and_synthetic_sink():
+    # The coordinator forwards an optional synthetic-event detector + sink to each
+    # shard stream, so derived events (here: a liquidity-evaporation from the best
+    # bid being consumed) reach the dedicated synthetic sink.
+    from polybot.ingestion.synthetic import SyntheticDetector
+
+    pc = json.dumps({"event_type": "price_change", "market": "m", "timestamp": "1",
+                     "price_changes": [{"asset_id": "A", "price": "0.60", "side": "BUY",
+                                        "size": "0", "best_bid": "", "best_ask": "0.62"}]})
+    transport = FakeTransport([_book_frame("A", "0.60", "0.62"), pc])
+    synth = []
+    collector = ShardedMarketCollector(
+        _connect_from([transport]), MonotonicStamper(), ["A"],
+        detector=SyntheticDetector(min_evaporation_size="50", large_print_size="1000000"),
+        synthetic_sink=synth.append,
+    )
+
+    asyncio.run(collector.run(max_connections=1))
+
+    assert [o.event_type for o in synth] == ["liquidity_evaporation"]
+    assert synth[0].message["asset_id"] == "A" and synth[0].message["price"] == "0.60"
