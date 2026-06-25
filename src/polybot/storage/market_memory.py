@@ -16,8 +16,16 @@ _COLUMNS = (
 
 
 class EventStore:
-    def __init__(self, path):
-        self._conn = sqlite3.connect(path)
+    def __init__(self, path, *, check_same_thread=True):
+        # check_same_thread=False lets the off-loop single-writer (POL-12) drive
+        # this connection from its dedicated writer thread (the connection is created
+        # on one thread, used on another). Default True keeps SQLite's thread-affinity
+        # guard for the direct, same-thread callers.
+        # NOTE: False DISABLES that guard, so the caller must serialize access itself —
+        # QueuedEventWriter owns the connection on its writer thread, and reads (all/
+        # replay_until) happen only after close()/join (see the live scripts). Never read
+        # this store from another thread while the writer is still running.
+        self._conn = sqlite3.connect(path, check_same_thread=check_same_thread)
         # Durability for a substrate that cannot be backfilled: WAL keeps readers
         # non-blocking and survives an app crash; NORMAL fsyncs at checkpoints
         # (full per-write fsync is too slow for live minute-bars / WS events).
