@@ -31,13 +31,17 @@ class LocalBook:
     def is_stale(self):
         return self._stale
 
-    def apply_price_change(self, message):
-        # Staleness flag now guards untrusted books (no baseline / post-disconnect):
-        # midpoint() returns None when stale. STILL TODO: mid-stream sequence-gap
-        # detection — Polymarket price_change carries a book hash/timestamp, so a
-        # single dropped delta between snapshots is not yet detected (mark_stale on
-        # hash mismatch once the exact frame hash format is confirmed live).
-        for change in message.get("changes", []):
+    def apply_price_change(self, changes):
+        """Apply a list of per-asset level changes from a live ``price_change`` frame.
+
+        Each change is a dict with ``price`` / ``size`` / ``side`` (a size of 0
+        removes the level). The live venue format carries these as the entries of
+        the frame's ``price_changes`` list, one or more per asset; the dispatcher
+        groups them by asset and hands this book its own entries. Extra keys
+        (``best_bid`` / ``best_ask`` / ``hash``) are not booked here — top-of-book
+        consistency is checked separately by ``verify_top_of_book``.
+        """
+        for change in changes:
             price = Decimal(change["price"])
             size = Decimal(change["size"])
             book = self._side_book(change["side"])
@@ -45,6 +49,40 @@ class LocalBook:
                 book.pop(price, None)
             else:
                 book[price] = size
+
+    def verify_top_of_book(self, best_bid, best_ask):
+        """Mid-stream sequence-gap detection.
+
+        Each live ``price_change`` entry carries the venue's *authoritative*
+        resulting top-of-book (``best_bid`` / ``best_ask``). After applying the
+        deltas, our reconstructed best bid/ask MUST equal them; if it doesn't we
+        dropped or misapplied a delta and the book has silently diverged. The
+        venue ``hash`` would catch deep-book divergence too, but its exact
+        serialization is not recomputable from the public stream (empirically
+        confirmed), whereas this top-of-book check is recompute-free and validates
+        exactly the state the ERS sizes off (midpoint). On divergence: mark the
+        book stale (``midpoint()`` then returns None) so the gap forces a resync.
+
+        ``best_bid`` / ``best_ask`` are venue price strings; ``""`` or ``None``
+        denotes an empty side. Returns True when in sync, False when diverged.
+        """
+        if self._matches(self.best_bid(), best_bid) and self._matches(self.best_ask(), best_ask):
+            return True
+        self.mark_stale()
+        return False
+
+    @staticmethod
+    def _matches(reconstructed, venue_price):
+        # venue_price is a required entry field, HALT-guarded to a string upstream.
+        # "" / None denote an empty side; 0 is not a valid top-of-book price in the
+        # (0, 1) domain, so a "0" sentinel also reads as empty. Parse with Decimal()
+        # exactly like apply_price_change (no str() coercion) so apply and verify
+        # never disagree on what a price value is.
+        venue = None
+        if venue_price not in (None, ""):
+            parsed = Decimal(venue_price)
+            venue = None if parsed == 0 else parsed
+        return reconstructed == venue  # Decimal value-equality; both-None == empty side
 
     def best_bid(self):
         return max(self._bids) if self._bids else None

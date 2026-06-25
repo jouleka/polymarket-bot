@@ -69,7 +69,7 @@ async def main():
         print(f"   persisted {n} trade observations")
 
         print(f"\n3) CLOB WS live book ({WS_SECONDS}s)")
-        stream = MarketStream(stamper, sink=PersistingSink(store))
+        stream = MarketStream(stamper, sink=PersistingSink(store), asset_ids=token_ids)
         socket = MarketSocket(open_market_ws, stream, asset_ids=token_ids,
                               reconnect_on=WS_RECONNECT_ON)
         try:
