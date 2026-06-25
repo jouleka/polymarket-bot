@@ -43,6 +43,25 @@ def make_httpx_fetch(base_url=DATA_API_URL, timeout=15.0, client=None):
     return fetch
 
 
+def make_text_fetch(timeout=15.0, client=None):
+    """Return an async ``fetch(url) -> text`` for the news poller (GET a feed body).
+    Follows redirects and sets a UA; raises on HTTP error (fail loud)."""
+    owned = client is None
+
+    async def fetch(url):
+        c = client or httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                        headers={"user-agent": "polybot/0.1"})
+        try:
+            resp = await c.get(url)
+            resp.raise_for_status()
+            return resp.text
+        finally:
+            if owned:
+                await c.aclose()
+
+    return fetch
+
+
 async def open_market_ws(url=CLOB_MARKET_WS):
     """Connect to the public CLOB market channel; satisfies MarketSocket's
     transport interface (async-iterable of text frames + async send()).
