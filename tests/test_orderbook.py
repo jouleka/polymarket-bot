@@ -194,3 +194,31 @@ def test_verify_top_of_book_treats_zero_as_an_empty_side():
     assert book.best_ask() is None
     assert book.verify_top_of_book(best_bid="0.60", best_ask="0") is True
     assert not book.is_stale()
+
+
+# --- depth helpers (feed the synthetic-event detectors) ----------------------
+
+
+def test_top_of_book_returns_best_prices_and_sizes():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100"), ("0.58", "200")],
+                              asks=[("0.62", "150"), ("0.65", "50")]))
+
+    assert book.top_of_book() == (Decimal("0.60"), Decimal("100"),
+                                  Decimal("0.62"), Decimal("150"))
+
+
+def test_top_of_book_handles_empty_sides():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[]))
+
+    assert book.top_of_book() == (Decimal("0.60"), Decimal("100"), None, None)
+
+
+def test_size_at_returns_level_size_or_zero():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.60", "100")], asks=[("0.62", "150")]))
+
+    assert book.size_at("BUY", "0.60") == Decimal("100")
+    assert book.size_at("SELL", "0.62") == Decimal("150")
+    assert book.size_at("BUY", "0.59") == Decimal("0")  # absent level -> 0
