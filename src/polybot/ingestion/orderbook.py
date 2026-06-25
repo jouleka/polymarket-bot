@@ -96,6 +96,19 @@ class LocalBook:
             return None  # stale, empty side, or crossed/locked => no usable midpoint
         return (bid + ask) / 2
 
+    def top_of_book(self):
+        """Best bid/ask prices and their resting sizes (None on an empty side) --
+        the depth snapshot the synthetic liquidity-evaporation detector compares
+        before vs after a delta. Unlike midpoint() this is not stale-gated; it is a
+        structural observation, not a price the ERS sizes off."""
+        bid, ask = self.best_bid(), self.best_ask()
+        return (bid, self._bids[bid] if bid is not None else None,
+                ask, self._asks[ask] if ask is not None else None)
+
+    def size_at(self, side, price):
+        """Resting size at a price level on a side (Decimal 0 if the level is absent)."""
+        return self._side_book(side).get(Decimal(price), Decimal(0))
+
     @staticmethod
     def _levels(levels):
         parsed = {Decimal(level["price"]): Decimal(level["size"]) for level in levels}
