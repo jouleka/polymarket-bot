@@ -57,6 +57,15 @@ def test_snapshot_ignores_zero_size_levels():
     assert book.best_bid() == Decimal("0.60")
 
 
+def test_midpoint_is_none_on_a_crossed_book():
+    # best_bid >= best_ask means the book is crossed/locked (transient fast move
+    # or corruption) — not a price to size off. Refuse to invent a midpoint.
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.65", "100")], asks=[("0.60", "100")]))
+
+    assert book.midpoint() is None
+
+
 def test_book_snapshot_replaces_previous_state():
     # A re-requested snapshot after a reconnect must fully resync, not merge.
     book = LocalBook()
