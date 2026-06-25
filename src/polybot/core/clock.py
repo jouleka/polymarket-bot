@@ -9,12 +9,19 @@ CONTRACT: all collectors (WS, Data API, on-chain) MUST share ONE process-wide
 stamper instance so observed_at is globally unique and totally ordered. A
 per-collector stamper would let two feeds emit the same observed_at, making the
 store's replay order depend on insertion race rather than observation order.
-``stamp()`` is currently safe for a single calling thread; thread-safety (a lock)
-and a concurrency stress harness land with the collector slice (POL-3 networked),
-where concurrent callers first appear and a real interleave test is feasible.
+
+Concurrency: the sharded collectors run as asyncio tasks in ONE event loop, where
+``stamp()`` has no ``await`` and so is atomic w.r.t. task switches. A ``Lock`` ALSO
+guards the read-modify-write of ``_last`` so the strict-monotonic invariant holds
+under concurrent OS threads and free-threaded (no-GIL) builds — not only on a
+stock GIL where this happens to be safe (and even there only with no active
+trace/profile hook). The cost is one uncontended lock per frame (~tens of ns),
+negligible against frame decode; correctness of this process-wide ordering
+primitive must not rest on an interpreter implementation detail.
 """
 
 
+import threading
 import time
 
 
@@ -22,10 +29,12 @@ class MonotonicStamper:
     def __init__(self, clock=None):
         self._clock = clock or time.monotonic_ns
         self._last = 0
+        self._lock = threading.Lock()
 
     def stamp(self):
-        now = self._clock()
-        if now <= self._last:
-            now = self._last + 1
-        self._last = now
-        return now
+        with self._lock:
+            now = self._clock()
+            if now <= self._last:
+                now = self._last + 1
+            self._last = now
+            return now

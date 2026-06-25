@@ -54,9 +54,11 @@ class MarketSocket:
         self._ping_interval = ping_interval
 
     async def run(self, max_connections=1):
+        # max_connections=None => reconnect forever (the 24/7 production mode); a
+        # finite count bounds reconnect attempts (used by tests to terminate).
         connections = 0
         failures = 0
-        while connections < max_connections:
+        while max_connections is None or connections < max_connections:
             connections += 1
             try:
                 transport = await self._connect()
