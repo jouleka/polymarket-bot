@@ -9,6 +9,8 @@ import asyncio
 import json
 from decimal import Decimal
 
+import pytest
+
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.market_socket import MarketSocket
 from polybot.ingestion.market_stream import MarketStream
@@ -356,3 +358,148 @@ def test_socket_marks_books_stale_on_disconnect():
     asyncio.run(socket.run(max_connections=2))
 
     assert stream.book_for("A").is_stale()
+
+
+def _price_change_frame(asset_id, price, side, size, best_bid, best_ask,
+                        market="0xmarket", timestamp="1"):
+    return json.dumps({
+        "event_type": "price_change",
+        "market": market,
+        "timestamp": timestamp,
+        "price_changes": [{
+            "asset_id": asset_id, "price": price, "side": side, "size": size,
+            "best_bid": best_bid, "best_ask": best_ask,
+        }],
+    })
+
+
+def test_socket_reconnects_to_resync_on_a_midstream_sequence_gap():
+    # The socket stays UP, but a price_change reveals our reconstructed top-of-book
+    # diverged from the venue's authoritative best_bid/best_ask (a dropped delta).
+    # Recovery reuses the PROVEN resync path: force a reconnect so subscribe-on-
+    # connect pulls a fresh snapshot. (Re-subscribing on the SAME live socket does
+    # NOT reliably resnapshot — confirmed live 2026-06-25 — so we reconnect.)
+    gap = _price_change_frame("A", "0.61", "BUY", "50", best_bid="0.99", best_ask="0.62")
+    t1 = FakeTransport([_book_frame("A", "0.60", "0.62"), gap])
+    t2 = FakeTransport([_book_frame("A", "0.61", "0.63")])  # resync snapshot after reconnect
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    sleep = RecordingSleep()
+    stream = _stream()
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=sleep)
+
+    asyncio.run(socket.run(max_connections=2))
+
+    assert len(t1.sent) == 1 and len(t2.sent) == 1  # reconnected and re-subscribed (resync)
+    assert stream.book_for("A").best_bid() == Decimal("0.61")  # fresh snapshot applied
+    assert not stream.book_for("A").is_stale()                 # recovered after the resync snapshot
+    assert sleep.delays == [0.5]  # one resync -> a floor backoff (never a zero-delay hot-loop)
+
+
+def test_socket_resync_storm_backs_off_then_halts():
+    # A book that re-diverges on EVERY fresh snapshot must not hot-loop the gateway:
+    # back off each consecutive resync and then HALT loudly (a never-reconcilable book
+    # is itself a fail-loud format-change signal), instead of an unbounded zero-delay
+    # connect->snapshot->diverge->reconnect storm.
+    gap = _price_change_frame("A", "0.61", "BUY", "50", best_bid="0.99", best_ask="0.62")
+
+    def make():
+        return FakeTransport([_book_frame("A", "0.60", "0.62"), gap])
+
+    transports = iter([make() for _ in range(10)])
+
+    async def connect():
+        return next(transports)
+
+    sleep = RecordingSleep()
+    stream = _stream()
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=sleep, max_resyncs=3)
+
+    with pytest.raises(RuntimeError, match="resync"):
+        asyncio.run(socket.run(max_connections=None))  # 24/7 mode: only the HALT stops it
+
+    assert sleep.delays == [0.5, 1.0]  # backed off (exp) before HALTing on the 3rd consecutive resync
+
+
+def test_socket_resyncs_separated_by_clean_progress_do_not_halt():
+    # A transient gap that RECOVERS (the reconnect then streams a clean delta) must not
+    # accrue toward the storm HALT: a clean applied price_change resets the counter, so
+    # rare isolated gaps never escalate even over a long run.
+    clean = _price_change_frame("A", "0.61", "BUY", "50", best_bid="0.61", best_ask="0.62")
+    gap = _price_change_frame("A", "0.62", "BUY", "50", best_bid="0.99", best_ask="0.62")
+
+    def make():
+        return FakeTransport([_book_frame("A", "0.60", "0.62"), clean, gap])
+
+    transports = iter([make() for _ in range(5)])
+
+    async def connect():
+        return next(transports)
+
+    sleep = RecordingSleep()
+    stream = _stream()
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=sleep, max_resyncs=3)
+
+    asyncio.run(socket.run(max_connections=5))  # must NOT raise despite 5 gaps
+
+    assert sleep.delays == [0.5, 0.5, 0.5, 0.5, 0.5]  # each resync stays at the floor (counter reset)
+
+
+class GapThenCloseRaises:
+    """Yields its frames (a gap forces a resync close), and whose async close()
+    raises — modelling closing a socket that is already going down."""
+
+    def __init__(self, frames):
+        self._frames = frames
+        self.sent = []
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    async def __aiter__(self):
+        for frame in self._frames:
+            yield frame
+
+    async def close(self):
+        raise OSError("close on a socket that is already going down")
+
+
+def test_socket_safe_close_tolerates_a_failing_close_on_resync():
+    # _safe_close must swallow a failing close() on the abandoned transport so the
+    # resync reconnect still proceeds (the close error is irrelevant — we reconnect).
+    gap = _price_change_frame("A", "0.61", "BUY", "50", best_bid="0.99", best_ask="0.62")
+    t1 = GapThenCloseRaises([_book_frame("A", "0.60", "0.62"), gap])
+    t2 = FakeTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    stream = _stream()
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=RecordingSleep())
+
+    asyncio.run(socket.run(max_connections=2))  # must not raise despite close() failing
+
+    assert stream.book_for("A").best_bid() == Decimal("0.61")  # resync recovered after the failed close
+    assert not stream.book_for("A").is_stale()
+
+
+def test_socket_does_not_resync_without_a_gap():
+    # A consistent price_change (our book matches the venue's reported top-of-book)
+    # must NOT trigger a reconnect — exactly one subscribe for the single connection.
+    consistent = _price_change_frame("A", "0.61", "BUY", "50", best_bid="0.61", best_ask="0.62")
+    transport = FakeTransport([_book_frame("A", "0.60", "0.62"), consistent])
+
+    async def connect():
+        return transport
+
+    stream = _stream()
+    socket = MarketSocket(connect, stream, asset_ids=["A"])
+
+    asyncio.run(socket.run(max_connections=1))
+
+    assert transport.sent == [json.dumps({"type": "market", "assets_ids": ["A"]})]  # no resync
+    assert not stream.book_for("A").is_stale()
