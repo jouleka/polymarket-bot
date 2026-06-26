@@ -75,19 +75,26 @@ Decision (frozen): verdict("ACCEPT"|"REJECT"|"SKIP"), stake_usd(Decimal|None),
    - `per_event` UNION headroom (≤ $24 − current event risk)
    - `per_resolution_source` headroom (≤ $30 − current source risk)
    - `total_open` headroom (≤ $60 − current total) — equivalently the reserve floor (≥ $240)
-   - `cluster` headroom (fail-closed: unknown-corr = +1, so matrix-cold intents sum into one cluster)
+   - `size_usd_suggestion` (Hermes's request — capped, NEVER trusted upward; an upper clamp only)
    - `liquidity` cap (≤ 10% of resting touch depth AND ≤ 1¢ impact) — *touch depth in slice 1*
    The binding cap is recorded in `Decision.reason`.
-5. **Concurrency.** If opening this position would exceed `max_concurrent` (≤ 4), or `matrix_cold_concurrent`
-   (≤ 3) when `intent.matrix_cold` → `REJECT(max_concurrent | matrix_cold_concurrent)`.
+5. **Concurrency / fail-closed cluster gate.** If opening this position would exceed `max_concurrent`
+   (≤ 4) → `REJECT(max_concurrent)`; or, when `intent.matrix_cold`, exceed `matrix_cold_concurrent`
+   (≤ 3) → `REJECT(matrix_cold_concurrent)`. **This count cap IS the slice-1 cluster gate** (unknown
+   correlation = +1): rather than invent a per-cluster dollar cap not in §4, matrix-cold positions are
+   bounded by this ≤3 count + the global `total_open` cap. A learned co-move matrix with real per-cluster
+   dollar caps is slice 3. (Accepted residual per DECISIONS-S0: this over-couples while the matrix is cold,
+   so the bot may barely trade at S0 — fine for "don't blow up".)
 6. **Min-floor / SKIP-don't-round.** If the clamped stake `< floor = max($5, min_order_size·price, tick)`
    → `SKIP(below_min_floor)` — NEVER round up to meet a cap.
 7. **Result.** `ACCEPT(stake_usd, price_exec, reason=binding_cap)` else the `REJECT|SKIP(reason)` above.
 
 ### Reason codes
-`book_stale · price_above_limit · no_edge · below_min_floor · max_concurrent · matrix_cold_concurrent ·
-per_trade_cap · per_market_cap · per_event_cap · per_source_cap · total_open_cap · cluster_cap ·
-liquidity_cap` (and on ACCEPT, the binding cap name or `kelly` if Kelly itself bound).
+Fail-closed input guards: `book_stale · degenerate_price (price∉(0,1)) · bad_probability (p∉(0,1)) ·
+bad_calibration (calib∉[0,1]) · price_above_limit`. Then: `no_edge · max_concurrent ·
+matrix_cold_concurrent · below_min_floor`. Caps: `per_trade_cap · per_market_cap · per_event_cap ·
+per_source_cap · total_open_cap · size_suggestion · liquidity_cap` (and on ACCEPT, the binding cap name
+or `kelly` if Kelly itself bound).
 
 ### RiskCaps (the signed S0 envelope — DECISIONS-S0 §4, NAV = $300)
 A frozen dataclass carrying the numbers, with **construction-time internal-consistency verification** that
