@@ -14,16 +14,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from polybot.core.clock import MonotonicStamper
-from polybot.ingestion.news import PRIMARY, NewsPoller, Source
+from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+from polybot.ingestion.news import NewsPoller
 from polybot.ingestion.transport import make_text_fetch
 from polybot.storage.market_memory import EventStore
 
-# Example PRIMARY allowlist (live-reachable government primary feeds). The operator
-# curates the real allowlist; DISCOVERY sources (aggregator/GDELT) are added separately.
-ALLOWLIST = [
-    Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml", PRIMARY),
-    Source("sec-press", "https://www.sec.gov/news/pressreleases.rss", PRIMARY),
-]
+# The curated, live-validated registry (PRIMARY regulators/econ + DISCOVERY aggregator).
+# OPERATOR must review/extend it before PRIMARY informs any sizing (see allowlist.py).
+ALLOWLIST = DEFAULT_ALLOWLIST
 
 
 async def main():

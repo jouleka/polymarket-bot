@@ -73,6 +73,20 @@ async def open_market_ws(url=CLOB_MARKET_WS):
     return await websockets.connect(url, ping_interval=None)
 
 
+def is_transient_rpc_error(exc):
+    """Classify an exception from ``make_rpc_fetch`` for ``retry.with_retry``: True for a
+    TRANSIENT failure worth retrying -- a network/timeout error, or a 429/5xx HTTP status
+    from the free public RPC. A 4xx (other than 429) or a JSON-RPC application error
+    (the RuntimeError ``make_rpc_fetch`` raises on ``body['error']``) is NOT transient --
+    it is a contract/format problem and must fail loud. httpx-specific glue, hence here."""
+    if isinstance(exc, httpx.TransportError):  # covers timeouts + network/protocol errors
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or 500 <= code < 600
+    return False
+
+
 def make_rpc_fetch(rpc_url=POLYGON_RPC, timeout=30.0, client=None):
     """Return an async ``fetch(method, params) -> result`` (JSON-RPC) for the Polygon
     log watcher. Raises on a JSON-RPC error or HTTP error (fail loud). Pass a shared
