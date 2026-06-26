@@ -65,3 +65,51 @@ def test_content_hash_is_stable_and_tamper_evident():
     bigger = RiskCaps(nav=Decimal("600"), total_open_risk=Decimal("120"),
                       reserve_floor=Decimal("480"), daily_pending_ceiling=Decimal("48"))
     assert bigger.content_hash() != RiskCaps().content_hash()
+
+
+# --- slice-3 per-cluster co-move cap: per_trade + (1-rho)*(total_open - per_trade), clamped ---
+
+def test_cluster_cap_full_correlation_collapses_to_per_trade():
+    assert RiskCaps().cluster_cap(Decimal("1")) == Decimal("12")  # one bet
+
+
+def test_cluster_cap_zero_correlation_is_total_open():
+    assert RiskCaps().cluster_cap(Decimal("0")) == Decimal("60")  # global ceiling only
+
+
+def test_cluster_cap_half_correlation_interpolates_linearly():
+    assert RiskCaps().cluster_cap(Decimal("0.5")) == Decimal("36")  # 12 + 0.5*48
+
+
+def test_cluster_cap_negative_correlation_clamped_to_total_open():
+    # anti-correlated positions hedge -> no extra cluster tightening (clamp at total_open).
+    assert RiskCaps().cluster_cap(Decimal("-1")) == Decimal("60")
+
+
+def test_cluster_cap_above_one_clamped_to_per_trade():
+    assert RiskCaps().cluster_cap(Decimal("1.5")) == Decimal("12")
+
+
+# --- slice-3 L7 real-time unrealized-drawdown breaker thresholds (§4 L7) ---------------------
+
+def test_default_caps_include_the_l7_envelope():
+    caps = RiskCaps()
+    assert caps.l7_freeze_floor == Decimal("18")          # freeze-adds > $18 (6% NAV)
+    assert caps.l7_flatten_floor == Decimal("30")         # FLATTEN > $30 (10% NAV)
+    assert caps.l7_velocity_delta == Decimal("18")        # rose > $18 ...
+    assert caps.l7_velocity_window_seconds == 900         # ... within 15 min
+
+
+def test_rejects_l7_freeze_floor_not_below_flatten():
+    with pytest.raises(ValueError, match="L7|freeze|flatten"):
+        RiskCaps(l7_freeze_floor=Decimal("30"))  # 30 !< 30 (flatten)
+
+
+def test_rejects_l7_flatten_floor_above_total_open():
+    with pytest.raises(ValueError, match="L7|flatten|total"):
+        RiskCaps(l7_flatten_floor=Decimal("70"))  # > total_open $60
+
+
+def test_rejects_non_positive_l7_velocity_delta():
+    with pytest.raises(ValueError, match="velocity"):
+        RiskCaps(l7_velocity_delta=Decimal("0"))

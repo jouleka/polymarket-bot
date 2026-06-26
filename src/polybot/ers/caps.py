@@ -37,7 +37,15 @@ class RiskCaps:
     min_position_floor: Decimal = Decimal("5")
     # Liquidity cap (touch depth in slice 1): <= frac of resting depth AND <= impact cents.
     liquidity_depth_frac: Decimal = Decimal("0.10")
-    liquidity_impact_cents: Decimal = Decimal("1")
+    liquidity_impact_cents: Decimal = Decimal("1")  # carried/hashed but the <=1c impact term is
+    # DEFERRED to the full multi-level book-walk (slice >3); only liquidity_depth_frac is enforced
+    # today. Its absence only ever makes sizing looser WITHIN the already-bound touch-depth cap.
+    # L7 real-time unrealized-drawdown breaker (§4 L7, slice 3): freeze adds at $18, FLATTEN
+    # at $30, and freeze on a fast rise of $18 within 15 min.
+    l7_freeze_floor: Decimal = Decimal("18")
+    l7_flatten_floor: Decimal = Decimal("30")
+    l7_velocity_delta: Decimal = Decimal("18")
+    l7_velocity_window_seconds: int = 900
 
     def __post_init__(self):
         self._verify()
@@ -84,6 +92,33 @@ class RiskCaps:
                 raise ValueError(f"{name} must be > 0")
         if self.max_concurrent <= 0:
             raise ValueError("max_concurrent must be > 0")
+        # L7 breaker ordering: a freeze floor must sit below the flatten floor, and FLATTEN
+        # must not exceed the absolute at-risk ceiling (a $30 flatten under a $60 total-open).
+        if not (Decimal(0) < self.l7_freeze_floor < self.l7_flatten_floor <= self.total_open_risk):
+            raise ValueError(
+                f"L7 ordering violated: need 0 < l7_freeze_floor < l7_flatten_floor <= "
+                f"total_open_risk, got {self.l7_freeze_floor} / {self.l7_flatten_floor} / "
+                f"{self.total_open_risk}"
+            )
+        if self.l7_velocity_delta <= 0:
+            raise ValueError(f"l7_velocity_delta must be > 0, got {self.l7_velocity_delta}")
+        if self.l7_velocity_window_seconds <= 0:
+            raise ValueError(
+                f"l7_velocity_window_seconds must be > 0, got {self.l7_velocity_window_seconds}"
+            )
+
+    def cluster_cap(self, rho):
+        """Aggregate worst-case-risk cap for a WARM co-move cluster with representative
+        correlation ``rho`` (max pairwise). ``per_trade + (1 - rho) * (total_open - per_trade)``
+        clamped to ``[per_trade, total_open_risk]``: rho->1 collapses the cluster to ONE per_trade
+        bet; rho->0 relaxes to the global ceiling; rho<0 (hedged) clamps at total_open (no extra
+        tightening). The cap is an ADDITIONAL min() term in the validator, so it can only tighten."""
+        cap = self.per_trade + (Decimal(1) - rho) * (self.total_open_risk - self.per_trade)
+        if cap < self.per_trade:
+            return self.per_trade
+        if cap > self.total_open_risk:
+            return self.total_open_risk
+        return cap
 
     def content_hash(self):
         """SHA-256 over the canonical (sorted, string-valued) fields -- tamper-evidence."""

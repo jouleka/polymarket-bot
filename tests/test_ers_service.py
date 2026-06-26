@@ -12,10 +12,11 @@ cross-intent fold contract.
 from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
+from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.service import PaperSigner, process_pending
-from polybot.ers.validator import OpenPosition, Portfolio
+from polybot.ers.validator import ClusterView, OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
 
 
@@ -118,3 +119,85 @@ def test_a_raising_intent_is_isolated_and_the_batch_continues(tmp_path):
         assert store.get("bad").status == "REJECTED" and store.get("bad").decision_reason == "internal_error"
         assert store.get("good").status == "ACCEPTED"
         assert [o["intent_id"] for o in signer.placed] == ["good"]
+
+
+# --- slice-3: L7 breaker gating + co-move ClusterView wiring + mark-field fold ---------------
+
+class _FakeClusterModel:
+    """Returns a fixed ClusterView regardless of token_ids -- pins that the service applies the
+    model's verdict (ClusterModel.view itself is covered in test_ers_comove)."""
+
+    def __init__(self, view):
+        self._view = view
+
+    def view(self, token_ids):
+        return self._view
+
+
+def _open(token, entry, risk, *, cluster="cz"):
+    return OpenPosition("m", "e", "s", cluster, Decimal(risk), False,
+                        token_id=token, entry_price=Decimal(entry))
+
+
+def test_l7_freeze_rejects_new_intents_without_placing(tmp_path):
+    # an open position marked into the freeze band (drawdown ~$19.20) -> the breaker freezes adds,
+    # so an otherwise-acceptable PROPOSED intent is REJECTED(l7_freeze) and nothing is placed.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        caps = RiskCaps()
+        portfolio = Portfolio(nav=Decimal("300"), positions=(_open("P", "0.50", "24"),))
+        books = {"t1": _book("0.50"), "P": _book("0.12", bid="0.08")}  # P mid 0.10 -> drawdown 19.2
+        signer = PaperSigner()
+        process_pending(store, book_for=books.get, portfolio=portfolio, caps=caps, signer=signer,
+                        breaker=DrawdownBreaker(caps, clock=lambda: 0))
+
+        assert store.get("i1").status == "REJECTED" and store.get("i1").decision_reason == "l7_freeze"
+        assert signer.placed == []
+
+
+def test_l7_flatten_signals_exit_and_blocks_new_intents(tmp_path):
+    # two positions marked to a >$30 portfolio drawdown -> FLATTEN: the seam is signalled to exit
+    # and new intents are REJECTED(l7_flatten).
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        caps = RiskCaps()
+        positions = (_open("P1", "0.50", "18"), _open("P2", "0.50", "18"))
+        portfolio = Portfolio(nav=Decimal("300"), positions=positions)
+        books = {"t1": _book("0.50"), "P1": _book("0.06", bid="0.04"), "P2": _book("0.06", bid="0.04")}
+        signer = PaperSigner()
+        process_pending(store, book_for=books.get, portfolio=portfolio, caps=caps, signer=signer,
+                        breaker=DrawdownBreaker(caps, clock=lambda: 0))
+
+        assert store.get("i1").status == "REJECTED" and store.get("i1").decision_reason == "l7_flatten"
+        assert signer.placed == []
+        assert signer.flattened  # the exit was signalled through the seam
+
+
+def test_accept_folds_the_l7_mark_fields(tmp_path):
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)  # token t1
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=PaperSigner())
+        pos = final.positions[0]
+        assert pos.token_id == "t1"
+        assert pos.entry_price == Decimal("0.50")  # = the executable price the ERS re-priced at
+        assert pos.frozen is False
+
+
+def test_warm_cluster_model_applies_the_per_cluster_cap(tmp_path):
+    # a warm co-move verdict (rho=1) + an existing $4 position in the same cluster (cluster_id =
+    # event_id placeholder "e1") -> cluster_cap $12 - $4 = $8 binds, and the new position folds
+    # matrix_cold=False (warm leaves the cold count gate).
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, token_id="t1", condition_id="m1", event_id="e1"))
+        existing = OpenPosition("mx", "e1", "sx", "e1", Decimal("4"), False,
+                                token_id="P", entry_price=Decimal("0.50"))
+        portfolio = Portfolio(nav=Decimal("300"), positions=(existing,))
+        cm = _FakeClusterModel(ClusterView(warm=True, rho=Decimal("1")))
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get, portfolio=portfolio,
+                                caps=RiskCaps(), signer=PaperSigner(), cluster_model=cm)
+
+        assert store.get("i1").status == "ACCEPTED"
+        assert store.get("i1").decision_stake_usd == Decimal("8")
+        assert store.get("i1").decision_reason == "per_cluster_cap"
+        assert final.positions[-1].matrix_cold is False
