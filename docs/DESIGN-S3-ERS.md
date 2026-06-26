@@ -128,3 +128,116 @@ Pure-function TDD against the §4 envelope: the sizing math, the edge/no-edge bo
 crossed-book reject, the price-above-limit skip, EACH cap (an intent that would breach cap X → clamp or
 reject with reason X), the matrix-cold sub-cap, the min-floor SKIP-don't-round, and the RiskCaps
 inconsistency rejections. No network, no persistence.
+
+---
+
+## Slice 3 — learned co-move matrix + per-cluster cap + L7 breaker
+
+**Status:** designed 2026-06-26 (operator-approved); ONE combined slice (both subsystems, one merge),
+built as cleanly-isolated units. Replaces the fail-closed `matrix_cold=True / unknown-corr=+1` cluster
+default in `evaluate_intent` with a *learned per-cluster dollar cap*, and adds the L7 real-time
+unrealized-drawdown breaker. Both fail closed; the validator stays **provably bounded by the §4 envelope**.
+
+> **Data-gated honesty:** in PRODUCTION the matrix stays **cold (≡ slice-1 behavior)** until enough
+> price bars accrue per pair (needs continuous ingestion uptime). The machinery + EventStore data path are
+> real, correct, point-in-time, and fully tested with synthetic series — just dormant until data exists.
+> No live signer yet, so FLATTEN/FREEZE emit signals+alerts through the seam; real venue de-risking (GTD
+> brackets / `cancelAll`) is S4/POL-4.
+
+### Operator decisions resolved (the genuinely-open forks §4 did not fix)
+1. **Co-move signal = price-snapshot co-movement** — pairwise Pearson on per-market midpoint returns from
+   Market-Memory snapshots; a pair turns *warm* once ≥N paired bars accrue. (Resolution-outcome co-movement
+   deferred — it warms in weeks, not hours.)
+2. **Per-cluster dollar cap = correlation-scaled (earned relaxation):**
+   `cluster_cap(ρ) = per_trade + (1 − ρ)·(total_open_risk − per_trade)`, clamped `[per_trade, total_open]`,
+   ρ = MAX pairwise corr in the cluster. ρ→1 ⇒ $12 (cluster ≡ one bet); ρ→0 ⇒ $60 (only the global ceiling
+   binds). A PROVEN-independent cluster earns the right to hold >3 positions, still under `total_open`.
+3. **L7 unrealized mark = mark-to-mid** (stable; a thin-book bid must not spuriously fire the drastic
+   FLATTEN; pairs with the existing `midpoint()==None ⇒ stale ⇒ fail-closed` guard).
+
+### Units
+| Unit | File | Pure? |
+|---|---|---|
+| Co-move estimator + `ClusterModel` + cap formula | `ers/comove.py` | pure |
+| EventStore → midpoint-bar adapter (single forward pass; reuses `replay` incremental reconstruction) | `ers/comove.py` | reads store |
+| `DrawdownBreaker` (L7, stateful) | `ers/breaker.py` | stateful |
+| Validator integration (`ClusterView` + `per_cluster_cap` + `Portfolio.cluster_risk`) | `ers/validator.py` | pure |
+| `OpenPosition` + `RiskCaps` extensions | `ers/validator.py`, `ers/caps.py` | — |
+| Service wiring (breaker-first, per-intent `ClusterView`, richer `_fold`, FLATTEN/FREEZE seam) | `ers/service.py` | — |
+
+### Co-move estimator + cluster cap
+- **ρ:** Pearson correlation of simple midpoint returns (Δmid per bar) over aligned bars. A *pair* is **warm**
+  iff it has ≥ `comove_min_observations` paired bars within the rolling `comove_window`; otherwise its ρ is
+  fail-closed to **1.0** (unknown correlation = +1).
+- **Cluster warmth:** a cluster is warm iff *every* member pair (the intent vs each existing same-cluster
+  position) is warm. Any unknown pair ⇒ cluster **cold**.
+- **ρ_cluster = max pairwise** (the tightest cap).
+- **Estimation params** (`comove_min_observations`=30, `comove_bar_seconds`=60, `comove_window`≈240 bars)
+  live in `ClusterModel` config — operator-tunable like the synthetic thresholds. They are NOT in the signed
+  `RiskCaps` (which holds only risk *limits*). The cap *formula* uses `caps.per_trade` + `caps.total_open_risk`.
+
+### Validator integration
+- New input `cluster: ClusterView(warm: bool, rho: Decimal | None)`; default `ClusterView(False, None)` =
+  fail-closed cold.
+- **Cold** (`warm=False`): unchanged slice-1 path — `matrix_cold=True`, the ≤3 count gate, NO dollar cluster
+  cap.
+- **Warm** (`warm=True`): `matrix_cold=False` (leaves the count gate); add one `min()` headroom candidate
+  `(cluster_cap(rho) − portfolio.cluster_risk(cluster_id), "per_cluster_cap")`. `warm=True` with `rho is None`
+  ⇒ wiring error ⇒ **fail closed** (`REJECT`).
+- New `Portfolio.cluster_risk(cluster_id)` (mirrors `market_risk`). New ACCEPT binding-reason
+  `per_cluster_cap`. The engine stays provably bounded: the new term can only *tighten* (a `min()` candidate);
+  warm only ever *relaxes the count gate* while every dollar cap (incl. `total_open` $60) still binds.
+
+### L7 `DrawdownBreaker`
+- Each cycle, for each **non-frozen** open position: `shares = worst_case_risk / entry_price`;
+  `mid = book_for(token_id).midpoint()`; unrealized P&L = `shares·(mid − entry_price)`. Portfolio
+  **drawdown = −Σ P&L** (positive when losing; net — "total open unrealized exposure").
+- **Triggers** (strongest action wins), thresholds from `RiskCaps` (NAV $300, §4 L7):
+  drawdown > **$30** ⇒ `FLATTEN`; > **$18** ⇒ `FREEZE_ADDS`; **velocity** (drawdown rose > **$18** within a
+  trailing **15 min** window, inclusive edge) ⇒ `FREEZE_ADDS` + alert; any non-frozen position
+  **un-markable** (stale/None mid) ⇒ `FREEZE_ADDS` + `stale_mark` alert (the stale-mark watchdog — NEVER
+  FLATTEN blind); and (review M1) any **single** non-frozen position whose unrealized loss exceeds the
+  freeze floor ⇒ `FREEZE_ADDS` + `position_loss`, so the NET drawdown can't mask one catastrophic position
+  behind another's paper gain (dormant at v1's $12 per-trade cap, load-bearing as caps scale).
+- **Frozen** positions (disputed/frozen): excluded from drawdown + velocity, but still count toward
+  `total_open` in the validator (§4). Holds a bounded `(clock_ts, drawdown)` deque for the velocity window;
+  clock injected for deterministic tests.
+
+### Model / caps / service changes
+- `OpenPosition` += `token_id: str`, `entry_price: Decimal`, `frozen: bool = False` (`shares` derived).
+  `service._fold` populates `token_id` + `entry_price = decision.price_exec`.
+- `RiskCaps` += `l7_freeze_floor=18`, `l7_flatten_floor=30`, `l7_velocity_delta=18`,
+  `l7_velocity_window_seconds=900`, with construction-time checks (`0 < freeze < flatten ≤ total_open`;
+  `velocity_delta > 0`; `window > 0`). `content_hash` covers them automatically.
+- `service.process_pending` += optional `cluster_model=None` (None ⇒ all cold, fail-closed back-compat) and
+  `breaker`/`clock`. **Order per cycle:** run the breaker FIRST → if `FLATTEN`, signal flatten via the seam +
+  reject all new intents (`l7_flatten`); if `FREEZE_ADDS`, reject all new intents (`l7_freeze`) but hold
+  existing; else process intents, building each `ClusterView` from `cluster_model`. `PaperSigner` gains a
+  shadow `flatten(positions)`.
+
+### Reason / action codes (added)
+Validator ACCEPT binding: `per_cluster_cap`. Service REJECT: `l7_freeze`, `l7_flatten`. Breaker triggers:
+`freeze_floor`, `flatten_floor`, `velocity`, `stale_mark`.
+
+### Testing (strict TDD, synthetic data — no network/keys)
+Estimator (ρ=±1/0, <N⇒cold, window/recency) · cap math (ρ=1→$12, ρ=0→$60, monotone, clamped) · validator
+warm path (low-ρ admits a 4th position the cold ≤3 would block, still clamps at `cluster_cap` & `total_open`;
+high-ρ clamps aggregate ~$12 with reason `per_cluster_cap`; warm-no-ρ fails closed; **all 21 existing
+cold-path validator tests stay green**) · L7 (each trigger, frozen excluded, stale⇒freeze, profit⇒NONE,
+strongest-wins, velocity window) · service (FREEZE/FLATTEN block new ACCEPTs, `cluster_model=None`
+back-compat, `_fold` populates marks) · caps (new-field consistency rejections). **Two Opus reviews:** an
+interim pass after the validator+breaker core (the safety-critical heart), a closing pass at the end.
+
+### Out of scope for slice 3 (deferred)
+Resolution-outcome co-movement · a dedicated live minute-bar snapshotter (vs replay-reconstruction; perf
+optimization) · **a real latent-cluster assignment** (review M2: `cluster_id` is the `event_id` placeholder
+today, so the per-cluster cap aliases the per-event cap and only over-couples within an event — cross-event
+latent drivers need a real assignment, itself a natural consumer of this co-move matrix) · the ≤1¢ liquidity
+**impact term** (`liquidity_impact_cents` carried but only `liquidity_depth_frac` enforced) · the calibration
+`k` multiplier (S5) · full book-walk slippage / the stacked hurdle H · locked-to-resolution / dispute-freeze
+accounting beyond the `frozen` flag · 3-way reconciliation · the real signer + actual venue
+FLATTEN/cancelAll (S2/POL-4, S4).
+
+### Note: where `cluster_cap` lives
+The per-cluster cap formula is a `RiskCaps.cluster_cap(rho)` METHOD (caps own the envelope math); `comove.py`
+owns correlation/warmth, and the validator composes them with no import cycle.
