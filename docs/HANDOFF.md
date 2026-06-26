@@ -63,7 +63,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | POL-3 | S1 — Ingestion + Market-Memory DB | **DONE + pushed** (+ all S1 finishing touches) |
 | **POL-12** | C2 — off-loop EventStore writes (unblock WS shards > 2) | **DONE + pushed** |
 | **POL-4** | S2 — signing + order-construction spike (BUILD-GATING) | **BLOCKED** on the operator funding a Polymarket deposit wallet on a CLEAN non-Windows box |
-| **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2 DONE + pushed**; slice 3 next |
+| **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE**; 1+2 pushed, **slice 3 (co-move matrix + per-cluster cap + L7 breaker) merged to local `main`, UNPUSHED** |
 | POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | Not started (depends on S1 — no funding needed) |
 | POL-8 | S6 — Hermes integration + signal fusion + truth-gate | Not started (needs S3/S4/S5) |
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 224 tests)
+## 5. What is already built (TDD'd + Opus-reviewed + live-verified; 268 tests. NOTE: S3 slice 3 is on local `main` only — UNPUSHED; everything else on `origin/main`)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -102,6 +102,18 @@ edge.
     record + audit → fold each ACCEPT into the portfolio (cross-intent caps hold) → call the signer SEAM on
     ACCEPT. Per-intent isolation (a raising intent → REJECT internal_error, batch continues). `PaperSigner`
     = shadow stub; the real signer needs S2/POL-4.
+  - **slice 3 (UNPUSHED, local `main` @ `b1ec7eb`):** `comove.py` — Pearson co-move estimator (fail-closed
+    ρ=1 on degenerate input) + `ClusterModel` warm/cold gate (any unknown pair → cold) + `build_bar_series`
+    EventStore→midpoint-bar adapter (point-in-time, no look-ahead). `caps.py RiskCaps.cluster_cap(ρ)` =
+    `per_trade + (1−ρ)·(total_open−per_trade)` clamped + 4 L7 fields. `validator.py` — `ClusterView` +
+    `Portfolio.cluster_risk` + the `per_cluster_cap` min() term (warm only TIGHTENS / relaxes the cold ≤3
+    count gate) + `OpenPosition` mark fields. `breaker.py DrawdownBreaker` (L7) — mark-to-mid NET drawdown,
+    triggers freeze>$18 / flatten>$30 / velocity / stale-mark / **per-position-loss**, frozen excluded,
+    never FLATTEN blind. `service.py` runs the breaker FIRST + wires the per-intent `ClusterView`
+    (matrix_cold = not warm) + folds marks + `PaperSigner.flatten`. Two Opus reviews → PROVABLY BOUNDED +
+    FAILS CLOSED. **Data-gated:** the matrix stays cold in prod (≡ slice-1) until bars accrue; `cluster_id`
+    is still the `event_id` placeholder (per-cluster aliases per-event, fails safe) → real latent-cluster
+    assignment is deferred.
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -123,16 +135,17 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
-- **If NOT funded → continue the no-funding critical-path/feeding work.** Recommended order:
-  1. **S3 slice 3 (POL-5):** the learned **co-move correlation matrix** (replaces the fail-closed
-     unknown-corr=+1 cluster default in `evaluate_intent` with real per-cluster dollar caps; needs
-     co-movement history from Market-Memory snapshots — only just accruing, so partly time-gated) + the **L7
-     real-time unrealized-drawdown breaker** (freeze-adds >$18 / FLATTEN >$30 / velocity). Some overlap S4.
-  2. **S5 calibration (POL-7):** base-rate prior + Brier/reliability ledger + the Anchor Gate (the GO/NO-GO
+- **If NOT funded → continue the no-funding critical-path/feeding work.** Recommended order (**S3 slice 3
+  is now DONE** — co-move matrix + per-cluster cap + L7 breaker, see §5):
+  1. **S5 calibration (POL-7):** base-rate prior + Brier/reliability ledger + the Anchor Gate (the GO/NO-GO
      gate for ever sizing real money). Machinery buildable now; can't be fully exercised until forecasts
      accrue.
-  3. **S7 detectors (POL-9):** defensive smart-money/insider analytics over the on-chain + Data-API feeds
+  2. **S7 detectors (POL-9):** defensive smart-money/insider analytics over the on-chain + Data-API feeds
      (detect + notify only; FOLLOW off for v1).
+  3. **Real latent-cluster assignment (slice-3 follow-up):** today `cluster_id` is the `event_id`
+     placeholder, so the learned per-cluster cap aliases the per-event cap (fails safe / over-couples within
+     an event). A real co-move-driven cluster assignment is what makes the matrix's cross-event decorrelation
+     actually bite — a natural consumer of the `comove.py` matrix just built.
   4. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
      filter to our wallet (needs POL-4) · operator finishes curating the PRIMARY news allowlist.
 
