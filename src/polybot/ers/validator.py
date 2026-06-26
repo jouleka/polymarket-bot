@@ -40,6 +40,13 @@ class OpenPosition:
     cluster_id: str
     worst_case_risk: Decimal  # = notional for a long
     matrix_cold: bool = True
+    # Slice-3 L7 marking fields (the ERS fills these on ACCEPT; shares = worst_case_risk /
+    # entry_price). Defaulted so pre-L7 construction sites stay valid; the breaker treats a
+    # non-positive entry_price as un-markable (fail closed). ``frozen`` (disputed/frozen) is
+    # excluded from the L7 drawdown + velocity but still counts toward total_open.
+    token_id: str = ""
+    entry_price: Decimal = Decimal(0)
+    frozen: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,9 @@ class Portfolio:
     def source_risk(self, resolution_source):
         return self._risk_where(lambda p: p.resolution_source == resolution_source)
 
+    def cluster_risk(self, cluster_id):
+        return self._risk_where(lambda p: p.cluster_id == cluster_id)
+
     def matrix_cold_count(self):
         return sum(1 for p in self.positions if p.matrix_cold)
 
@@ -74,7 +84,20 @@ class Decision:
     reason: str                   # reason code; on ACCEPT, the binding cap (or "kelly")
 
 
-def evaluate_intent(intent, book, portfolio, caps, *, calib_score=Decimal(1)):
+@dataclass(frozen=True)
+class ClusterView:
+    """The ERS's learned co-move verdict for an intent's cluster (slice 3). ``warm`` is True
+    only once every member pair has enough price-bar history; then ``rho`` is the max pairwise
+    correlation. Fail-closed default ``ClusterView(False, None)`` = cold = the slice-1 path
+    (matrix_cold, the <=3 count gate, no dollar cluster cap)."""
+    warm: bool
+    rho: Decimal | None = None
+
+
+_COLD_CLUSTER = ClusterView(warm=False, rho=None)  # fail-closed default: the slice-1 path
+
+
+def evaluate_intent(intent, book, portfolio, caps, *, calib_score=Decimal(1), cluster=_COLD_CLUSTER):
     # 1. Re-price off the touch (we always BUY an outcome token). Fail closed on any
     #    un-priceable book: stale, no ask, or crossed/locked (midpoint None).
     price = book.best_ask()
@@ -106,6 +129,10 @@ def evaluate_intent(intent, book, portfolio, caps, *, calib_score=Decimal(1)):
     if intent.matrix_cold and portfolio.matrix_cold_count() >= caps.matrix_cold_concurrent:
         # unknown-correlation positions are capped by COUNT (the slice-1 cluster gate).
         return Decision("REJECT", None, price, "matrix_cold_concurrent")
+    # A WARM cluster verdict with no rho is an ERS wiring error -> fail closed, never size on it.
+    # (Cold clusters keep the count gate above; warm clusters earn the dollar cap in step 4.)
+    if cluster.warm and cluster.rho is None:
+        return Decision("REJECT", None, price, "bad_cluster")
 
     # 3. 1/4-Kelly stake on the executable price; calibration auto-shrinks it.
     frac_eff = caps.kelly_fraction * min(Decimal(1), calib_score)
@@ -116,7 +143,7 @@ def evaluate_intent(intent, book, portfolio, caps, *, calib_score=Decimal(1)):
     #    headroom wins; its reason is recorded. Liquidity uses the resting TOUCH depth
     #    (slice 1; full multi-level book-walk + the <=1c impact term are deferred).
     ask_size = book.top_of_book()[3]
-    candidates = (
+    candidates = [
         (caps.per_trade, "per_trade_cap"),
         (caps.per_market - portfolio.market_risk(intent.condition_id), "per_market_cap"),
         (caps.per_event_union - portfolio.event_risk(intent.event_id), "per_event_cap"),
@@ -124,7 +151,13 @@ def evaluate_intent(intent, book, portfolio, caps, *, calib_score=Decimal(1)):
         (caps.total_open_risk - portfolio.total_open_risk(), "total_open_cap"),
         (intent.size_usd_suggestion, "size_suggestion"),   # Hermes's request: clamp, never trust upward
         (caps.liquidity_depth_frac * ask_size * price, "liquidity_cap"),
-    )
+    ]
+    if cluster.warm:
+        # Learned co-move cap: the cluster's summed worst-case risk is bounded by cluster_cap(rho).
+        # An ADDITIONAL min() term (can only tighten); replaces the cold count gate for warm clusters.
+        candidates.append(
+            (caps.cluster_cap(cluster.rho) - portfolio.cluster_risk(intent.cluster_id), "per_cluster_cap")
+        )
     for headroom, reason in candidates:
         if headroom < stake:
             stake, binding = headroom, reason
