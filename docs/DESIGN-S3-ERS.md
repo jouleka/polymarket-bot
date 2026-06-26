@@ -25,6 +25,12 @@ replaces the human; they live here, fail **closed**, and Hermes can never overri
    real-time unrealized-drawdown breaker, L4/L5 novelty/anomaly vetoes, daily/weekly loss breakers,
    3-way reconciliation, full multi-level book-walk slippage, the calibration `k` multiplier (S5).
 
+**S6 obligation (chokepoint, from the slice-2 review):** the chokepoint invariant currently holds *as
+wired* — Hermes is intended to get ONLY the `propose_trade` MCP tool; `IntentStore.record_decision` + the
+signer are ERS-only *by convention* (same object, not a separate type). When S6 actually wires Hermes's MCP
+tools, expose a **propose-only facade** (just `propose_trade`, no `record_decision`/signer reachable) so the
+"Hermes can at worst enqueue" guarantee is load-bearing in code, surviving careless future wiring.
+
 ---
 
 ## Slice 1 — the validator
