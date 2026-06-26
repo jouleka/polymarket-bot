@@ -63,7 +63,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | POL-3 | S1 — Ingestion + Market-Memory DB | **DONE + pushed** (+ all S1 finishing touches) |
 | **POL-12** | C2 — off-loop EventStore writes (unblock WS shards > 2) | **DONE + pushed** |
 | **POL-4** | S2 — signing + order-construction spike (BUILD-GATING) | **BLOCKED** on the operator funding a Polymarket deposit wallet on a CLEAN non-Windows box |
-| **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE**; 1+2 pushed, **slice 3 (co-move matrix + per-cluster cap + L7 breaker) merged to local `main`, UNPUSHED** |
+| **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE + pushed** (slice 3 = co-move matrix + per-cluster cap + L7 breaker, `origin/main` @ `d17224e`) |
 | POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | Not started (depends on S1 — no funding needed) |
 | POL-8 | S6 — Hermes integration + signal fusion + truth-gate | Not started (needs S3/S4/S5) |
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (TDD'd + Opus-reviewed + live-verified; 268 tests. NOTE: S3 slice 3 is on local `main` only — UNPUSHED; everything else on `origin/main`)
+## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 268 tests)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -102,7 +102,7 @@ edge.
     record + audit → fold each ACCEPT into the portfolio (cross-intent caps hold) → call the signer SEAM on
     ACCEPT. Per-intent isolation (a raising intent → REJECT internal_error, batch continues). `PaperSigner`
     = shadow stub; the real signer needs S2/POL-4.
-  - **slice 3 (UNPUSHED, local `main` @ `b1ec7eb`):** `comove.py` — Pearson co-move estimator (fail-closed
+  - **slice 3 (pushed, `origin/main` @ `b1ec7eb`):** `comove.py` — Pearson co-move estimator (fail-closed
     ρ=1 on degenerate input) + `ClusterModel` warm/cold gate (any unknown pair → cold) + `build_bar_series`
     EventStore→midpoint-bar adapter (point-in-time, no look-ahead). `caps.py RiskCaps.cluster_cap(ρ)` =
     `per_trade + (1−ρ)·(total_open−per_trade)` clamped + 4 L7 fields. `validator.py` — `ClusterView` +
