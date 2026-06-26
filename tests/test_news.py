@@ -16,6 +16,7 @@ from polybot.ingestion.news import (
     DISCOVERY,
     PRIMARY,
     Calendar,
+    CalendarScheduler,
     NewsPoller,
     Source,
     parse_feed,
@@ -180,3 +181,77 @@ def test_calendar_due_within_a_horizon():
     due = cal.due_within(now=90, horizon=120)  # window [90, 210]
 
     assert [e["label"] for e in due] == ["CPI", "FOMC"]
+
+
+def test_default_allowlist_is_well_formed():
+    # The curated registry must have UNIQUE names (NewsPoller keys on name, so a dup
+    # would silently drop a source) + unique URLs + valid tiers, and at least one
+    # PRIMARY. Guards accidental typo/dup on a security-relevant artifact.
+    from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+
+    names = [s.name for s in DEFAULT_ALLOWLIST]
+    urls = [s.url for s in DEFAULT_ALLOWLIST]
+    assert len(names) == len(set(names))  # unique names
+    assert len(urls) == len(set(urls))    # no duplicate feeds
+    assert all(s.tier in (PRIMARY, DISCOVERY) for s in DEFAULT_ALLOWLIST)
+    assert any(s.tier == PRIMARY for s in DEFAULT_ALLOWLIST)
+
+
+def _noop_sleep():
+    async def sleep(_d):
+        pass
+    return sleep
+
+
+def test_scheduler_fires_pre_stage_hook_once_per_event_entering_the_horizon():
+    cal = Calendar([
+        {"at": 100, "label": "CPI"},
+        {"at": 200, "label": "FOMC"},
+        {"at": 9999, "label": "far"},
+    ])
+    fired = []
+    times = iter([0, 100, 300])  # one clock read per poll
+    sched = CalendarScheduler(cal, lambda e: fired.append(e["label"]),
+                              horizon=150, clock=lambda: next(times), sleep=_noop_sleep())
+
+    asyncio.run(sched.run(max_polls=3))
+
+    # poll@0: window [0,150] -> CPI fires. poll@100: [100,250] -> CPI already fired, FOMC fires.
+    # poll@300: [300,450] -> nothing. far-future never enters a window.
+    assert fired == ["CPI", "FOMC"]
+
+
+def test_scheduler_does_not_fire_a_past_event():
+    cal = Calendar([{"at": 50, "label": "past"}, {"at": 500, "label": "future"}])
+    fired = []
+    sched = CalendarScheduler(cal, lambda e: fired.append(e["label"]),
+                              horizon=1000, clock=lambda: 100, sleep=_noop_sleep())
+
+    asyncio.run(sched.run(max_polls=2))
+
+    assert fired == ["future"]  # past@50 < now=100 -> never in due_within
+
+
+def test_scheduler_fires_exactly_once_even_if_event_stays_in_horizon():
+    cal = Calendar([{"at": 100, "label": "CPI"}])
+    fired = []
+    sched = CalendarScheduler(cal, lambda e: fired.append(e["label"]),
+                              horizon=1000, clock=lambda: 50, sleep=_noop_sleep())
+
+    asyncio.run(sched.run(max_polls=5))  # CPI in [50,1050] on every poll
+
+    assert fired == ["CPI"]  # de-duped: fired once, not 5x
+
+
+def test_scheduler_supports_an_async_pre_stage_hook():
+    cal = Calendar([{"at": 100, "label": "CPI"}])
+    fired = []
+
+    async def on_due(event):
+        fired.append(event["label"])
+
+    sched = CalendarScheduler(cal, on_due, horizon=1000, clock=lambda: 50, sleep=_noop_sleep())
+
+    asyncio.run(sched.run(max_polls=1))
+
+    assert fired == ["CPI"]

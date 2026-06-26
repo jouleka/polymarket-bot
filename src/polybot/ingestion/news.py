@@ -18,6 +18,7 @@ collector can arm connections seconds ahead; the actual arming is orchestration 
 consumes ``due_within`` and is wired later.
 """
 
+import asyncio
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -161,3 +162,41 @@ class Calendar:
 
     def due_within(self, now, horizon):
         return [e for e in self._events if now <= e["at"] <= now + horizon]
+
+
+class CalendarScheduler:
+    """Drives the Calendar: polls ``due_within`` and fires a pre-stage hook ONCE per
+    event as it enters the horizon, so a collector can arm connections seconds ahead of
+    a scheduled event (FOMC / CPI / SCOTUS / a game). The scheduler decides only WHEN to
+    pre-stage; what arming actually does is the consumer's job (deferred orchestration),
+    passed as ``on_due`` (sync or async). Clock-injected + ``max_polls``-bounded so it is
+    deterministic and testable. ``on_due`` exceptions propagate (fail loud) -- the hook
+    must be robust.
+    """
+
+    def __init__(self, calendar, on_due, *, horizon, clock, sleep=asyncio.sleep,
+                 poll_interval=30.0):
+        self._calendar = calendar
+        self._on_due = on_due
+        self._horizon = horizon
+        self._clock = clock
+        self._sleep = sleep
+        self._poll_interval = poll_interval
+
+    async def run(self, *, max_polls=None):
+        fired = set()  # (at, label) already pre-staged -> fire exactly once
+        polls = 0
+        while max_polls is None or polls < max_polls:
+            polls += 1
+            now = self._clock()
+            for event in self._calendar.due_within(now, self._horizon):
+                key = (event["at"], event["label"])
+                if key in fired:
+                    continue  # already pre-staged on an earlier poll while still in-window
+                fired.add(key)
+                result = self._on_due(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            if max_polls is None or polls < max_polls:
+                await self._sleep(self._poll_interval)
+        return fired
