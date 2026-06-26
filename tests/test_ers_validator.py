@@ -10,6 +10,7 @@ from decimal import Decimal
 
 from polybot.ers.caps import RiskCaps
 from polybot.ers.validator import (
+    ClusterView,
     Decision,
     OpenPosition,
     Portfolio,
@@ -225,3 +226,70 @@ def test_non_cold_intent_not_blocked_by_the_matrix_cold_subcap():
     d = evaluate_intent(_intent("0.9", "0.60", condition="m9", event="e9", source="s9", matrix_cold=False),
                         book, _portfolio(positions=positions), RiskCaps())
     assert d.verdict == "ACCEPT"
+
+
+# --- Batch 4: slice-3 warm co-move per-cluster cap (ClusterView) ---
+
+def test_cluster_risk_aggregates_worst_case_by_cluster():
+    p = _portfolio(positions=[_pos("4", cluster="c1"), _pos("7", cluster="c2"),
+                              _pos("3", cluster="c1")])
+    assert p.cluster_risk("c1") == Decimal("7")
+    assert p.cluster_risk("c2") == Decimal("7")
+    assert p.cluster_risk("c3") == Decimal("0")
+
+
+def test_warm_cluster_clamps_to_per_cluster_cap():
+    # warm rho=1 -> cluster_cap $12; existing $4 in cluster c1 -> headroom $8 binds.
+    book = _book("0.50")
+    pos = _pos("4", condition="mX", event="eX", source="sX", cluster="c1", matrix_cold=False)
+    d = evaluate_intent(
+        _intent("0.9", "0.60", condition="m1", event="e1", source="s1", cluster="c1", matrix_cold=False),
+        book, _portfolio(positions=[pos]), RiskCaps(),
+        cluster=ClusterView(warm=True, rho=Decimal("1")))
+    assert d.verdict == "ACCEPT" and d.stake_usd == Decimal("8") and d.reason == "per_cluster_cap"
+
+
+def test_warm_low_correlation_cluster_does_not_over_tighten():
+    # warm rho=0 -> cluster_cap $60 -> no extra bind; per_trade $12 still governs.
+    book = _book("0.50")
+    pos = _pos("4", condition="mX", event="eX", source="sX", cluster="c1", matrix_cold=False)
+    d = evaluate_intent(
+        _intent("0.9", "0.60", condition="m1", event="e1", source="s1", cluster="c1", matrix_cold=False),
+        book, _portfolio(positions=[pos]), RiskCaps(),
+        cluster=ClusterView(warm=True, rho=Decimal("0")))
+    assert d.verdict == "ACCEPT" and d.stake_usd == Decimal("12") and d.reason == "per_trade_cap"
+
+
+def test_warm_cluster_below_floor_skips_without_rounding_up():
+    # existing $10 in c1, rho=1 -> cap $12 -> headroom $2 < $5 floor -> SKIP, never round up.
+    book = _book("0.50")
+    pos = _pos("10", condition="mX", event="eX", source="sX", cluster="c1", matrix_cold=False)
+    d = evaluate_intent(
+        _intent("0.9", "0.60", condition="m1", event="e1", source="s1", cluster="c1", matrix_cold=False),
+        book, _portfolio(positions=[pos]), RiskCaps(),
+        cluster=ClusterView(warm=True, rho=Decimal("1")))
+    assert d.verdict == "SKIP" and d.reason == "below_min_floor"
+
+
+def test_warm_cluster_escapes_the_cold_count_gate():
+    # 3 matrix-cold positions (the <=3 sub-cap) + a WARM 4th intent (matrix_cold=False): the
+    # cold count gate does not apply, so the learned-correlation position is admitted where a
+    # 4th COLD intent would have been rejected (cf. test_rejects_matrix_cold_intent...).
+    book = _book("0.50")
+    positions = [_pos("5", condition=f"m{i}", event=f"e{i}", source=f"s{i}", cluster=f"k{i}",
+                       matrix_cold=True) for i in range(3)]
+    d = evaluate_intent(
+        _intent("0.9", "0.60", condition="m9", event="e9", source="s9", cluster="c9", matrix_cold=False),
+        book, _portfolio(positions=positions), RiskCaps(),
+        cluster=ClusterView(warm=True, rho=Decimal("0")))
+    assert d.verdict == "ACCEPT"
+
+
+def test_warm_cluster_without_rho_fails_closed():
+    # warm=True but rho missing is an ERS wiring error -> fail closed, never size on it.
+    book = _book("0.50")
+    d = evaluate_intent(
+        _intent("0.9", "0.60", matrix_cold=False),
+        book, _portfolio(), RiskCaps(),
+        cluster=ClusterView(warm=True, rho=None))
+    assert d.verdict == "REJECT" and d.reason == "bad_cluster"
