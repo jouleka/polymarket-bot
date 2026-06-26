@@ -65,7 +65,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-4** | S2 — signing + order-construction spike (BUILD-GATING) | **BLOCKED** on the operator funding a Polymarket deposit wallet on a CLEAN non-Windows box |
 | **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE + pushed** (slice 3 = co-move matrix + per-cluster cap + L7 breaker, `origin/main` @ `d17224e`) |
 | POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
-| POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | Not started (depends on S1 — no funding needed) |
+| POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | POL-8 | S6 — Hermes integration + signal fusion + truth-gate | Not started (needs S3/S4/S5) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | Not started (depends on S1 — no funding needed) |
 | POL-10 | S8 — Maker-rewards module | Not started |
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 268 tests)
+## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 324 tests)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -114,6 +114,18 @@ edge.
     FAILS CLOSED. **Data-gated:** the matrix stays cold in prod (≡ slice-1) until bars accrue; `cluster_id`
     is still the `event_id` placeholder (per-cluster aliases per-event, fails safe) → real latent-cluster
     assignment is deferred.
+- **S5 calibration (`src/polybot/calibration/`, POL-7):** the L3 GO/NO-GO sizing gate + the
+  anti-overconfidence Anchor Gate. `ledger.py` append-only forecast→outcome store (point-in-time, records
+  the market-mid baseline; rejects non-finite). `scoring.py` Brier + Murphy decomposition + Brier-skill
+  (pure Decimal). `tracker.py` the **binary {0,1} k multiplier** → the validator's `calib_score`: GO iff
+  ≥`min_n` honest resolutions AND beats the market-mid baseline AND reliability≈0 AND resolution>reliability;
+  DISPUTED_LOST/VOID excluded (whale-flip immunity). `prior.py` curated reference-class priors + longshot
+  shrink (operator review required). `anchor.py` clamp p to the intersection of prior+market log-odds bands
+  (corroboration widens, still bounded; fail-loud on non-finite). `config.py` consistency-checked knobs.
+  `gate.py` the `CalibrationGate` facade. 2 Opus reviews → no CRITICAL, k-gate fail-safe-toward-paper,
+  Anchor Gate bounded. **DATA-GATED:** dormant until S6 feeds forecasts + markets resolve (every category
+  cold/k=0 until ≥150 honest resolutions). **Deep ERS wiring deferred to S6** (delivered package + facade);
+  **S6 obligation:** wrap `clamp_p` in the per-intent try/except so a fail-loud raise rejects one intent.
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -136,18 +148,19 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
 - **If NOT funded → continue the no-funding critical-path/feeding work.** Recommended order (**S3 slice 3
-  is now DONE** — co-move matrix + per-cluster cap + L7 breaker, see §5):
-  1. **S5 calibration (POL-7):** base-rate prior + Brier/reliability ledger + the Anchor Gate (the GO/NO-GO
-     gate for ever sizing real money). Machinery buildable now; can't be fully exercised until forecasts
-     accrue.
-  2. **S7 detectors (POL-9):** defensive smart-money/insider analytics over the on-chain + Data-API feeds
+  AND S5/POL-7 calibration are now DONE + pushed**, see §5):
+  1. **S7 detectors (POL-9):** defensive smart-money/insider analytics over the on-chain + Data-API feeds
      (detect + notify only; FOLLOW off for v1).
-  3. **Real latent-cluster assignment (slice-3 follow-up):** today `cluster_id` is the `event_id`
+  2. **Real latent-cluster assignment (S3 slice-3 follow-up):** today `cluster_id` is the `event_id`
      placeholder, so the learned per-cluster cap aliases the per-event cap (fails safe / over-couples within
-     an event). A real co-move-driven cluster assignment is what makes the matrix's cross-event decorrelation
-     actually bite — a natural consumer of the `comove.py` matrix just built.
-  4. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
+     an event). A real co-move-driven cluster assignment makes the matrix's cross-event decorrelation
+     actually bite — a natural consumer of the `comove.py` matrix.
+  3. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
      filter to our wallet (needs POL-4) · operator finishes curating the PRIMARY news allowlist.
+  - **NB for S6 (when it lands):** wire the `CalibrationGate` facade into `service.py` (k_for → calib_score;
+    clamp_p on intent.p) AND wrap it in the per-intent try/except (the Anchor Gate fail-loud raise must
+    reject one intent, not propagate). Also wire S3's `cluster_model`/`breaker` seams + the propose-only
+    Hermes facade.
 
 ## 8. Landmines
 - Never let Hermes compute size or touch keys (`propose_trade` is its only write tool, INSERT-only). When S6
