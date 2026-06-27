@@ -67,7 +67,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | POL-8 | S6 — Hermes integration + signal fusion + truth-gate | Not started (needs S3/S4/S5) |
-| POL-9 | S7 — Smart-money / insider detectors (defensive) | Not started (depends on S1 — no funding needed) |
+| POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
 | POL-10 | S8 — Maker-rewards module | Not started |
 | POL-11 | S9 — Shadow harness + ramp controller | Not started |
 
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 324 tests)
+## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 377 tests)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -126,6 +126,17 @@ edge.
   Anchor Gate bounded. **DATA-GATED:** dormant until S6 feeds forecasts + markets resolve (every category
   cold/k=0 until ≥150 honest resolutions). **Deep ERS wiring deferred to S6** (delivered package + facade);
   **S6 obligation:** wrap `clamp_p` in the per-intent try/except so a fail-loud raise rejects one intent.
+- **S7 detectors (`src/polybot/detectors/`, POL-9):** the DEFENSIVE smart-money + insider analytics. `pnl.py`
+  realized PnL from the cash-flow ledger (per-condition, exact Decimal, NEVER /leaderboard). `luck.py` the
+  skill gate — binomial-z (wins beat the price-implied baseline, p<0.001) + deterministic normal-CI + single-
+  event-dominance (crash-free + fails-closed). `classify.py` {SHARP,LUCKY,MARKET_MAKER,INSIDER_LIKE,NOISE}
+  (MM excluded first). `sybil.py` union-find funder clustering. `toxicity.py` D1 order-flow toxicity (ratio≥0.75
+  AND z≥2) → the `pull_quotes` maker seam (rejects negative sizes). `signals.py` D2–D6 (NaN-safe `clamp01`).
+  `composite.py` 0–10 + bands + single-Critical override (clamps in/out). `policy.py` **`FOLLOW_ENABLED=False`**
+  (the only FOLLOW branch is dead code) → default AVOID/FLAG. 2 Opus reviews → no CRITICAL; FOLLOW structurally
+  off (grep + 40-combo sweep), luck filter crash-free/fails-closed; HIGH input-validation gaps fixed.
+  **Deferred:** live `/activity` + on-chain wiring · the real S8 maker module (D1 = a seam) · Hermes's D3
+  catalyst timeline · FOLLOW (hard-off until precision proven + legal/ToS review).
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -148,14 +159,12 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
 - **If NOT funded → continue the no-funding critical-path/feeding work.** Recommended order (**S3 slice 3
-  AND S5/POL-7 calibration are now DONE + pushed**, see §5):
-  1. **S7 detectors (POL-9):** defensive smart-money/insider analytics over the on-chain + Data-API feeds
-     (detect + notify only; FOLLOW off for v1).
-  2. **Real latent-cluster assignment (S3 slice-3 follow-up):** today `cluster_id` is the `event_id`
+  AND S5/POL-7 calibration AND S7/POL-9 detectors are now DONE + pushed**, see §5):
+  1. **Real latent-cluster assignment (S3 slice-3 follow-up):** today `cluster_id` is the `event_id`
      placeholder, so the learned per-cluster cap aliases the per-event cap (fails safe / over-couples within
      an event). A real co-move-driven cluster assignment makes the matrix's cross-event decorrelation
      actually bite — a natural consumer of the `comove.py` matrix.
-  3. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
+  2. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
      filter to our wallet (needs POL-4) · operator finishes curating the PRIMARY news allowlist.
   - **NB for S6 (when it lands):** wire the `CalibrationGate` facade into `service.py` (k_for → calib_score;
     clamp_p on intent.p) AND wrap it in the per-intent try/except (the Anchor Gate fail-loud raise must
