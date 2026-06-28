@@ -209,3 +209,62 @@ def test_e2e_uncorroborated_proposal_is_mid_and_prior_only(tmp_path):
             row = clog.all()[0]
             assert row.w_news_effective == 0.0              # Hermes informational-only
             assert row.corroborated is False
+
+
+def test_e2e_detector_avoid_proposal_rejected_before_sizing(tmp_path):
+    # A detector AVOID (toxic flow inputs) must REJECT(detector_avoid) BEFORE fusion/clamp/sizing
+    # and place no order -- the defensive pre-gate. The loop calls detectors.evaluate with
+    # DetectorInputs() zeros at S6 MVP (-> FLAG_ONLY), so to drive a genuine AVOID end-to-end we
+    # wrap the REAL DetectorOrchestrator in a thin shim that forwards a toxic DetectorInputs set --
+    # the SAME verified AVOID fixture as tests/test_detectors_orchestrator.py (classification=
+    # INSIDER_LIKE forces AVOID even at a LOW band). The shim only swaps the inputs; the real
+    # toxicity -> composite -> policy.decide chain produces the AVOID verdict.
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as evstore:
+        _seed(evstore, stamper, source="fed-press", event_id="c1")
+        _seed(evstore, stamper, source="sec-press", event_id="c2")
+
+        class _AvoidOrchestrator:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def evaluate(self, intent, *, inputs):
+                # Toxic flow: heavy one-sided buy imbalance + an INSIDER_LIKE classification (the
+                # verified AVOID fixture). Forwarded into the REAL orchestrator's evaluate().
+                toxic = DetectorInputs(buy_size=Decimal("900"), sell_size=Decimal("10"),
+                                       baseline_mean=Decimal("0.2"), baseline_std=Decimal("0.05"),
+                                       classification=INSIDER_LIKE, catalyst_present=False)
+                return self._inner.evaluate(intent, inputs=toxic)
+
+        ledger = ForecastLedger(str(tmp_path / "f.db"), stamper)
+        clog = ComponentLog(str(tmp_path / "c.db"), stamper=stamper)
+        pipe = HermesPipeline(
+            calib_gate=CalibrationGate(ledger, PriorEngine(), CalibrationConfig()),
+            fusion_config=_fusion_config(),
+            truth_gate_config=_truth_config(),
+            detectors=_AvoidOrchestrator(DetectorOrchestrator(DetectorConfig())),
+            forecast_ledger=ledger,
+            component_log=clog,
+            market_meta=StubMarketMeta(),
+            allowlist=DEFAULT_ALLOWLIST,
+            event_store=evstore,
+            stamper=stamper,
+        )
+
+        with IntentStore(str(tmp_path / "i.db"), stamper) as store:
+            facade = ProposeOnlyFacade(store)
+            facade.propose_trade(
+                "d1", token_id="t1", condition_id="m1", event_id="e1", side="BUY",
+                target_price="0.50", max_price="0.60", size_usd_suggestion="100",
+                p="0.95", p_confidence="0.8", resolution_summary="Will X?", thesis="...",
+                citations=("c1", "c2"))
+            signer = PaperSigner()
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+
+            assert store.get("d1").status == "REJECTED"
+            assert store.get("d1").decision_reason == "detector_avoid"
+            assert signer.placed == []
+            assert ledger.get("d1") is None        # rejected before the estimate -> no forecast
+            assert clog.all() == ()
