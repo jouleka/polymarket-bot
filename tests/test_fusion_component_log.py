@@ -92,3 +92,31 @@ def test_record_rejects_out_of_range_prob(tmp_path):
                 p_micro=Decimal("0.50"), p_flow=Decimal("-0.01"),
                 w_news_effective=0.20, corroborated=True, mid=Decimal("0.52"),
             )
+
+
+def test_all_round_trips_every_field_with_stamp(tmp_path):
+    # Deterministic clock -> known monotonic stamp (1000 for the first stamp() call).
+    stamper = MonotonicStamper(clock=lambda: 1000)
+    with ComponentLog(str(tmp_path / "c.db"), stamper=stamper) as log:
+        log.record(
+            "intent-rt",
+            p_news=Decimal("0.71"), p_base=Decimal("0.53"),
+            p_micro=Decimal("0.49"), p_flow=Decimal("0.61"),
+            w_news_effective=0.20, corroborated=False, mid=Decimal("0.52"),
+        )
+        rows = log.all()
+
+    assert len(rows) == 1
+    rec = rows[0]
+    assert rec.forecast_id == "intent-rt"
+    # Probabilities preserved EXACTLY as Decimal (string round-trip, no float drift).
+    assert rec.p_news == Decimal("0.71") and isinstance(rec.p_news, Decimal)
+    assert rec.p_base == Decimal("0.53")
+    assert rec.p_micro == Decimal("0.49")
+    assert rec.p_flow == Decimal("0.61")
+    assert rec.mid == Decimal("0.52") and isinstance(rec.mid, Decimal)
+    # w_news_effective is a float; corroborated round-trips as a bool (not 0/1 int).
+    assert rec.w_news_effective == 0.20 and isinstance(rec.w_news_effective, float)
+    assert rec.corroborated is False
+    # Carries the stamper's monotonic stamp.
+    assert rec.recorded_at == 1000
