@@ -265,3 +265,14 @@ def test_publisher_group_derives_registrable_domain_from_url():
     assert a.publisher_group == "federalreserve.gov"
     assert b.publisher_group == "federalreserve.gov"
     assert a.publisher_group == b.publisher_group
+
+
+def test_publisher_group_explicit_value_overrides_derivation():
+    """An explicit non-empty publisher_group is kept verbatim (binds feeds across
+    different hosts that share an owner) and is NOT overwritten by URL derivation."""
+    s = Source("wire-a", "https://feeds.somewire.example/a.xml", PRIMARY,
+               publisher_group="somewire-group")
+    assert s.publisher_group == "somewire-group"
+    t = Source("wire-b", "https://news.othercdn.example/b.xml", PRIMARY,
+               publisher_group="somewire-group")
+    assert s.publisher_group == t.publisher_group
