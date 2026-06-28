@@ -441,3 +441,31 @@ def test_pipeline_substitutes_fused_clamped_p_into_the_validator(tmp_path, monke
         assert len(final.positions) == 1
         # the forecast records the clamped posterior, not the raw 0.50
         assert ledger.get("i1").p == Decimal("0.90")
+
+
+def test_pipeline_records_forecast_and_components_even_when_k0_skips(tmp_path, monkeypatch):
+    # k=0 -> frac_eff=0 -> stake below floor -> SKIP(below_min_floor). The estimate is STILL a
+    # genuine forecast, so record_forecast + ComponentLog.record happen BEFORE evaluate_intent --
+    # calibration grades the estimate, not whether we could afford to act on it (DESIGN §2).
+    fr = _FakeFusionResult(Decimal("0.80"),
+                           {"p_news": Decimal("0.90"), "p_base": Decimal("0.50"),
+                            "p_micro": Decimal("0.50"), "p_flow": Decimal("0.50")}, 0.20)
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, fusion_result=fr,
+        calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.80")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "SKIPPED"
+        assert store.get("i1").decision_reason == "below_min_floor"  # k=0 zeroes the stake
+        assert signer.placed == []
+        # estimate logged regardless of the SKIP:
+        rec = ledger.get("i1")
+        assert rec is not None and rec.p == Decimal("0.80") and rec.category == "unknown"
+        assert rec.market_mid == Decimal("0.255")  # midpoint of bid 0.01 / ask 0.50
+        comps = clog.all()
+        assert len(comps) == 1  # one per-signal row logged
