@@ -139,3 +139,38 @@ def test_e2e_clean_corroborated_proposal_skips_on_k0_with_logging(tmp_path):
             assert len(comps) == 1
             assert comps[0].corroborated is True
             assert comps[0].w_news_effective == 0.20
+
+
+def test_e2e_injection_proposal_rejected_same_source_collusion_never_signs(tmp_path):
+    # THE LOAD-BEARING INJECTION PROBE. Indirect-prompt-injection signature: ONE fresh allowlisted
+    # primary supplies the only p-moving citation (NO independent corroboration) AND a THIN, WIDE
+    # book reads as a mid that that same fresh source could have pushed. The REAL truth-gate refuses
+    # (same_source_collusion); the signer is NEVER reached and NO forecast/component is logged
+    # (refused evidence is not a genuine estimate).
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as evstore:
+        # A single fresh primary source (the injection vector) -- NO independent corroboration.
+        _seed(evstore, stamper, source="fed-press", event_id="inj")
+        pipe, ledger, clog = _build_pipeline(tmp_path, stamper, evstore)
+        with IntentStore(str(tmp_path / "i.db"), stamper) as store:
+            facade = ProposeOnlyFacade(store)
+            facade.propose_trade(
+                "inj1", token_id="t1", condition_id="m1", event_id="e1", side="BUY",
+                target_price="0.50", max_price="0.95", size_usd_suggestion="100",
+                p="0.99", p_confidence="0.9", resolution_summary="Will X happen?",
+                thesis="...", citations=("inj",))
+            signer = PaperSigner()
+            # THIN + WIDE book: ask 0.70 x 10 = $7 depth and bid 0.66 x 10 = $6.6 depth, both well
+            # below thin_book_depth_usd=$50; spread 0.70-0.66 = 0.04 >= thin_book_move=0.02. So
+            # _is_thin_pushed(book, config) is True and, with exactly ONE fresh clean group, the
+            # injection+pre-position signature the gate refuses is satisfied.
+            thin = _book("0.70", ask_size="10", bid="0.66", bid_size="10")
+            process_pending(store, book_for={"t1": thin}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+
+            assert store.get("inj1").status == "REJECTED"
+            assert store.get("inj1").decision_reason == "same_source_collusion"
+            assert signer.placed == []           # the safety claim: never reached the signer
+            assert ledger.get("inj1") is None     # refused -> no forecast logged
+            assert clog.all() == ()               # ... and no component row either
