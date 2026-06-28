@@ -25,7 +25,6 @@ from polybot.ers.validator import (
     evaluate_intent,
 )
 from polybot.fusion.engine import FusionError
-from polybot.truthgate.gate import REASON_SAME_SOURCE, REASON_TRUTH_GATE_REFUSE
 from polybot.detectors.orchestrator import DetectorInputs, REASON_DETECTOR_AVOID
 
 _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move model is wired
@@ -94,6 +93,9 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
 
 def _process_intent_slice3(intent, book_for, portfolio, caps, calib_score, cluster_model):
     """The unchanged slice-3 per-intent path (pipeline=None). Returns (decision, trade_intent)."""
+    # The co-move ClusterView is p-INDEPENDENT, so it's computed once here (not as a late "step")
+    # and reused for the final _to_trade_intent(p_override=...) after fusion/clamp -- no step was
+    # dropped; the design's later ordinal is just where its matrix_cold flag is consumed.
     cluster = _cluster_view(cluster_model, intent, portfolio)
     trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm)
     book = book_for(trade_intent.token_id)
@@ -159,17 +161,20 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         return Decision("REJECT", None, None, REASON_ANCHOR_ERROR), trade_intent
     p_clamped = anchor.p_clamped
 
-    # 7. Record the genuine estimate: forecast (the calibration substrate) + per-signal components.
-    #    The recorded p is the in-range p_clamped, so the ledger's [0,1] guard always passes.
+    # 7. Record the genuine estimate: per-signal components THEN the forecast (the calibration
+    #    substrate). Components FIRST: component_log fails-loud on a non-finite raw p_news (Hermes
+    #    can supply Decimal("NaN")), so doing it first aborts BEFORE any forecast row is written ->
+    #    no orphan. record_forecast can't raise on the happy path (p_clamped is always finite/in
+    #    range; its INSERT OR IGNORE returns False on a dup, never raises).
     forecast_id = intent.intent_id
-    pipeline.forecast_ledger.record_forecast(
-        forecast_id, category=category, condition_id=intent.condition_id,
-        p=p_clamped, market_mid=mid)
     components = fusion_result.components
     pipeline.component_log.record(
         forecast_id, p_news=components["p_news"], p_base=components["p_base"],
         p_micro=components["p_micro"], p_flow=components["p_flow"],
         w_news_effective=fusion_result.w_news_effective, corroborated=truth.corroborated, mid=mid)
+    pipeline.forecast_ledger.record_forecast(
+        forecast_id, category=category, condition_id=intent.condition_id,
+        p=p_clamped, market_mid=mid)
 
     # 8. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
     k = pipeline.calib_gate.k_for(category)
