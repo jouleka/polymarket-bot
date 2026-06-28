@@ -358,3 +358,42 @@ def test_pipeline_detector_avoid_rejects_before_sizing(tmp_path, monkeypatch):
         assert signer.placed == []
         assert pipe.calib_gate.clamp_calls == []   # never sized -- rejected before fusion/clamp
         assert ledger.all() == []                  # not a genuine estimate -> no forecast logged
+
+
+def test_pipeline_truth_gate_same_source_collusion_rejects_no_signer_no_forecast(tmp_path, monkeypatch):
+    # An injection signature (truth-gate refuses with same_source_collusion) must REJECT, never
+    # reach the signer, and record NO forecast (refused evidence is not a genuine estimate).
+    from polybot.truthgate.gate import REASON_SAME_SOURCE
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        truth=_Verdict(refused=True, reason=REASON_SAME_SOURCE, corroborated=False))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "same_source_collusion"
+        assert signer.placed == []
+        assert pipe.calib_gate.clamp_calls == []
+        assert ledger.all() == []
+        assert clog.all() == ()
+
+
+def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monkeypatch):
+    # Zero allowlisted primaries -> truth_gate_refuse (distinct from same_source_collusion).
+    from polybot.truthgate.gate import REASON_TRUTH_GATE_REFUSE
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        truth=_Verdict(refused=True, reason=REASON_TRUTH_GATE_REFUSE, corroborated=False))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").decision_reason == "truth_gate_refuse"
+        assert signer.placed == [] and ledger.all() == []
