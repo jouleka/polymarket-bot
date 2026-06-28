@@ -51,3 +51,18 @@ def test_propose_trade_idempotent_returns_false_on_dup(tmp_path):
         assert first is True and second is False
         # Still exactly one row; the dup INSERT was IGNOREd by the store.
         assert store.get("intent-1") is not None
+
+
+def test_get_and_audit_log_read_through(tmp_path):
+    with _store(tmp_path) as store:
+        facade = ProposeOnlyFacade(store)
+        assert facade.get("missing") is None        # nothing proposed yet
+        facade.propose_trade("intent-1", **_PROPOSAL)
+
+        row = facade.get("intent-1")
+        assert row is not None and row.intent_id == "intent-1"
+        assert row.status == "PROPOSED" and row.p == Decimal("0.7")
+
+        # audit_log is read-only and empty until the ERS (not the facade)
+        # records a decision; the facade exposes no way to write an audit row.
+        assert facade.audit_log() == []
