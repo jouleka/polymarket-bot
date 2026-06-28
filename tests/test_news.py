@@ -255,3 +255,13 @@ def test_scheduler_supports_an_async_pre_stage_hook():
     asyncio.run(sched.run(max_polls=1))
 
     assert fired == ["CPI"]
+
+
+def test_publisher_group_derives_registrable_domain_from_url():
+    """An empty publisher_group is auto-derived from the URL's registrable domain,
+    so two feeds on the SAME host share one group (independence collapses)."""
+    a = Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml", PRIMARY)
+    b = Source("fed-monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml", PRIMARY)
+    assert a.publisher_group == "federalreserve.gov"
+    assert b.publisher_group == "federalreserve.gov"
+    assert a.publisher_group == b.publisher_group
