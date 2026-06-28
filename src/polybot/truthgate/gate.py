@@ -72,6 +72,21 @@ def _matched_primaries(citations, *, event_store, by_name):
     return kept
 
 
+def _is_thin_pushed(book, config):
+    """Pure book-snapshot test for the 'a single source pushed a thin mid' signature:
+    the smaller top-of-book USD depth is below thin_book_depth_usd AND the bid/ask
+    spread is at least thin_book_move. Returns False on an empty side / no midpoint
+    (a degenerate book is handled upstream by REJECT book_stale, not here)."""
+    bid, bid_size, ask, ask_size = book.top_of_book()
+    if bid is None or ask is None or bid_size is None or ask_size is None:
+        return False
+    bid_usd = bid * bid_size
+    ask_usd = ask * ask_size
+    depth_usd = min(bid_usd, ask_usd)
+    spread = ask - bid
+    return depth_usd < config.thin_book_depth_usd and spread >= config.thin_book_move
+
+
 def verify(citations, *, event_store, book, allowlist, now_ns, config):
     by_name = _group_for(allowlist)
     matched = _matched_primaries(citations, event_store=event_store, by_name=by_name)
@@ -83,5 +98,16 @@ def verify(citations, *, event_store, book, allowlist, now_ns, config):
 
     groups = tuple(sorted({group for _env, group in matched}))
     corroborated = len(groups) >= 2
+
+    # Same-source / indirect-prompt-injection refusal: the p-moving citations trace to
+    # exactly ONE fresh source AND the book is thin enough that that one source could
+    # have pushed the mid. Corroboration (>=2 distinct groups) defeats this by design.
+    if not corroborated:
+        fresh_groups = {group for env, group in matched
+                        if now_ns - env.observed_at <= config.freshness_window_ns}
+        if len(fresh_groups) == 1 and _is_thin_pushed(book, config):
+            return TruthVerdict(refused=True, reason=REASON_SAME_SOURCE,
+                                corroborated=False, primary_groups=groups)
+
     return TruthVerdict(refused=False, reason=None,
                         corroborated=corroborated, primary_groups=groups)

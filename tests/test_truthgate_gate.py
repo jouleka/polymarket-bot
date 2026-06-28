@@ -166,3 +166,76 @@ def test_single_primary_present_but_uncorroborated(tmp_path):
     assert v.refused is False and v.reason is None
     assert v.corroborated is False
     assert v.primary_groups == ("federalreserve.gov",)
+
+
+def _thin_pushed_book():
+    """The collusion signature: a THIN top-of-book (tiny resting size) whose wide
+    bid/ask spread reads as a mid that was pushed. depth USD = 10 * 0.55 = 5.5 < 50;
+    spread = 0.55 - 0.45 = 0.10 >= thin_book_move 0.05."""
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": "0.45", "size": "10"}],
+                     "asks": [{"price": "0.55", "size": "10"}]})
+    return book
+
+
+def _fake_stamper():
+    """A MonotonicStamper backed by a counter (1, 2, 3, ...) so that stamp deltas
+    are exactly 1 ns -- well within freshness_window_ns=10_000 and independent of
+    SQLite write latency, making freshness tests deterministic."""
+    counter = [0]
+
+    def _clock():
+        counter[0] += 1
+        return counter[0]
+
+    return MonotonicStamper(clock=_clock)
+
+
+def test_same_source_plus_thin_book_move_refused(tmp_path):
+    # ONE fresh primary source moving p + a thin book it can push -> indirect-prompt-
+    # injection signature -> refused same_source_collusion. The forecast is NOT logged
+    # upstream for this reason (handled in the loop), and the signer is never reached.
+    stamper = _fake_stamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        now = stamper.stamp()                         # fed1 is fresh within the window
+        v = verify(("fed1",), event_store=store, book=_thin_pushed_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is True
+    assert v.reason == REASON_SAME_SOURCE
+    assert v.corroborated is False
+    assert v.primary_groups == ("federalreserve.gov",)
+
+
+def test_corroborated_evidence_never_collusion(tmp_path):
+    # Two INDEPENDENT fresh primaries on the SAME thin pushed book: corroboration
+    # defeats the collusion signature (it takes >=2 distinct groups to push together,
+    # which is exactly what corroboration verifies against). Not refused.
+    stamper = _fake_stamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        _seed(store, stamper, _SEC, "sec1", link="https://www.sec.gov/1")
+        now = stamper.stamp()
+        v = verify(("fed1", "sec1"), event_store=store, book=_thin_pushed_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is False and v.reason is None
+    assert v.corroborated is True
+
+
+def test_single_source_but_stale_not_collusion(tmp_path):
+    # ONE primary + thin pushed book, but the source is STALE (outside the freshness
+    # window) -> the "fresh injection + pre-position" timing signature is absent ->
+    # NOT collusion; just present-uncorroborated.
+    stamper = _fake_stamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        observed = stamper.stamp()
+        now = observed + _CFG.freshness_window_ns + 1   # fed1 is now stale
+        v = verify(("fed1",), event_store=store, book=_thin_pushed_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is False
+    assert v.corroborated is False
+    assert v.primary_groups == ("federalreserve.gov",)
