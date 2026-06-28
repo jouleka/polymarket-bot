@@ -1,0 +1,42 @@
+# Hermes harness deployment manifest — REVIEWED, version-controlled artifact.
+#
+# S6 / POL-8. This is NOT a running server in S6: it is the operator-reviewed
+# declaration of the tool surface and deployment posture for the (future)
+# Hermes box. Deployed copy lives at ~/.hermes/config.yaml on that box.
+#
+# SAFETY CONTRACT (load-bearing — reviewed alongside the ERS):
+#   * tools.include is EXACTLY the four read tools + the single INSERT-only
+#     write tool `propose_trade`. Hermes can at worst enqueue a PROPOSED
+#     intent; it cannot sign, size, mutate status, or reach the signer.
+#   * No signing / admin / status-mutation tool is granted.
+#   * Hermes runs as its own unprivileged Linux user, holds no keys, and has
+#     no shell into the ERS.
+#   * Hermes may rewrite ONLY its own SKILL.md. Trust/trade rules and secrets
+#     are forbidden in any model-mutable text.
+
+hermes:
+  model: frozen        # pinned frozen-model harness; no live network keys
+  display_name: "polybot-hermes-proposer"
+
+tools:
+  # The COMPLETE grant. Adding anything here is a reviewed change.
+  include:
+    - propose_trade    # the ONE write tool — INSERT-only PROPOSED row
+    - get_market       # read tool
+    - get_book         # read tool
+    - get_ledger       # read tool (resolved-market history / outcomes)
+    - get_flags        # read tool (detector flags: AVOID / FLAG_ONLY)
+
+deployment:
+  # Operator-reviewed posture. The test asserts these exact keys/values.
+  own_linux_user: true        # dedicated unprivileged user, isolated home
+  holds_keys: false           # no signing keys, no wallet, no API secrets
+  shell_into_ers: false       # no shell / no exec path into the ERS process
+  may_rewrite_skill_md_only: true   # may edit only its own SKILL.md
+  secrets_in_model_mutable_text: false   # no secrets/trust rules in SKILL.md
+  notes: >
+    Safety is enforced in code by ProposeOnlyFacade (ers/facade.py): the only
+    write path is propose_trade -> IntentStore INSERT. This manifest documents
+    the same boundary for the deployment layer. The ERS independently
+    re-derives price, size, caps, calibration k, truth-gate, and clamps the
+    posterior — no Hermes-supplied field is ever trusted upward.

@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-06-26)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-06-29)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -66,7 +66,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE + pushed** (slice 3 = co-move matrix + per-cluster cap + L7 breaker, `origin/main` @ `d17224e`) |
 | POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
-| POL-8 | S6 — Hermes integration + signal fusion + truth-gate | Not started (needs S3/S4/S5) |
+| **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
 | POL-10 | S8 — Maker-rewards module | Not started |
 | POL-11 | S9 — Shadow harness + ramp controller | Not started |
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 377 tests)
+## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 448 tests)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -137,16 +137,46 @@ edge.
   off (grep + 40-combo sweep), luck filter crash-free/fails-closed; HIGH input-validation gaps fixed.
   **Deferred:** live `/activity` + on-chain wiring · the real S8 maker module (D1 = a seam) · Hermes's D3
   catalyst timeline · FOLLOW (hard-off until precision proven + legal/ToS review).
+- **S6 Hermes integration (POL-8) — the chokepoint wired end-to-end (shadow/PaperSigner):** built as isolated
+  pure units + the `process_pending` wiring (see `DESIGN-S6-HERMES.md` / `PLAN-S6-HERMES.md`).
+  `fusion/engine.py fuse()` — the §4.1 weighted-log-odds fold, market-mid prior, `w_news≤0.25` hard cap,
+  **corroboration-gated** `w_news` (0→0.20), per-signal clip, identity `recalibrate` stub (adaptive layer
+  deferred). `fusion/component_log.py` — append-only per-signal sidecar (preserves the un-backfillable
+  substrate; does NOT touch `ForecastLedger`). `truthgate/gate.py verify()` — ERS-side citation truth-gate:
+  allowlist + **≥2 independent `publisher_group` corroboration** (added `Source.publisher_group`, default =
+  registrable domain; fed-press/fed-monetary collapse to one group) + same-source/thin-book injection refusal;
+  **C1 fix** = per-citation ambiguity exclusion (a single feed can't forge two groups via event_id/entities
+  collision). `ers/facade.py ProposeOnlyFacade` — composes IntentStore; exposes ONLY `{propose_trade, get,
+  audit_log}` + 4 read tools; structural sweep proves no `place/flatten/record_decision/pending/__call__`
+  path (the "Hermes can at worst enqueue" guarantee, load-bearing in code). `detectors/orchestrator.py` —
+  composes toxicity→d2..d6→composite→policy into a defensive AVOID/FLAG verdict (FOLLOW stays off;
+  `catalyst_present` a documented reserved POL-9 seam). `ers/market_meta.py StubMarketMeta` — MVP stub
+  (`category="unknown"`→k=0 paper-only; `seconds_to_resolution` sentinel; real MarketRegistry deferred).
+  `ers/service.py` — `HermesPipeline` + `process_pending(pipeline=…)`: per-intent **breaker→detector→
+  truth-gate→fuse→clamp_p (try/except→distinct `anchor_error`)→record forecast+components→k_for→
+  evaluate_intent(calib_score=k)→ACCEPT place+fold**; `pipeline=None` == verbatim slice-3 (back-compat);
+  **`evaluate_intent`/validator/intent_store/caps UNCHANGED** (wires AROUND the pure validator). End-to-end
+  `tests/test_ers_hermes_e2e.py` proves the 4 §9 scenarios incl. an injection probe REJECTed
+  `same_source_collusion` that never reaches the signer (mutation-verified genuine). `deploy/hermes/config.yaml`
+  — reviewed tool-grant artifact (exactly the 5 tools; inert in S6). 3 Opus deep-dives → APPROVED FOR MERGE.
+  **Data-gated/paper-only:** k=0 until ≥150 honest resolutions accrue → everything SKIPs below floor in prod;
+  nothing can sign (PaperSigner only). **Deferred to later slices:** live-Hermes MCP transport + injection
+  probe vs a real Hermes · adaptive fusion (EMA weights + isotonic recal) · MarketRegistry (Gamma metadata →
+  category/question/seconds) · resolution-feedback wiring (warms k) · Hermes catalyst→d3/d5 · real
+  cross-event latent clusters · §4.2 edge-hurdle H · a true before/after mid-diff for the same-source gate
+  (DESIGN §10; the current thin+wide-book proxy is safe because uncorroborated ⇒ w_news=0 + tight anchor).
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
 - `docs/DECISIONS-S0.md` — the finalized S0 decisions + §4 risk envelope (the numbers that replace the human).
 - `docs/specs/2026-06-24-autonomous-polymarket-bot-design.md` — the full master design (§2 division of labor,
   §4 algorithm, §5 safety envelope L0–L8, §7 build decomposition S1–S9).
-- `docs/DESIGN-S3-ERS.md` — the ERS decomposition + slice contracts (slices 1+2 done; slice 3 spec; the S6
-  propose-only-facade obligation).
+- `docs/DESIGN-S3-ERS.md` — the ERS decomposition + slice contracts (slices 1+2+3 done).
+- `docs/DESIGN-S5-CALIBRATION.md` · `docs/DESIGN-S7-DETECTORS.md` — the calibration + detector decompositions.
+- `docs/DESIGN-S6-HERMES.md` + `docs/PLAN-S6-HERMES.md` — the S6 design (resolved forks, the 12-step pipeline,
+  §10 open risks) + the executed TDD build plan.
 - `docs/VERIFICATION-2026-06-24.md` — Phase-0 signing-path verification (rs-clob-client-v2).
-- The **POL-3, POL-5, POL-12 YouTrack comments** — the detailed per-slice record.
+- The **POL-3, POL-5, POL-7, POL-8, POL-9, POL-12 YouTrack comments** — the detailed per-slice record.
 
 ## 7. Your task — pick based on what's ready
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
@@ -158,18 +188,24 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
-- **If NOT funded → continue the no-funding critical-path/feeding work.** Recommended order (**S3 slice 3
-  AND S5/POL-7 calibration AND S7/POL-9 detectors are now DONE + pushed**, see §5):
-  1. **Real latent-cluster assignment (S3 slice-3 follow-up):** today `cluster_id` is the `event_id`
-     placeholder, so the learned per-cluster cap aliases the per-event cap (fails safe / over-couples within
-     an event). A real co-move-driven cluster assignment makes the matrix's cross-event decorrelation
-     actually bite — a natural consumer of the `comove.py` matrix.
-  2. **S1 leftovers:** GDELT slow-path (non-RSS — a separate ingestion path) · narrow the on-chain watcher
-     filter to our wallet (needs POL-4) · operator finishes curating the PRIMARY news allowlist.
-  - **NB for S6 (when it lands):** wire the `CalibrationGate` facade into `service.py` (k_for → calib_score;
-    clamp_p on intent.p) AND wrap it in the per-intent try/except (the Anchor Gate fail-loud raise must
-    reject one intent, not propagate). Also wire S3's `cluster_model`/`breaker` seams + the propose-only
-    Hermes facade.
+- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, AND S6/POL-8 are now
+  DONE + pushed** (see §5). Recommended next, in order:
+  1. **S4 / POL-6 — safety envelope + out-of-band supervisor + 3-way reconciliation + Telegram (the kill
+     path).** Now the natural critical-path next (S4 → S9). Its acceptance gate (kill a deliberately-wedged
+     process + FLATTEN, not just halt-new) is testable against the PaperSigner NOW; only the live `cancelAll()`
+     proof needs POL-4. Mandatory before any real money.
+  2. **S8 / POL-10 — maker-rewards module** (shadow, honest net-of-adverse-selection; consumes the D1
+     `pull_quotes` seam).
+  3. **S9 / POL-11 — shadow harness → ramp controller** (the capstone: paper-trade net of
+     fees/slippage/lockup/dispute haircut → the calibrated, net-positive, out-of-sample GO/NO-GO evidence).
+     NB: S9 needs proposals actually flowing — i.e. a DEPLOYED Hermes feeding the propose-only facade + the
+     read-only ingestion running continuously to warm the data-gated machinery (k stays 0 until ≥150 honest
+     resolutions accrue, so nothing sizes live until then).
+  - **Smaller / feeding:** real latent-cluster assignment (S3 follow-up — makes `comove.py` bite cross-event
+    instead of the `event_id` placeholder) · GDELT slow-path · run the read-only ingestion continuously to
+    warm comove/priors · the S6 deferreds (live-Hermes MCP transport + an injection probe vs a real Hermes;
+    MarketRegistry: Gamma metadata → category/question/seconds; resolution-feedback to warm k; a true
+    before/after mid-diff for the same-source gate, DESIGN §10).
 
 ## 8. Landmines
 - Never let Hermes compute size or touch keys (`propose_trade` is its only write tool, INSERT-only). When S6
