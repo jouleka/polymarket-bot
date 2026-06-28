@@ -136,3 +136,19 @@ def test_structural_sweep_no_signer_or_status_path(tmp_path):
         # (e) Even reaching the mangled store, propose_trade has no `status`
         #     param: there is no public path to transition a status or sign.
         assert "status" not in inspect.signature(facade.propose_trade).parameters
+
+
+def test_read_tools_fail_loud_without_reader(tmp_path):
+    """A reader is None by default; calling that read tool must raise, not
+    silently return None -- fail-closed over a misconfigured wiring."""
+    import pytest
+    with _store(tmp_path) as store:
+        facade = ProposeOnlyFacade(store)        # no readers injected
+        with pytest.raises(TypeError):           # None is not callable
+            facade.get_market("0xabc")
+        with pytest.raises(TypeError):
+            facade.get_book("t1")
+        with pytest.raises(TypeError):
+            facade.get_ledger()
+        with pytest.raises(TypeError):
+            facade.get_flags("t1")
