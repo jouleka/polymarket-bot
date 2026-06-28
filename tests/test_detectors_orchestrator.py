@@ -71,3 +71,16 @@ def test_negative_size_is_caught_and_yields_a_safe_verdict():
     assert v.action == FLAG_ONLY
     assert v.pull_quotes is False
     assert v.p_flow == Decimal(0)
+
+
+from polybot.detectors.classify import LUCKY, MARKET_MAKER, NOISE, SHARP
+
+
+def test_follow_is_never_emitted_across_the_input_space():
+    orch = _orch()
+    for cls in (SHARP, LUCKY, MARKET_MAKER, INSIDER_LIKE, NOISE):
+        for d in ("0", "0.5", "0.95"):
+            inputs = DetectorInputs(classification=cls, d2=Decimal(d), d6=Decimal(d))
+            v = orch.evaluate(_Intent(), inputs=inputs)
+            assert v.action in (AVOID, FLAG_ONLY), (cls, d)
+            assert v.action != FOLLOW, (cls, d)
