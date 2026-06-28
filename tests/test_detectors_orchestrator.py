@@ -49,3 +49,14 @@ def test_critical_composite_avoids_with_detector_reason():
     assert v.action == AVOID
     assert REASON_DETECTOR_AVOID == "detector_avoid"
     assert "informed_flow" in v.reasons
+
+
+from polybot.detectors.classify import INSIDER_LIKE
+
+
+def test_insider_like_classification_avoids_even_at_low_band():
+    # All sub-scores zero -> LOW band, but INSIDER_LIKE classification forces AVOID.
+    inputs = DetectorInputs(classification=INSIDER_LIKE)
+    v = _orch().evaluate(_Intent(), inputs=inputs)
+    assert v.action == AVOID
+    assert "insider_like" in v.reasons
