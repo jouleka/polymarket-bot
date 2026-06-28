@@ -141,3 +141,28 @@ def test_no_allowlisted_primary_refused(tmp_path):
     assert v.reason == REASON_TRUTH_GATE_REFUSE
     assert v.corroborated is False
     assert v.primary_groups == ()
+
+
+def test_empty_citations_refused_truth_gate(tmp_path):
+    # Empty citations resolve to zero allowlisted primaries -> refuse-and-alert.
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        now = stamper.stamp()
+        v = verify((), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+    assert v.refused is True and v.reason == REASON_TRUTH_GATE_REFUSE
+    assert v.corroborated is False and v.primary_groups == ()
+
+
+def test_single_primary_present_but_uncorroborated(tmp_path):
+    # Exactly ONE allowlisted primary group, healthy deep book (no collusion signature)
+    # -> NOT refused, corroborated=False (informational-only, w_news=0 downstream).
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        now = stamper.stamp()
+        v = verify(("fed1",), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+    assert v.refused is False and v.reason is None
+    assert v.corroborated is False
+    assert v.primary_groups == ("federalreserve.gov",)
