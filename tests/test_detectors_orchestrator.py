@@ -84,3 +84,13 @@ def test_follow_is_never_emitted_across_the_input_space():
             v = orch.evaluate(_Intent(), inputs=inputs)
             assert v.action in (AVOID, FLAG_ONLY), (cls, d)
             assert v.action != FOLLOW, (cls, d)
+
+
+def test_p_flow_surfaces_d6_smart_money_as_decimal():
+    v = _orch().evaluate(_Intent(), inputs=DetectorInputs(d6=Decimal("0.6")))
+    # d6_smart_money(edge_weight=0.6, conviction=1.0) == 0.6, surfaced as a Decimal.
+    assert isinstance(v.p_flow, Decimal)
+    assert v.p_flow == Decimal("0.6")
+    # And zero d6 -> zero p_flow.
+    z = _orch().evaluate(_Intent(), inputs=DetectorInputs(d6=Decimal(0)))
+    assert z.p_flow == Decimal(0)
