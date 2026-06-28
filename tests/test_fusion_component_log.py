@@ -32,3 +32,25 @@ def test_record_returns_true_on_first_insert(tmp_path):
             w_news_effective=0.20, corroborated=True, mid=Decimal("0.52"),
         )
     assert inserted is True
+
+
+def test_record_duplicate_forecast_id_returns_false(tmp_path):
+    with _log(tmp_path) as log:
+        first = log.record(
+            "intent-dup",
+            p_news=Decimal("0.70"), p_base=Decimal("0.55"),
+            p_micro=Decimal("0.50"), p_flow=Decimal("0.50"),
+            w_news_effective=0.20, corroborated=True, mid=Decimal("0.52"),
+        )
+        # Same forecast_id, DIFFERENT payload: the second call must be a no-op INSERT OR IGNORE.
+        second = log.record(
+            "intent-dup",
+            p_news=Decimal("0.10"), p_base=Decimal("0.10"),
+            p_micro=Decimal("0.10"), p_flow=Decimal("0.10"),
+            w_news_effective=0.0, corroborated=False, mid=Decimal("0.10"),
+        )
+        rows = log.all()
+    assert first is True and second is False
+    # Idempotent: exactly one row survives, and it is the ORIGINAL payload (not overwritten).
+    assert len(rows) == 1
+    assert rows[0].p_news == Decimal("0.70") and rows[0].corroborated is True
