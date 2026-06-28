@@ -518,3 +518,28 @@ def _real_fuse_capture(pipe):
     cfg = FusionConfig(w_news=0.20, w_base=0.30, w_micro=0.0, w_flow=0.0, clip_logodds=2.0)
     object.__setattr__(pipe, "fusion_config", cfg)
     return lambda mid, **kw: _GENUINE_FUSE(mid, **{**kw, "config": cfg})
+
+
+def test_pipeline_non_finite_p_news_rejects_with_no_orphan_in_either_store(tmp_path, monkeypatch):
+    # Hermes CAN supply a non-finite p (Decimal("NaN") round-trips through propose_trade). It enters
+    # the REAL fuse as p_news (a non-_in_unit signal -> 0 delta, so p_final stays finite and the
+    # clamp succeeds), but component_log.record fails-loud on the non-finite raw p_news. The chain
+    # must REJECT cleanly with NO orphan: BOTH the forecast ledger AND the component log stay empty.
+    # (Pre-fix, record_forecast ran first -> a committed forecast row with no component = an orphan.)
+    import polybot.fusion.engine as fusion_mod
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.50")))
+    # REAL fold so components["p_news"] genuinely carries the NaN (the fake would mask it).
+    monkeypatch.setattr(fusion_mod, "fuse", _real_fuse_capture(pipe), raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, p="NaN"))  # non-finite p round-trips to Decimal("NaN")
+        assert store.get("i1").p.is_finite() is False  # the orphan precondition really holds
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert signer.placed == []
+        assert ledger.all() == []   # NO orphan forecast row
+        assert clog.all() == ()     # and no component row either
