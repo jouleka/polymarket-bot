@@ -5,15 +5,22 @@ ERS-side, post-INSERT verification of a Hermes proposal's citations. PURE over
 against the already-sanitized EventStore -- never fetched, never executed (untrusted-
 data discipline). Two outputs the loop consumes:
 
-  * corroborated = (>= 2 distinct, fresh, allowlisted PRIMARY publisher_groups).
-    This is the single key that lets w_news go nonzero in fusion AND widens the
+  * corroborated = (>= 2 distinct, fresh, allowlisted PRIMARY publisher_groups),
+    counted PER CITATION: each citation is matched to allowlisted PRIMARY envelopes
+    (by event_id or entities); if all of a citation's matches fall in ONE publisher_group
+    it is a CLEAN attestation of that group, but a citation whose matches span >1 group
+    is AMBIGUOUS (a (source,event_id)/entities collision = a tampering signature) and
+    contributes nothing. So a single controlled feed cannot forge two independent groups
+    (C1). This is the single key that lets w_news go nonzero in fusion AND widens the
     anchor band. DISCOVERY tier and non-allowlisted citations never count.
 
-  * refusal: zero allowlisted primaries -> REASON_TRUTH_GATE_REFUSE (news-only with
-    no corroboration is refuse-and-alert). The indirect-prompt-injection signature
-    -- one fresh source moving p while a thin book lets that same source push the
-    mid -> REASON_SAME_SOURCE. An uncorroborated-but-present proposal is NOT refused;
-    it just yields corroborated=False (informational-only, w_news=0 downstream).
+  * refusal: NO clean allowlisted-primary attestation at all (zero matches OR every
+    citation ambiguous) -> REASON_TRUTH_GATE_REFUSE (news-only / collision-only "evidence"
+    is refuse-and-alert -- a refuse is never silently lost). The indirect-prompt-injection
+    signature -- one fresh CLEAN source moving p while a thin book lets that same source
+    push the mid -> REASON_SAME_SOURCE. An uncorroborated-but-present (exactly one clean
+    group) proposal is NOT refused; it just yields corroborated=False (informational-only,
+    w_news=0 downstream).
 """
 
 from dataclasses import dataclass
