@@ -416,3 +416,28 @@ def test_pipeline_clamp_p_raise_maps_to_distinct_anchor_error(tmp_path, monkeypa
         assert store.get("i1").decision_reason == "anchor_error"  # NOT "internal_error"
         assert signer.placed == []
         assert ledger.all() == []   # raised before record_forecast -> no estimate logged
+
+
+def test_pipeline_substitutes_fused_clamped_p_into_the_validator(tmp_path, monkeypatch):
+    # Proposal's raw p=0.50 (== price -> no edge). The pipeline fuses+clamps to 0.90, which the
+    # validator sizes off -> ACCEPT (not the SKIP no_edge the raw p would give). Pin that the
+    # posterior, not Hermes's raw p, drove the validator. Use k=1 so sizing isn't zeroed.
+    fr = _FakeFusionResult(Decimal("0.90"),
+                           {"p_news": Decimal("0.95"), "p_base": Decimal("0.50"),
+                            "p_micro": Decimal("0.50"), "p_flow": Decimal("0.50")}, 0.20)
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, fusion_result=fr,
+        calib=_FakeCalibGate(k=Decimal("1"), clamp_to=Decimal("0.90")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, p="0.50"))  # raw p == 0.50 == price -> would be no_edge
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "ACCEPTED"            # posterior 0.90 has edge over price 0.50
+        assert store.get("i1").decision_stake_usd == Decimal("12")  # per_trade cap binds at k=1
+        assert pipe.calib_gate.clamp_calls[0][0] == Decimal("0.90")  # fused p_final fed to clamp_p
+        assert len(final.positions) == 1
+        # the forecast records the clamped posterior, not the raw 0.50
+        assert ledger.get("i1").p == Decimal("0.90")
