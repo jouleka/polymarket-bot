@@ -133,12 +133,15 @@ stay green). When provided, steps 2–8 above engage.
 @dataclass(frozen=True)
 class HermesPipeline:
     calib_gate: CalibrationGate
-    fusion: FusionEngine
-    truth_gate: CitationTruthGate
+    fusion_config: FusionConfig      # fuse(...) is a module-level fn; the pipeline carries its config
+    truth_gate_config: TruthGateConfig   # verify(...) is a module-level fn; pipeline carries its config
     detectors: DetectorOrchestrator
     forecast_ledger: ForecastLedger
     component_log: ComponentLog
     market_meta: MarketMeta          # STUB at MVP (single bucket; question_text from proposal; secs seam)
+    allowlist: Sequence[Source]      # for the truth-gate citation/independence check
+    event_store: EventStore          # for the truth-gate citation lookup
+    stamper: MonotonicStamper        # shared; supplies now_ns + forecast/component stamps
 
 def process_pending(store, *, book_for, portfolio, caps, signer,
                     calib_score=Decimal(1), cluster_model=None, breaker=None,
@@ -385,7 +388,16 @@ model-mutable text). It is a reviewed, version-controlled artifact, not a runnin
   adaptive slice. Probe whether 0.20 + the clip bound can still over-move a thin market within the anchor band.
 - **`market_mid` from `midpoint()`** is the fusion prior AND the anchor reference; a thin/half-empty book makes
   it noisy. Guarded by `midpoint() is None → REJECT book_stale`, but probe near-degenerate mids.
-- **Same-source refusal** depends on detecting "the same fresh source/timestamp" — define the freshness window
-  and the thin-book threshold precisely in the plan; probe false-negatives.
+- **Same-source refusal — operationalized as a single-snapshot proxy.** `verify()` receives one live book and
+  no baseline mid, so the "p-shift AND thin-book *mid move* trace to one fresh source" rule is implemented as
+  *thin top-of-book USD depth (< `thin_book_depth_usd`) AND a wide spread (≥ `thin_book_move`) AND the p-moving
+  citation(s) trace to one source within `freshness_window_ns`*. A true before/after mid-diff would need a
+  baseline-mid seam threaded through `process_pending` (the loop holds the single re-fetched book; a prior
+  EventStore snapshot could supply the baseline). **Probe whether the proxy can miss a real injection whose
+  book is not thin/wide** — candidate hardening for the next slice.
+- **Fusion `p_base = mid` (inert) in S6.** There is no market-level base-rate feed yet, so fusion's `p_base`
+  contributes a zero delta; the base-rate prior enters instead via the Anchor Gate's `PriorEngine`. `w_base`
+  (0.30) is configured for the deferred feed. Net S6 behavior = *market-mid → (corroborated) Hermes nudge →
+  anchor-clamp toward prior∩market*. Confirm this matches intent.
 - **Stub `category="unknown"`** routes everything to one calibration bucket → `k=0`. Confirm nothing can make
   `k>0` accidentally before the real resolver + resolution feedback exist (must stay paper-only).
