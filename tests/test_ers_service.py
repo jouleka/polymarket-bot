@@ -397,3 +397,22 @@ def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monk
 
         assert store.get("i1").decision_reason == "truth_gate_refuse"
         assert signer.placed == [] and ledger.all() == []
+
+
+def test_pipeline_clamp_p_raise_maps_to_distinct_anchor_error(tmp_path, monkeypatch):
+    # A non-finite anchor makes calib_gate.clamp_p raise ValueError. It MUST be caught explicitly
+    # and mapped to the DISTINCT reason "anchor_error" -- never swallowed into "internal_error".
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        calib=_FakeCalibGate(k=Decimal("0"), raises=ValueError("anchor_gate: non-finite p")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "anchor_error"  # NOT "internal_error"
+        assert signer.placed == []
+        assert ledger.all() == []   # raised before record_forecast -> no estimate logged
