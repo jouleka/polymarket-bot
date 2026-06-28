@@ -220,3 +220,141 @@ def test_pipeline_none_is_exactly_the_slice3_accept_path(tmp_path):
         assert store.get("i1").decision_stake_usd == Decimal("12")
         assert [o["token_id"] for o in signer.placed] == ["t1"]
         assert len(final.positions) == 1 and final.positions[0].worst_case_risk == Decimal("12")
+
+
+# --- S6 local fakes + builders (the wiring-under-test calls these collaborators) -------------
+from polybot.ers.service import HermesPipeline
+from polybot.fusion.component_log import ComponentLog
+
+
+class _Verdict:
+    def __init__(self, refused, reason, corroborated):
+        self.refused = refused
+        self.reason = reason
+        self.corroborated = corroborated
+        self.primary_groups = ()
+
+
+class _DetectorVerdict:
+    def __init__(self, action="FLAG_ONLY", p_flow=Decimal("0")):
+        self.action = action
+        self.pull_quotes = False
+        self.p_flow = p_flow
+        self.reasons = ()
+
+
+class _FakeDetectors:
+    def __init__(self, verdict=None):
+        self._verdict = verdict or _DetectorVerdict()
+        self.calls = []
+
+    def evaluate(self, intent, *, inputs):
+        self.calls.append((intent.intent_id, inputs))
+        return self._verdict
+
+
+class _FakeFusionResult:
+    def __init__(self, p_final, components, w_news_effective):
+        self.p_final = p_final
+        self.components = components
+        self.w_news_effective = w_news_effective
+
+
+class _FakeCalibGate:
+    """k_for returns a fixed k (Decimal); clamp_p returns a fake AnchorResult or raises (anchor_error)."""
+    def __init__(self, *, k=Decimal("0"), clamp_to=None, raises=None):
+        self._k = k
+        self._clamp_to = clamp_to
+        self._raises = raises
+        self.clamp_calls = []
+
+    def k_for(self, category):
+        return self._k
+
+    def clamp_p(self, p, market_mid, *, question_text, seconds_to_resolution, corroborated):
+        self.clamp_calls.append((p, market_mid, corroborated))
+        if self._raises is not None:
+            raise self._raises
+        target = p if self._clamp_to is None else self._clamp_to
+        return _AnchorResult(target)
+
+
+class _AnchorResult:
+    def __init__(self, p_clamped):
+        self.p_clamped = p_clamped
+        self.shrunk = False
+        self.reason = "within_band"
+
+
+class _StubMeta:
+    def __init__(self, category="unknown", seconds=10**12):
+        self._cat = category
+        self._secs = seconds
+
+    def category_for(self, intent):
+        return self._cat
+
+    def question_text_for(self, intent):
+        return intent.resolution_summary
+
+    def seconds_to_resolution_for(self, intent):
+        return self._secs
+
+
+def _pipeline(tmp_path, monkeypatch, *, detectors=None, truth=None, calib=None, meta=None,
+              fusion_result=None):
+    """Build a HermesPipeline with fakes, monkeypatching the two module-level collaborators
+    (fusion.engine.fuse and truthgate.gate.verify -- the function-local import sites in the loop)
+    so we drive the loop precisely."""
+    from polybot.core.clock import MonotonicStamper
+    from polybot.calibration.ledger import ForecastLedger
+
+    stamper = MonotonicStamper(clock=lambda: 1)  # deterministic; the stamper itself enforces strict-mono
+    ledger = ForecastLedger(str(tmp_path / "f.db"), stamper)
+    clog = ComponentLog(str(tmp_path / "c.db"), stamper=stamper)
+
+    # Patch the truth-gate import target used inside _process_intent_pipeline.
+    import polybot.truthgate.gate as gate_mod
+    monkeypatch.setattr(gate_mod, "verify",
+                        lambda *a, **k: truth or _Verdict(False, None, True), raising=True)
+    # Patch the fusion fuse() the same way (local import resolves to fusion.engine.fuse).
+    import polybot.fusion.engine as fusion_mod
+    fr = fusion_result or _FakeFusionResult(
+        Decimal("0.70"),
+        {"p_news": Decimal("0.9"), "p_base": Decimal("0.5"),
+         "p_micro": Decimal("0.5"), "p_flow": Decimal("0.5")},
+        0.20)
+    monkeypatch.setattr(fusion_mod, "fuse", lambda *a, **k: fr, raising=True)
+
+    pipe = HermesPipeline(
+        calib_gate=calib or _FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.70")),
+        fusion_config=object(),
+        truth_gate_config=object(),
+        detectors=detectors or _FakeDetectors(),
+        forecast_ledger=ledger,
+        component_log=clog,
+        market_meta=meta or _StubMeta(),
+        allowlist=(),
+        event_store=object(),
+        stamper=stamper,
+    )
+    return pipe, ledger, clog
+
+
+def test_pipeline_detector_avoid_rejects_before_sizing(tmp_path, monkeypatch):
+    # A defensive detector AVOID verdict must REJECT(detector_avoid) BEFORE fusion/clamp/sizing,
+    # and place no order. (calib_gate.clamp_p is never reached -> no clamp call recorded.)
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch,
+                                   detectors=_FakeDetectors(_DetectorVerdict(action="AVOID")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "detector_avoid"
+        assert signer.placed == []
+        assert pipe.calib_gate.clamp_calls == []   # never sized -- rejected before fusion/clamp
+        assert ledger.all() == []                  # not a genuine estimate -> no forecast logged
