@@ -56,14 +56,18 @@ class FusionConfig:
         self._verify()
 
     def _verify(self):
-        if not (0.0 <= self.w_news <= 0.25):
-            raise ValueError(f"w_news must be in [0.0, 0.25] (the spec cap), got {self.w_news}")
+        # math.isfinite first: NaN/Inf silently pass bare comparisons (NaN < 0.0 is False),
+        # which would let a Decimal("NaN") posterior escape -- a silent break of fail-loud.
+        if not math.isfinite(self.w_news) or not (0.0 <= self.w_news <= 0.25):
+            raise ValueError(
+                f"w_news must be a finite float in [0.0, 0.25] (the spec cap), got {self.w_news}"
+            )
         for name in ("w_base", "w_micro", "w_flow"):
             value = getattr(self, name)
-            if value < 0.0:
-                raise ValueError(f"{name} must be >= 0.0, got {value}")
-        if not (self.clip_logodds > 0.0):
-            raise ValueError(f"clip_logodds must be > 0.0, got {self.clip_logodds}")
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be a finite non-negative float, got {value}")
+        if not math.isfinite(self.clip_logodds) or not (self.clip_logodds > 0.0):
+            raise ValueError(f"clip_logodds must be a finite float > 0.0, got {self.clip_logodds}")
 
 
 def recalibrate(x: Decimal) -> Decimal:
