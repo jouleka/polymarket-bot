@@ -123,3 +123,21 @@ def test_discovery_tier_ignored(tmp_path):
     assert v.refused is False
     assert v.corroborated is False                       # gn1 (DISCOVERY) does not count
     assert v.primary_groups == ("federalreserve.gov",)   # only the primary survives
+
+
+def test_no_allowlisted_primary_refused(tmp_path):
+    # A citation that resolves to a NON-allowlisted source, plus a citation that
+    # resolves to nothing. No allowlisted primary survives -> refuse-and-alert.
+    rogue = Source("rogue-blog", "https://rogue.example/feed", PRIMARY,
+                   publisher_group="rogue.example")   # NOT in _ALLOWLIST
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, rogue, "rogue1", link="https://rogue.example/1")
+        now = stamper.stamp()
+        v = verify(("rogue1", "does-not-exist"), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is True
+    assert v.reason == REASON_TRUTH_GATE_REFUSE
+    assert v.corroborated is False
+    assert v.primary_groups == ()
