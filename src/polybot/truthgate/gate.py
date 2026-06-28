@@ -49,5 +49,39 @@ class TruthVerdict:
     primary_groups: tuple[str, ...]
 
 
+def _group_for(allowlist):
+    """name -> (tier, publisher_group) for every Source in the allowlist."""
+    return {s.name: (s.tier, s.publisher_group) for s in allowlist}
+
+
+def _matched_primaries(citations, *, event_store, by_name):
+    """Resolve citation strings to envelopes (match on event_id OR a provenance link
+    in entities), keep ONLY allowlisted PRIMARY envelopes. Citations are matched,
+    never fetched. Returns the list of (envelope, publisher_group) kept."""
+    wanted = set(citations)
+    kept = []
+    for env in event_store.all():
+        if env.event_id in wanted or wanted.intersection(env.entities):
+            meta = by_name.get(env.source)
+            if meta is None:
+                continue                      # not allowlisted -> dropped
+            tier, group = meta
+            if tier != PRIMARY:
+                continue                      # DISCOVERY never counts / triggers
+            kept.append((env, group))
+    return kept
+
+
 def verify(citations, *, event_store, book, allowlist, now_ns, config):
-    raise NotImplementedError("verify not yet implemented")
+    by_name = _group_for(allowlist)
+    matched = _matched_primaries(citations, event_store=event_store, by_name=by_name)
+
+    if not matched:
+        # news-only with no allowlisted primary corroboration -> refuse-and-alert.
+        return TruthVerdict(refused=True, reason=REASON_TRUTH_GATE_REFUSE,
+                            corroborated=False, primary_groups=())
+
+    groups = tuple(sorted({group for _env, group in matched}))
+    corroborated = len(groups) >= 2
+    return TruthVerdict(refused=False, reason=None,
+                        corroborated=corroborated, primary_groups=groups)
