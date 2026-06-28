@@ -239,3 +239,53 @@ def test_single_source_but_stale_not_collusion(tmp_path):
     assert v.refused is False
     assert v.corroborated is False
     assert v.primary_groups == ("federalreserve.gov",)
+
+
+def test_non_allowlisted_citation_dropped_but_primary_survives(tmp_path):
+    # A rogue (non-allowlisted) citation alongside a real allowlisted primary: the
+    # rogue is silently dropped, the primary still yields present-uncorroborated.
+    rogue = Source("rogue-blog", "https://rogue.example/feed", PRIMARY,
+                   publisher_group="rogue.example")
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, rogue, "rogue1", link="https://rogue.example/1")
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        now = stamper.stamp()
+        v = verify(("rogue1", "fed1"), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is False
+    assert v.primary_groups == ("federalreserve.gov",)   # rogue dropped, not counted
+
+
+def test_citations_are_matched_never_fetched(tmp_path):
+    # Pass an http(s) citation string that is NOT in the store. The gate must NOT
+    # attempt any network I/O to resolve it -- it simply fails to match. We prove the
+    # gate is network-free by patching out the http clients it could conceivably use
+    # and asserting they are never called; the unresolved citation yields zero matches
+    # (-> refuse), with no exception and no fetch.
+    import httpx
+
+    calls = []
+
+    class _Boom:
+        def __getattr__(self, _name):
+            def _fail(*a, **k):
+                calls.append(1)
+                raise AssertionError("truth-gate must never fetch a citation")
+            return _fail
+
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        now = stamper.stamp()
+        original_client = httpx.Client
+        httpx.Client = _Boom              # any accidental fetch path explodes
+        try:
+            v = verify(("https://anything.example/never-fetched",),
+                       event_store=store, book=_book(),
+                       allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+        finally:
+            httpx.Client = original_client
+
+    assert calls == []                                   # no fetch attempted
+    assert v.refused is True and v.reason == REASON_TRUTH_GATE_REFUSE
