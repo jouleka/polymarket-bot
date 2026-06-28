@@ -40,3 +40,12 @@ def test_zero_inputs_yield_flag_only_never_avoid():
     assert v.action != AVOID
     assert v.pull_quotes is False
     assert v.p_flow == Decimal(0)
+
+
+def test_critical_composite_avoids_with_detector_reason():
+    # D2 = 0.95 >= critical_subscore (0.8) -> composite band escalates to >= HIGH -> policy AVOID.
+    inputs = DetectorInputs(d2=Decimal("0.95"))
+    v = _orch().evaluate(_Intent(), inputs=inputs)
+    assert v.action == AVOID
+    assert REASON_DETECTOR_AVOID == "detector_avoid"
+    assert "informed_flow" in v.reasons
