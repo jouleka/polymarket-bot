@@ -201,3 +201,345 @@ def test_warm_cluster_model_applies_the_per_cluster_cap(tmp_path):
         assert store.get("i1").decision_stake_usd == Decimal("8")
         assert store.get("i1").decision_reason == "per_cluster_cap"
         assert final.positions[-1].matrix_cold is False
+
+
+# --- S6: HermesPipeline wiring ---------------------------------------------------------------
+# These reuse the module-level _book / _P / _store helpers already defined at the top of this file.
+
+def test_pipeline_none_is_exactly_the_slice3_accept_path(tmp_path):
+    # The S6 seam is purely additive: with pipeline omitted (None), process_pending behaves
+    # identically to slice-3 -- the i1 ACCEPT, $12 per_trade stake, paper place, and fold all hold.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, pipeline=None)
+
+        assert store.get("i1").status == "ACCEPTED"
+        assert store.get("i1").decision_stake_usd == Decimal("12")
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        assert len(final.positions) == 1 and final.positions[0].worst_case_risk == Decimal("12")
+
+
+# --- S6 local fakes + builders (the wiring-under-test calls these collaborators) -------------
+from polybot.ers.service import HermesPipeline
+from polybot.fusion.component_log import ComponentLog
+# Capture the GENUINE fuse() at import time, BEFORE any test monkeypatches fusion.engine.fuse to a
+# fake. _real_fuse_capture (8g) needs the real fold; importing it later would grab the fake (the
+# monkeypatch in _pipeline replaces the module attribute first).
+from polybot.fusion.engine import fuse as _GENUINE_FUSE
+
+
+class _Verdict:
+    def __init__(self, refused, reason, corroborated):
+        self.refused = refused
+        self.reason = reason
+        self.corroborated = corroborated
+        self.primary_groups = ()
+
+
+class _DetectorVerdict:
+    def __init__(self, action="FLAG_ONLY", p_flow=Decimal("0")):
+        self.action = action
+        self.pull_quotes = False
+        self.p_flow = p_flow
+        self.reasons = ()
+
+
+class _FakeDetectors:
+    def __init__(self, verdict=None):
+        self._verdict = verdict or _DetectorVerdict()
+        self.calls = []
+
+    def evaluate(self, intent, *, inputs):
+        self.calls.append((intent.intent_id, inputs))
+        return self._verdict
+
+
+class _FakeFusionResult:
+    def __init__(self, p_final, components, w_news_effective):
+        self.p_final = p_final
+        self.components = components
+        self.w_news_effective = w_news_effective
+
+
+class _FakeCalibGate:
+    """k_for returns a fixed k (Decimal); clamp_p returns a fake AnchorResult or raises (anchor_error)."""
+    def __init__(self, *, k=Decimal("0"), clamp_to=None, raises=None):
+        self._k = k
+        self._clamp_to = clamp_to
+        self._raises = raises
+        self.clamp_calls = []
+
+    def k_for(self, category):
+        return self._k
+
+    def clamp_p(self, p, market_mid, *, question_text, seconds_to_resolution, corroborated):
+        self.clamp_calls.append((p, market_mid, corroborated))
+        if self._raises is not None:
+            raise self._raises
+        target = p if self._clamp_to is None else self._clamp_to
+        return _AnchorResult(target)
+
+
+class _AnchorResult:
+    def __init__(self, p_clamped):
+        self.p_clamped = p_clamped
+        self.shrunk = False
+        self.reason = "within_band"
+
+
+class _StubMeta:
+    def __init__(self, category="unknown", seconds=10**12):
+        self._cat = category
+        self._secs = seconds
+
+    def category_for(self, intent):
+        return self._cat
+
+    def question_text_for(self, intent):
+        return intent.resolution_summary
+
+    def seconds_to_resolution_for(self, intent):
+        return self._secs
+
+
+def _pipeline(tmp_path, monkeypatch, *, detectors=None, truth=None, calib=None, meta=None,
+              fusion_result=None):
+    """Build a HermesPipeline with fakes, monkeypatching the two module-level collaborators
+    (fusion.engine.fuse and truthgate.gate.verify -- the function-local import sites in the loop)
+    so we drive the loop precisely."""
+    from polybot.core.clock import MonotonicStamper
+    from polybot.calibration.ledger import ForecastLedger
+
+    stamper = MonotonicStamper(clock=lambda: 1)  # deterministic; the stamper itself enforces strict-mono
+    ledger = ForecastLedger(str(tmp_path / "f.db"), stamper)
+    clog = ComponentLog(str(tmp_path / "c.db"), stamper=stamper)
+
+    # Patch the truth-gate import target used inside _process_intent_pipeline.
+    import polybot.truthgate.gate as gate_mod
+    monkeypatch.setattr(gate_mod, "verify",
+                        lambda *a, **k: truth or _Verdict(False, None, True), raising=True)
+    # Patch the fusion fuse() the same way (local import resolves to fusion.engine.fuse).
+    import polybot.fusion.engine as fusion_mod
+    fr = fusion_result or _FakeFusionResult(
+        Decimal("0.70"),
+        {"p_news": Decimal("0.9"), "p_base": Decimal("0.5"),
+         "p_micro": Decimal("0.5"), "p_flow": Decimal("0.5")},
+        0.20)
+    monkeypatch.setattr(fusion_mod, "fuse", lambda *a, **k: fr, raising=True)
+
+    pipe = HermesPipeline(
+        calib_gate=calib or _FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.70")),
+        fusion_config=object(),
+        truth_gate_config=object(),
+        detectors=detectors or _FakeDetectors(),
+        forecast_ledger=ledger,
+        component_log=clog,
+        market_meta=meta or _StubMeta(),
+        allowlist=(),
+        event_store=object(),
+        stamper=stamper,
+    )
+    return pipe, ledger, clog
+
+
+def test_pipeline_detector_avoid_rejects_before_sizing(tmp_path, monkeypatch):
+    # A defensive detector AVOID verdict must REJECT(detector_avoid) BEFORE fusion/clamp/sizing,
+    # and place no order. (calib_gate.clamp_p is never reached -> no clamp call recorded.)
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch,
+                                   detectors=_FakeDetectors(_DetectorVerdict(action="AVOID")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "detector_avoid"
+        assert signer.placed == []
+        assert pipe.calib_gate.clamp_calls == []   # never sized -- rejected before fusion/clamp
+        assert ledger.all() == []                  # not a genuine estimate -> no forecast logged
+
+
+def test_pipeline_truth_gate_same_source_collusion_rejects_no_signer_no_forecast(tmp_path, monkeypatch):
+    # An injection signature (truth-gate refuses with same_source_collusion) must REJECT, never
+    # reach the signer, and record NO forecast (refused evidence is not a genuine estimate).
+    from polybot.truthgate.gate import REASON_SAME_SOURCE
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        truth=_Verdict(refused=True, reason=REASON_SAME_SOURCE, corroborated=False))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "same_source_collusion"
+        assert signer.placed == []
+        assert pipe.calib_gate.clamp_calls == []
+        assert ledger.all() == []
+        assert clog.all() == ()
+
+
+def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monkeypatch):
+    # Zero allowlisted primaries -> truth_gate_refuse (distinct from same_source_collusion).
+    from polybot.truthgate.gate import REASON_TRUTH_GATE_REFUSE
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        truth=_Verdict(refused=True, reason=REASON_TRUTH_GATE_REFUSE, corroborated=False))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").decision_reason == "truth_gate_refuse"
+        assert signer.placed == [] and ledger.all() == []
+
+
+def test_pipeline_clamp_p_raise_maps_to_distinct_anchor_error(tmp_path, monkeypatch):
+    # A non-finite anchor makes calib_gate.clamp_p raise ValueError. It MUST be caught explicitly
+    # and mapped to the DISTINCT reason "anchor_error" -- never swallowed into "internal_error".
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch,
+        calib=_FakeCalibGate(k=Decimal("0"), raises=ValueError("anchor_gate: non-finite p")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "anchor_error"  # NOT "internal_error"
+        assert signer.placed == []
+        assert ledger.all() == []   # raised before record_forecast -> no estimate logged
+
+
+def test_pipeline_substitutes_fused_clamped_p_into_the_validator(tmp_path, monkeypatch):
+    # Proposal's raw p=0.50 (== price -> no edge). The pipeline fuses+clamps to 0.90, which the
+    # validator sizes off -> ACCEPT (not the SKIP no_edge the raw p would give). Pin that the
+    # posterior, not Hermes's raw p, drove the validator. Use k=1 so sizing isn't zeroed.
+    fr = _FakeFusionResult(Decimal("0.90"),
+                           {"p_news": Decimal("0.95"), "p_base": Decimal("0.50"),
+                            "p_micro": Decimal("0.50"), "p_flow": Decimal("0.50")}, 0.20)
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, fusion_result=fr,
+        calib=_FakeCalibGate(k=Decimal("1"), clamp_to=Decimal("0.90")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, p="0.50"))  # raw p == 0.50 == price -> would be no_edge
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "ACCEPTED"            # posterior 0.90 has edge over price 0.50
+        assert store.get("i1").decision_stake_usd == Decimal("12")  # per_trade cap binds at k=1
+        assert pipe.calib_gate.clamp_calls[0][0] == Decimal("0.90")  # fused p_final fed to clamp_p
+        assert len(final.positions) == 1
+        # the forecast records the clamped posterior, not the raw 0.50
+        assert ledger.get("i1").p == Decimal("0.90")
+
+
+def test_pipeline_records_forecast_and_components_even_when_k0_skips(tmp_path, monkeypatch):
+    # k=0 -> frac_eff=0 -> stake below floor -> SKIP(below_min_floor). The estimate is STILL a
+    # genuine forecast, so record_forecast + ComponentLog.record happen BEFORE evaluate_intent --
+    # calibration grades the estimate, not whether we could afford to act on it (DESIGN §2).
+    fr = _FakeFusionResult(Decimal("0.80"),
+                           {"p_news": Decimal("0.90"), "p_base": Decimal("0.50"),
+                            "p_micro": Decimal("0.50"), "p_flow": Decimal("0.50")}, 0.20)
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, fusion_result=fr,
+        calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.80")))
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "SKIPPED"
+        assert store.get("i1").decision_reason == "below_min_floor"  # k=0 zeroes the stake
+        assert signer.placed == []
+        # estimate logged regardless of the SKIP:
+        rec = ledger.get("i1")
+        assert rec is not None and rec.p == Decimal("0.80") and rec.category == "unknown"
+        assert rec.market_mid == Decimal("0.255")  # midpoint of bid 0.01 / ask 0.50
+        comps = clog.all()
+        assert len(comps) == 1  # one per-signal row logged
+
+
+def test_pipeline_corroboration_threads_into_fusion_and_anchor(tmp_path, monkeypatch):
+    # Real FusionEngine.fuse this time (un-patch it). corroborated=True -> w_news_effective=0.20;
+    # corroborated=False -> w_news_effective=0.0 (Hermes informational-only). The same corroborated
+    # bool also reaches clamp_p (anchor band width). Pin both via the ComponentLog + clamp_calls.
+    import polybot.fusion.engine as fusion_mod
+
+    def _run(corroborated):
+        # Each run gets an ISOLATED store dir: _pipeline's ForecastLedger/ComponentLog are keyed
+        # by forecast_id ("i1"), so sharing one dir across both runs would let the second run's
+        # idempotent INSERT-OR-IGNORE collide with the first -- the flip we're pinning would be
+        # masked by the first run's already-logged row.
+        run_dir = tmp_path / f"run_{corroborated}"
+        run_dir.mkdir()
+        pipe, ledger, clog = _pipeline(
+            run_dir, monkeypatch,
+            truth=_Verdict(refused=False, reason=None, corroborated=corroborated),
+            calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.50")))
+        # un-patch fuse: use the REAL fold so w_news_effective is genuinely derived.
+        monkeypatch.setattr(fusion_mod, "fuse", _real_fuse_capture(pipe), raising=True)
+        with _store(str(run_dir / "i.db")) as store:
+            store.propose_trade("i1", **dict(_P, p="0.95"))
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=PaperSigner(), pipeline=pipe)
+        return clog, pipe
+
+    clog_t, pipe_t = _run(True)
+    clog_f, pipe_f = _run(False)
+    # w_news_effective recorded in the component log flips with corroboration:
+    assert clog_t.all()[0].w_news_effective == 0.20
+    assert clog_f.all()[0].w_news_effective == 0.0
+    # the same corroborated bool reaches clamp_p:
+    assert pipe_t.calib_gate.clamp_calls[0][2] is True
+    assert pipe_f.calib_gate.clamp_calls[0][2] is False
+
+
+def _real_fuse_capture(pipe):
+    # Rebind the pipeline's fusion_config to a real FusionConfig and call the GENUINE fuse() (captured
+    # at import time, above), so the w_news gating is genuinely exercised (not a fake constant).
+    from polybot.fusion.engine import FusionConfig
+    cfg = FusionConfig(w_news=0.20, w_base=0.30, w_micro=0.0, w_flow=0.0, clip_logodds=2.0)
+    object.__setattr__(pipe, "fusion_config", cfg)
+    return lambda mid, **kw: _GENUINE_FUSE(mid, **{**kw, "config": cfg})
+
+
+def test_pipeline_non_finite_p_news_rejects_with_no_orphan_in_either_store(tmp_path, monkeypatch):
+    # Hermes CAN supply a non-finite p (Decimal("NaN") round-trips through propose_trade). It enters
+    # the REAL fuse as p_news (a non-_in_unit signal -> 0 delta, so p_final stays finite and the
+    # clamp succeeds), but component_log.record fails-loud on the non-finite raw p_news. The chain
+    # must REJECT cleanly with NO orphan: BOTH the forecast ledger AND the component log stay empty.
+    # (Pre-fix, record_forecast ran first -> a committed forecast row with no component = an orphan.)
+    import polybot.fusion.engine as fusion_mod
+    pipe, ledger, clog = _pipeline(
+        tmp_path, monkeypatch, calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.50")))
+    # REAL fold so components["p_news"] genuinely carries the NaN (the fake would mask it).
+    monkeypatch.setattr(fusion_mod, "fuse", _real_fuse_capture(pipe), raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, p="NaN"))  # non-finite p round-trips to Decimal("NaN")
+        assert store.get("i1").p.is_finite() is False  # the orphan precondition really holds
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert signer.placed == []
+        assert ledger.all() == []   # NO orphan forecast row
+        assert clog.all() == ()     # and no component row either

@@ -255,3 +255,53 @@ def test_scheduler_supports_an_async_pre_stage_hook():
     asyncio.run(sched.run(max_polls=1))
 
     assert fired == ["CPI"]
+
+
+def test_publisher_group_derives_registrable_domain_from_url():
+    """An empty publisher_group is auto-derived from the URL's registrable domain,
+    so two feeds on the SAME host share one group (independence collapses)."""
+    a = Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml", PRIMARY)
+    b = Source("fed-monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml", PRIMARY)
+    assert a.publisher_group == "federalreserve.gov"
+    assert b.publisher_group == "federalreserve.gov"
+    assert a.publisher_group == b.publisher_group
+
+
+def test_publisher_group_explicit_value_overrides_derivation():
+    """An explicit non-empty publisher_group is kept verbatim (binds feeds across
+    different hosts that share an owner) and is NOT overwritten by URL derivation."""
+    s = Source("wire-a", "https://feeds.somewire.example/a.xml", PRIMARY,
+               publisher_group="somewire-group")
+    assert s.publisher_group == "somewire-group"
+    t = Source("wire-b", "https://news.othercdn.example/b.xml", PRIMARY,
+               publisher_group="somewire-group")
+    assert s.publisher_group == t.publisher_group
+
+
+def test_default_allowlist_fed_feeds_share_publisher_group():
+    """REGRESSION INVARIANT (S6 truth-gate): fed-press and fed-monetary are BOTH
+    federalreserve.gov, so they MUST resolve to the same publisher_group and therefore
+    NEVER count as two independent corroborating primaries."""
+    from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+
+    by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
+    fed_press = by_name["fed-press"]
+    fed_monetary = by_name["fed-monetary"]
+    assert fed_press.publisher_group == fed_monetary.publisher_group
+    assert fed_press.publisher_group == "federalreserve.gov"
+    assert by_name["sec-press"].publisher_group != fed_press.publisher_group
+    assert by_name["sec-press"].publisher_group == "sec.gov"
+
+
+def test_default_allowlist_all_entries_construct_with_a_group():
+    """Backward-compat + completeness: every existing allowlist entry still constructs
+    and exposes a non-empty publisher_group (explicit or derived)."""
+    from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+
+    assert len(DEFAULT_ALLOWLIST) == 6
+    for s in DEFAULT_ALLOWLIST:
+        assert s.publisher_group, f"empty publisher_group for {s.name}"
+    by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
+    assert by_name["bea-news"].publisher_group == "bea.gov"          # apps.bea.gov -> bea.gov
+    assert by_name["cftc-press"].publisher_group == "cftc.gov"
+    assert by_name["google-news-top"].publisher_group == "google.com"

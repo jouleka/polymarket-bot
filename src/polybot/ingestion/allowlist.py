@@ -27,8 +27,10 @@ from polybot.ingestion.news import DISCOVERY, PRIMARY, Source
 
 DEFAULT_ALLOWLIST = (
     # --- PRIMARY: US financial regulators (relevant to crypto / finance markets) ---
-    Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml", PRIMARY),
-    Source("fed-monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml", PRIMARY),  # FOMC statements
+    Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml", PRIMARY,
+           publisher_group="federalreserve.gov"),
+    Source("fed-monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml", PRIMARY,
+           publisher_group="federalreserve.gov"),  # FOMC statements
     Source("sec-press", "https://www.sec.gov/news/pressreleases.rss", PRIMARY),
     Source("cftc-press", "https://www.cftc.gov/RSS/RSSGP/rssgp.xml", PRIMARY),
     # --- PRIMARY: macro econ releases (GDP / personal income / PCE) ---
