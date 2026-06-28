@@ -225,6 +225,10 @@ def test_pipeline_none_is_exactly_the_slice3_accept_path(tmp_path):
 # --- S6 local fakes + builders (the wiring-under-test calls these collaborators) -------------
 from polybot.ers.service import HermesPipeline
 from polybot.fusion.component_log import ComponentLog
+# Capture the GENUINE fuse() at import time, BEFORE any test monkeypatches fusion.engine.fuse to a
+# fake. _real_fuse_capture (8g) needs the real fold; importing it later would grab the fake (the
+# monkeypatch in _pipeline replaces the module attribute first).
+from polybot.fusion.engine import fuse as _GENUINE_FUSE
 
 
 class _Verdict:
@@ -469,3 +473,48 @@ def test_pipeline_records_forecast_and_components_even_when_k0_skips(tmp_path, m
         assert rec.market_mid == Decimal("0.255")  # midpoint of bid 0.01 / ask 0.50
         comps = clog.all()
         assert len(comps) == 1  # one per-signal row logged
+
+
+def test_pipeline_corroboration_threads_into_fusion_and_anchor(tmp_path, monkeypatch):
+    # Real FusionEngine.fuse this time (un-patch it). corroborated=True -> w_news_effective=0.20;
+    # corroborated=False -> w_news_effective=0.0 (Hermes informational-only). The same corroborated
+    # bool also reaches clamp_p (anchor band width). Pin both via the ComponentLog + clamp_calls.
+    import polybot.fusion.engine as fusion_mod
+
+    def _run(corroborated):
+        # Each run gets an ISOLATED store dir: _pipeline's ForecastLedger/ComponentLog are keyed
+        # by forecast_id ("i1"), so sharing one dir across both runs would let the second run's
+        # idempotent INSERT-OR-IGNORE collide with the first -- the flip we're pinning would be
+        # masked by the first run's already-logged row.
+        run_dir = tmp_path / f"run_{corroborated}"
+        run_dir.mkdir()
+        pipe, ledger, clog = _pipeline(
+            run_dir, monkeypatch,
+            truth=_Verdict(refused=False, reason=None, corroborated=corroborated),
+            calib=_FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.50")))
+        # un-patch fuse: use the REAL fold so w_news_effective is genuinely derived.
+        monkeypatch.setattr(fusion_mod, "fuse", _real_fuse_capture(pipe), raising=True)
+        with _store(str(run_dir / "i.db")) as store:
+            store.propose_trade("i1", **dict(_P, p="0.95"))
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=PaperSigner(), pipeline=pipe)
+        return clog, pipe
+
+    clog_t, pipe_t = _run(True)
+    clog_f, pipe_f = _run(False)
+    # w_news_effective recorded in the component log flips with corroboration:
+    assert clog_t.all()[0].w_news_effective == 0.20
+    assert clog_f.all()[0].w_news_effective == 0.0
+    # the same corroborated bool reaches clamp_p:
+    assert pipe_t.calib_gate.clamp_calls[0][2] is True
+    assert pipe_f.calib_gate.clamp_calls[0][2] is False
+
+
+def _real_fuse_capture(pipe):
+    # Rebind the pipeline's fusion_config to a real FusionConfig and call the GENUINE fuse() (captured
+    # at import time, above), so the w_news gating is genuinely exercised (not a fake constant).
+    from polybot.fusion.engine import FusionConfig
+    cfg = FusionConfig(w_news=0.20, w_base=0.30, w_micro=0.0, w_flow=0.0, clip_logodds=2.0)
+    object.__setattr__(pipe, "fusion_config", cfg)
+    return lambda mid, **kw: _GENUINE_FUSE(mid, **{**kw, "config": cfg})
