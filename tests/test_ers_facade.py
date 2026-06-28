@@ -66,3 +66,35 @@ def test_get_and_audit_log_read_through(tmp_path):
         # audit_log is read-only and empty until the ERS (not the facade)
         # records a decision; the facade exposes no way to write an audit row.
         assert facade.audit_log() == []
+
+
+def test_read_tools_delegate_to_readers(tmp_path):
+    calls = {"market": [], "book": [], "ledger": [], "flags": []}
+
+    def _market_reader(*a, **k):
+        calls["market"].append((a, k)); return "MARKET"
+
+    def _book_reader(*a, **k):
+        calls["book"].append((a, k)); return "BOOK"
+
+    def _ledger_reader(*a, **k):
+        calls["ledger"].append((a, k)); return "LEDGER"
+
+    def _flags_reader(*a, **k):
+        calls["flags"].append((a, k)); return "FLAGS"
+
+    with _store(tmp_path) as store:
+        facade = ProposeOnlyFacade(
+            store, market_reader=_market_reader, book_reader=_book_reader,
+            ledger_reader=_ledger_reader, flags_reader=_flags_reader,
+        )
+        assert facade.get_market("0xabc") == "MARKET"
+        assert facade.get_book("t1", depth=5) == "BOOK"
+        assert facade.get_ledger(category="politics") == "LEDGER"
+        assert facade.get_flags("t1") == "FLAGS"
+
+        # Each reader was invoked exactly once with the forwarded args/kwargs.
+        assert calls["market"] == [(("0xabc",), {})]
+        assert calls["book"] == [(("t1",), {"depth": 5})]
+        assert calls["ledger"] == [((), {"category": "politics"})]
+        assert calls["flags"] == [(("t1",), {})]
