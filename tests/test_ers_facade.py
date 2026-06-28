@@ -41,3 +41,13 @@ def test_propose_trade_delegates_insert(tmp_path):
         params = inspect.signature(facade.propose_trade).parameters
         assert "status" not in params
         assert "citations" in params and "p" in params
+
+
+def test_propose_trade_idempotent_returns_false_on_dup(tmp_path):
+    with _store(tmp_path) as store:
+        facade = ProposeOnlyFacade(store)
+        first = facade.propose_trade("intent-1", **_PROPOSAL)
+        second = facade.propose_trade("intent-1", **_PROPOSAL)
+        assert first is True and second is False
+        # Still exactly one row; the dup INSERT was IGNOREd by the store.
+        assert store.get("intent-1") is not None
