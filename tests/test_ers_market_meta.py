@@ -58,3 +58,13 @@ def test_seconds_to_resolution_for_is_a_positive_int():
     meta = StubMarketMeta()
     secs = meta.seconds_to_resolution_for(_intent())
     assert isinstance(secs, int) and secs > 0
+
+
+def test_stub_is_stateless_and_repeatable():
+    # No registry, no caching, no mutation: two calls on two fresh instances agree, and a
+    # second call on the same instance is identical (the seam must be side-effect free).
+    a, b = StubMarketMeta(), StubMarketMeta()
+    i = _intent()
+    assert a.category_for(i) == b.category_for(i) == "unknown"
+    assert a.question_text_for(i) == a.question_text_for(i) == i.resolution_summary
+    assert a.seconds_to_resolution_for(i) == b.seconds_to_resolution_for(i)
