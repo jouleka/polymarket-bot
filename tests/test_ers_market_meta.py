@@ -9,8 +9,9 @@ anchor stays active. The real condition_id -> category/question/seconds feed is 
 """
 from decimal import Decimal
 
+from polybot.calibration.config import CalibrationConfig
 from polybot.ers.intent_store import PendingIntent
-from polybot.ers.market_meta import StubMarketMeta
+from polybot.ers.market_meta import SECONDS_TO_RESOLUTION_SENTINEL, StubMarketMeta
 
 
 def _intent(resolution_summary="Will the incumbent win the 2026 election?"):
@@ -38,3 +39,22 @@ def test_question_text_for_passes_through_empty_summary():
     # resolution_summary defaults to "" upstream; the stub must not substitute or raise.
     meta = StubMarketMeta()
     assert meta.question_text_for(_intent(resolution_summary="")) == ""
+
+
+def test_seconds_to_resolution_for_returns_sentinel():
+    meta = StubMarketMeta()
+    assert meta.seconds_to_resolution_for(_intent()) == SECONDS_TO_RESOLUTION_SENTINEL
+
+
+def test_sentinel_is_strictly_past_prior_decay_window():
+    # The prior anchor is dropped only WITHIN the decay window of resolution; the sentinel must
+    # sit strictly OUTSIDE it so the prior stays active (DESIGN §6). Guard against a future
+    # CalibrationConfig default change silently swallowing the prior.
+    cfg = CalibrationConfig()
+    assert SECONDS_TO_RESOLUTION_SENTINEL > cfg.prior_decay_window_seconds
+
+
+def test_seconds_to_resolution_for_is_a_positive_int():
+    meta = StubMarketMeta()
+    secs = meta.seconds_to_resolution_for(_intent())
+    assert isinstance(secs, int) and secs > 0
