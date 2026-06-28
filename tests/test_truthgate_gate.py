@@ -85,3 +85,24 @@ def test_two_distinct_groups_corroborated(tmp_path):
     assert v.refused is False and v.reason is None
     assert v.corroborated is True
     assert set(v.primary_groups) == {"federalreserve.gov", "sec.gov"}
+
+
+def test_same_publisher_group_not_corroborated_regression(tmp_path):
+    # fed-press and fed-monetary are both federalreserve.gov: the confirmed same-domain
+    # bypass. Two FEEDS, ONE publisher_group -> NOT independent -> NOT corroborated.
+    fed_press = Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml",
+                       PRIMARY, publisher_group="federalreserve.gov")
+    fed_monetary = Source("fed-monetary", "https://www.federalreserve.gov/feeds/press_monetary.xml",
+                          PRIMARY, publisher_group="federalreserve.gov")
+    allowlist = (fed_press, fed_monetary)
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, fed_press, "fp1", link="https://www.federalreserve.gov/p1")
+        _seed(store, stamper, fed_monetary, "fm1", link="https://www.federalreserve.gov/m1")
+        now = stamper.stamp()
+        v = verify(("fp1", "fm1"), event_store=store, book=_book(),
+                   allowlist=allowlist, now_ns=now, config=_CFG)
+
+    assert v.refused is False                       # present, just not independent
+    assert v.corroborated is False                  # the regression assertion
+    assert v.primary_groups == ("federalreserve.gov",)   # collapsed to one group
