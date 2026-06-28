@@ -106,3 +106,20 @@ def test_same_publisher_group_not_corroborated_regression(tmp_path):
     assert v.refused is False                       # present, just not independent
     assert v.corroborated is False                  # the regression assertion
     assert v.primary_groups == ("federalreserve.gov",)   # collapsed to one group
+
+
+def test_discovery_tier_ignored(tmp_path):
+    # One real primary + one discovery aggregator citation. Discovery must not count
+    # toward corroboration NOR toward refusal: the single primary stands alone ->
+    # present, uncorroborated, not refused.
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        _seed(store, stamper, _GNEWS, "gn1", link="https://news.google.com/x")
+        now = stamper.stamp()
+        v = verify(("fed1", "gn1"), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert v.refused is False
+    assert v.corroborated is False                       # gn1 (DISCOVERY) does not count
+    assert v.primary_groups == ("federalreserve.gov",)   # only the primary survives
