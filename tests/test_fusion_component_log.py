@@ -11,6 +11,7 @@ Safety properties under test:
   * all() returns the recorded rows carrying the stamp + every stored field
     (p_news/p_base/p_micro/p_flow as Decimal, w_news_effective float, corroborated bool, mid Decimal).
 """
+import pytest
 from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
@@ -54,3 +55,17 @@ def test_record_duplicate_forecast_id_returns_false(tmp_path):
     # Idempotent: exactly one row survives, and it is the ORIGINAL payload (not overwritten).
     assert len(rows) == 1
     assert rows[0].p_news == Decimal("0.70") and rows[0].corroborated is True
+
+
+def test_record_rejects_non_finite_prob(tmp_path):
+    # A NaN p_news must never enter the substrate (it cannot be backfilled).
+    with _log(tmp_path) as log:
+        with pytest.raises(ValueError, match="p_news"):
+            log.record(
+                "intent-nan",
+                p_news=Decimal("NaN"), p_base=Decimal("0.55"),
+                p_micro=Decimal("0.50"), p_flow=Decimal("0.50"),
+                w_news_effective=0.20, corroborated=True, mid=Decimal("0.52"),
+            )
+        # Nothing was written.
+        assert log.all() == ()
