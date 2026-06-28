@@ -41,3 +41,47 @@ def test_config_rejects_non_positive_fields():
         TruthGateConfig(freshness_window_ns=1,
                         thin_book_depth_usd=Decimal("50"),
                         thin_book_move=Decimal("0"))
+
+
+# --- local builders (the repo's per-file pattern; no conftest) ---
+_CFG = TruthGateConfig(freshness_window_ns=10_000,
+                       thin_book_depth_usd=Decimal("50"),
+                       thin_book_move=Decimal("0.05"))
+
+# Two independent primaries (distinct publisher_group), one discovery aggregator.
+_FED = Source("fed-press", "https://www.federalreserve.gov/feeds/press_all.xml",
+              PRIMARY, publisher_group="federalreserve.gov")
+_SEC = Source("sec-press", "https://www.sec.gov/news/pressreleases.rss",
+              PRIMARY, publisher_group="sec.gov")
+_GNEWS = Source("google-news-top", "https://news.google.com/rss", DISCOVERY,
+                publisher_group="google.com")
+_ALLOWLIST = (_FED, _SEC, _GNEWS)
+
+
+def _book(ask="0.50", ask_size="1000", bid="0.49", bid_size="1000"):
+    """Healthy, deep, tight book by default (NOT the collusion signature)."""
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": bid_size}],
+                     "asks": [{"price": ask, "size": ask_size}]})
+    return book
+
+
+def _seed(store, stamper, source, event_id, *, link):
+    store.append(make_envelope(stamper, source=source.name, source_tier=source.tier,
+                               event_id=event_id, content="text",
+                               published_at=None, entities=(link,), market_links=()))
+
+
+def test_two_distinct_groups_corroborated(tmp_path):
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        _seed(store, stamper, _SEC, "sec1", link="https://www.sec.gov/1")
+        now = stamper.stamp()
+        v = verify(("fed1", "sec1"), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+
+    assert isinstance(v, TruthVerdict)
+    assert v.refused is False and v.reason is None
+    assert v.corroborated is True
+    assert set(v.primary_groups) == {"federalreserve.gov", "sec.gov"}
