@@ -1,14 +1,18 @@
-"""ERS service poll-loop (S3 / POL-5 slices 2 + 3).
+"""ERS service poll-loop (S3 / POL-5 slices 2 + 3; S6 / POL-8 HermesPipeline wiring).
 
-Wires the chokepoint to the validator + the safety breaker: run the L7 DrawdownBreaker FIRST,
-then poll PROPOSED intents, RE-FETCH the live book per intent (never trust the proposed price),
-size against the current portfolio with the intent's learned co-move ClusterView, record the
-decision + audit, fold each ACCEPT into the working portfolio so cross-intent caps hold, and call
-the signer SEAM on ACCEPT. The ERS is the ONLY component that ever signs -- never Hermes. The
-signer here is a paper stub; the real signer (Polymarket/rs-clob-client-v2 sidecar) replaces it
-in S2/POL-4, and the real venue FLATTEN/cancelAll lands with the S4 supervisor.
+Wires the chokepoint to the validator + the safety breaker, and -- when a HermesPipeline is
+supplied -- to the full S6 re-derivation chain (defensive detectors, citation truth-gate, signal
+fusion, anchor clamp, per-intent calibration k, forecast + per-signal component logging). The ERS
+is the ONLY component that ever signs -- never Hermes. Hermes can at worst enqueue a PROPOSED row
+through ProposeOnlyFacade; this loop independently re-derives price, size, caps, corroboration, and
+the anchored posterior. The signer here is a paper stub; the real signer is S2/POL-4.
+
+S6 contract (DESIGN-S6-HERMES.md §2/§3): pipeline=None -> behavior is EXACTLY slice-3 (the existing
+tests stay green). pipeline supplied -> steps 1-11 of §2 engage and calib_score is IGNORED in favor
+of the per-intent k = pipeline.calib_gate.k_for(category).
 """
 
+from dataclasses import dataclass
 from decimal import Decimal
 
 from polybot.ers.breaker import FLATTEN, FREEZE_ADDS
@@ -20,8 +24,203 @@ from polybot.ers.validator import (
     TradeIntent,
     evaluate_intent,
 )
+from polybot.fusion.engine import FusionError
+from polybot.truthgate.gate import REASON_SAME_SOURCE, REASON_TRUTH_GATE_REFUSE
+from polybot.detectors.orchestrator import DetectorInputs, REASON_DETECTOR_AVOID
 
 _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move model is wired
+
+# New S6 Decision.reason codes (free-form strings; NO validator change -- DESIGN §6).
+REASON_ANCHOR_ERROR = "anchor_error"
+
+
+@dataclass(frozen=True)
+class HermesPipeline:
+    """The S6 re-derivation context (DESIGN §3). Optional, defaulting None in process_pending -- the
+    same additive-seam pattern as cluster_model / breaker. When provided, the per-intent k from
+    calib_gate.k_for(category) supersedes the batch calib_score (which is retained for back-compat)."""
+    calib_gate: object            # CalibrationGate: k_for(category) -> Decimal{0,1}; clamp_p(...) -> AnchorResult
+    fusion_config: object         # fusion.engine.FusionConfig
+    truth_gate_config: object     # truthgate.gate.TruthGateConfig
+    detectors: object             # detectors.orchestrator.DetectorOrchestrator
+    forecast_ledger: object       # calibration.ledger.ForecastLedger
+    component_log: object         # fusion.component_log.ComponentLog
+    market_meta: object           # ers.market_meta.StubMarketMeta (the MarketRegistry seam)
+    allowlist: object             # iterable of ingestion.news.Source (truth-gate independence surface)
+    event_store: object           # storage.market_memory.EventStore (sanitized citations only)
+    stamper: object               # the ONE shared core.clock.MonotonicStamper (now_ns for the gate)
+
+
+def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
+                    cluster_model=None, breaker=None, pipeline=None):
+    """Process every PROPOSED intent in FIFO order; return the updated portfolio.
+
+    Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
+    FREEZE_ADDS blocks adds (l7_freeze). Each surviving intent is processed inside a per-intent
+    try/except so one malformed intent can't wedge the FIFO queue. On ACCEPT the signer is called
+    THEN the portfolio is folded before the next intent (the cross-intent caps contract). When
+    pipeline is None this is exactly slice-3; when supplied, the S6 chain engages."""
+    block_reason = None
+    if breaker is not None:
+        state = breaker.evaluate(portfolio.positions, book_for)
+        if state.action == FLATTEN:
+            signer.flatten(portfolio.positions)
+            block_reason = "l7_flatten"
+        elif state.action == FREEZE_ADDS:
+            block_reason = "l7_freeze"
+
+    for intent in store.pending():
+        trade_intent = None
+        try:
+            if block_reason is not None:
+                decision = Decision("REJECT", None, None, block_reason)
+            elif pipeline is None:
+                decision, trade_intent = _process_intent_slice3(
+                    intent, book_for, portfolio, caps, calib_score, cluster_model)
+            else:
+                decision, trade_intent = _process_intent_pipeline(
+                    intent, book_for, portfolio, caps, cluster_model, pipeline)
+        except Exception:
+            # One malformed intent must not wedge the FIFO queue head: fail it closed + audit,
+            # and keep processing the rest.
+            decision = Decision("REJECT", None, None, "internal_error")
+            trade_intent = None
+        store.record_decision(intent.intent_id, decision)
+        if decision.verdict == "ACCEPT":
+            signer.place(intent, decision)
+            portfolio = _fold(portfolio, trade_intent, decision)
+    return portfolio
+
+
+def _process_intent_slice3(intent, book_for, portfolio, caps, calib_score, cluster_model):
+    """The unchanged slice-3 per-intent path (pipeline=None). Returns (decision, trade_intent)."""
+    cluster = _cluster_view(cluster_model, intent, portfolio)
+    trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm)
+    book = book_for(trade_intent.token_id)
+    if book is None:
+        # No live book to re-price against -> fail closed (never size off the proposal).
+        return Decision("REJECT", None, None, "no_book"), trade_intent
+    decision = evaluate_intent(trade_intent, book, portfolio, caps,
+                               calib_score=calib_score, cluster=cluster)
+    return decision, trade_intent
+
+
+def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, pipeline):
+    """The S6 per-intent chain (DESIGN §2 steps 1-11). Returns (decision, trade_intent).
+
+    Order is load-bearing: cheap/structural refusals (no_book, detector_avoid, truth-gate) come
+    BEFORE any genuine estimate, so a refused proposal records NO forecast (DESIGN §2). A clean
+    estimate records a forecast + per-signal components BEFORE evaluate_intent, so a SKIP on k=0
+    still logs the estimate -- calibration grades estimates, not execution."""
+    from polybot.fusion.engine import fuse  # local import keeps the module import-light + cycle-free
+    from polybot.truthgate.gate import verify as truth_verify
+
+    cluster = _cluster_view(cluster_model, intent, portfolio)
+    trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm)
+
+    # 1. Single live book re-fetch, shared by truth-gate / fusion / anchor / evaluate_intent.
+    book = book_for(trade_intent.token_id)
+    if book is None:
+        return Decision("REJECT", None, None, "no_book"), trade_intent
+
+    # 2. Defensive detector pre-gate (FOLLOW off). AVOID -> REJECT before any sizing.
+    verdict = pipeline.detectors.evaluate(intent, inputs=DetectorInputs())
+    if verdict.action == "AVOID":
+        return Decision("REJECT", None, None, REASON_DETECTOR_AVOID), trade_intent
+
+    # 3. Citation truth-gate over the sanitized EventStore + the live book (never fetches a URL).
+    truth = truth_verify(intent.citations, event_store=pipeline.event_store, book=book,
+                         allowlist=pipeline.allowlist, now_ns=pipeline.stamper.stamp(),
+                         config=pipeline.truth_gate_config)
+    if truth.refused:
+        return Decision("REJECT", None, None, truth.reason), trade_intent
+
+    # 4. Fusion prior + anchor reference is the live mid; degenerate -> book_stale.
+    mid = book.midpoint()
+    if mid is None:
+        return Decision("REJECT", None, None, "book_stale"), trade_intent
+
+    # 5. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
+    #    p_base/p_micro/p_flow are ERS-derived; at MVP p_base = mid (no base-rate model wired here
+    #    beyond the anchor's prior), p_micro/p_flow carry zero weight (logged, not weighted).
+    fusion_result = fuse(mid, p_news=intent.p, p_base=mid, p_micro=mid,
+                         p_flow=verdict.p_flow if Decimal(0) < verdict.p_flow < Decimal(1) else mid,
+                         corroborated=truth.corroborated, config=pipeline.fusion_config)
+
+    # 6. Anchor clamp, wrapped so a non-finite anchor maps to a DISTINCT anchor_error (not internal).
+    category = pipeline.market_meta.category_for(intent)
+    question_text = pipeline.market_meta.question_text_for(intent)
+    seconds = pipeline.market_meta.seconds_to_resolution_for(intent)
+    try:
+        anchor = pipeline.calib_gate.clamp_p(
+            fusion_result.p_final, mid, question_text=question_text,
+            seconds_to_resolution=seconds, corroborated=truth.corroborated)
+    except (ValueError, FusionError):
+        return Decision("REJECT", None, None, REASON_ANCHOR_ERROR), trade_intent
+    p_clamped = anchor.p_clamped
+
+    # 7. Record the genuine estimate: forecast (the calibration substrate) + per-signal components.
+    #    The recorded p is the in-range p_clamped, so the ledger's [0,1] guard always passes.
+    forecast_id = intent.intent_id
+    pipeline.forecast_ledger.record_forecast(
+        forecast_id, category=category, condition_id=intent.condition_id,
+        p=p_clamped, market_mid=mid)
+    components = fusion_result.components
+    pipeline.component_log.record(
+        forecast_id, p_news=components["p_news"], p_base=components["p_base"],
+        p_micro=components["p_micro"], p_flow=components["p_flow"],
+        w_news_effective=fusion_result.w_news_effective, corroborated=truth.corroborated, mid=mid)
+
+    # 8. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
+    k = pipeline.calib_gate.k_for(category)
+
+    # 9-11. Substitute the anchored posterior into the TradeIntent and size with the UNCHANGED
+    #        validator (calib_score=k). evaluate_intent / validator dataclasses are untouched.
+    trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm, p_override=p_clamped)
+    decision = evaluate_intent(trade_intent, book, portfolio, caps, calib_score=k, cluster=cluster)
+    return decision, trade_intent
+
+
+def _cluster_view(cluster_model, intent, portfolio, *, cluster_id_of=None):
+    """The learned co-move verdict for this intent's cluster. A None model -> fail-closed cold. The
+    cluster spans the intent's token + every open position sharing its cluster_id.
+
+    cluster_id_of is a one-line PLUGGABLE hook (Fork 8C): it defaults to ``intent.event_id`` (the
+    slice-2/3 placeholder that fails SAFE -- over-couples within an event), so the real latent-cluster
+    slice swaps the function without re-editing the loop. Do not mistake this alias for the final
+    cluster taxonomy."""
+    if cluster_model is None:
+        return _COLD
+    if cluster_id_of is None:
+        cluster_id_of = lambda i: i.event_id
+    cluster_id = cluster_id_of(intent)
+    tokens = [intent.token_id]
+    tokens += [p.token_id for p in portfolio.positions if p.cluster_id == cluster_id]
+    return cluster_model.view(tokens)
+
+
+def _to_trade_intent(intent, *, matrix_cold, p_override=None):
+    # The ERS populates the risk keys (NOT Hermes-trusted). resolution_source + cluster_id come
+    # from the proposal's ids (slice-2 placeholders); matrix_cold is driven by the co-move
+    # ClusterView. p_override (the fused+anchored posterior, S6) substitutes intent.p before the
+    # validator sizes -- so the validator never sizes off Hermes's raw p when the pipeline is active.
+    return TradeIntent(
+        token_id=intent.token_id, condition_id=intent.condition_id, event_id=intent.event_id,
+        resolution_source=intent.condition_id, cluster_id=intent.event_id,
+        p=intent.p if p_override is None else p_override,
+        max_price=intent.max_price, size_usd_suggestion=intent.size_usd_suggestion,
+        matrix_cold=matrix_cold,
+    )
+
+
+def _fold(portfolio, trade_intent, decision):
+    pos = OpenPosition(
+        condition_id=trade_intent.condition_id, event_id=trade_intent.event_id,
+        resolution_source=trade_intent.resolution_source, cluster_id=trade_intent.cluster_id,
+        worst_case_risk=decision.stake_usd, matrix_cold=trade_intent.matrix_cold,
+        token_id=trade_intent.token_id, entry_price=decision.price_exec, frozen=False,
+    )
+    return Portfolio(nav=portfolio.nav, positions=portfolio.positions + (pos,))
 
 
 class PaperSigner:
@@ -41,87 +240,3 @@ class PaperSigner:
         # Shadow: record which positions the breaker asked to exit. Real venue de-risking
         # (GTD brackets / cancelAll) is S2/POL-4 + S4.
         self.flattened.append(tuple(p.token_id for p in positions))
-
-
-def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
-                    cluster_model=None, breaker=None):
-    """Process every PROPOSED intent in FIFO order; return the updated portfolio.
-
-    Runs the L7 breaker FIRST (when wired): on FLATTEN it signals the exit through the seam, and on
-    FLATTEN/FREEZE_ADDS it blocks all new adds this cycle (existing positions are held). Each
-    surviving intent is re-priced off the live book, sized against the current portfolio with its
-    learned co-move ClusterView, recorded + audited, and folded on ACCEPT (the cross-intent
-    contract). A raising intent is isolated to REJECT(internal_error) so it can't wedge the queue."""
-    block_reason = None
-    if breaker is not None:
-        state = breaker.evaluate(portfolio.positions, book_for)
-        if state.action == FLATTEN:
-            signer.flatten(portfolio.positions)
-            block_reason = "l7_flatten"
-        elif state.action == FREEZE_ADDS:
-            block_reason = "l7_freeze"
-
-    for intent in store.pending():
-        trade_intent = None
-        try:
-            if block_reason is not None:
-                decision = Decision("REJECT", None, None, block_reason)
-            else:
-                cluster = _cluster_view(cluster_model, intent, portfolio)
-                trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm)
-                book = book_for(trade_intent.token_id)
-                if book is None:
-                    # No live book to re-price against -> fail closed (never size off the proposal).
-                    decision = Decision("REJECT", None, None, "no_book")
-                else:
-                    decision = evaluate_intent(trade_intent, book, portfolio, caps,
-                                               calib_score=calib_score, cluster=cluster)
-        except Exception:
-            # One malformed intent must not wedge the FIFO queue head: fail it closed + audit,
-            # and keep processing the rest.
-            decision = Decision("REJECT", None, None, "internal_error")
-        store.record_decision(intent.intent_id, decision)
-        if decision.verdict == "ACCEPT":
-            signer.place(intent, decision)
-            portfolio = _fold(portfolio, trade_intent, decision)
-    return portfolio
-
-
-def _cluster_view(cluster_model, intent, portfolio):
-    """The learned co-move verdict for this intent's cluster. A None model -> fail-closed cold (the
-    slice-1 path). The cluster spans the intent's token + every open position sharing its cluster_id.
-
-    LIMITATION (review M2, tracked for a follow-up): cluster_id is the ``event_id`` PLACEHOLDER, so
-    the per-cluster cap currently keys off the same field as the per-event UNION cap -- it fails
-    SAFE (over-couples within an event) but does NOT yet discriminate cross-event latent drivers, so
-    slice-3's "earned relaxation" is effectively dormant until a real latent-cluster assignment lands
-    (a natural consumer of this same co-move matrix). Do not mistake this alias for the final
-    cluster taxonomy."""
-    if cluster_model is None:
-        return _COLD
-    cluster_id = intent.event_id
-    tokens = [intent.token_id]
-    tokens += [p.token_id for p in portfolio.positions if p.cluster_id == cluster_id]
-    return cluster_model.view(tokens)
-
-
-def _to_trade_intent(intent, *, matrix_cold):
-    # The ERS populates the risk keys (NOT Hermes-trusted). resolution_source + cluster_id come
-    # from the proposal's ids (slice-2 placeholders); matrix_cold is driven by the co-move
-    # ClusterView (matrix_cold == not warm, so cold positions keep the <=3 count gate).
-    return TradeIntent(
-        token_id=intent.token_id, condition_id=intent.condition_id, event_id=intent.event_id,
-        resolution_source=intent.condition_id, cluster_id=intent.event_id,
-        p=intent.p, max_price=intent.max_price, size_usd_suggestion=intent.size_usd_suggestion,
-        matrix_cold=matrix_cold,
-    )
-
-
-def _fold(portfolio, trade_intent, decision):
-    pos = OpenPosition(
-        condition_id=trade_intent.condition_id, event_id=trade_intent.event_id,
-        resolution_source=trade_intent.resolution_source, cluster_id=trade_intent.cluster_id,
-        worst_case_risk=decision.stake_usd, matrix_cold=trade_intent.matrix_cold,
-        token_id=trade_intent.token_id, entry_price=decision.price_exec, frozen=False,
-    )
-    return Portfolio(nav=portfolio.nav, positions=portfolio.positions + (pos,))

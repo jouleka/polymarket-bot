@@ -201,3 +201,22 @@ def test_warm_cluster_model_applies_the_per_cluster_cap(tmp_path):
         assert store.get("i1").decision_stake_usd == Decimal("8")
         assert store.get("i1").decision_reason == "per_cluster_cap"
         assert final.positions[-1].matrix_cold is False
+
+
+# --- S6: HermesPipeline wiring ---------------------------------------------------------------
+# These reuse the module-level _book / _P / _store helpers already defined at the top of this file.
+
+def test_pipeline_none_is_exactly_the_slice3_accept_path(tmp_path):
+    # The S6 seam is purely additive: with pipeline omitted (None), process_pending behaves
+    # identically to slice-3 -- the i1 ACCEPT, $12 per_trade stake, paper place, and fold all hold.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, pipeline=None)
+
+        assert store.get("i1").status == "ACCEPTED"
+        assert store.get("i1").decision_stake_usd == Decimal("12")
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        assert len(final.positions) == 1 and final.positions[0].worst_case_risk == Decimal("12")
