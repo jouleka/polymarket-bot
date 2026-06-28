@@ -2,10 +2,11 @@
 
 Safety properties under test:
   * zero/placeholder inputs (the S6 state; live D1-D6 wiring is POL-9-deferred) -> FLAG_ONLY, never AVOID;
-  * a CRITICAL composite OR an INSIDER_LIKE classification -> AVOID with reason "detector_avoid";
+  * a single-Critical-subscore override OR an INSIDER_LIKE classification -> AVOID (policy reason in v.reasons);
   * toxicity()'s ValueError-on-negative-size is CAUGHT (not propagated) and yields a safe verdict;
   * FOLLOW stays off: action is never FOLLOW across the input space;
-  * p_flow (the smart-money confirmation signal) is surfaced as a Decimal.
+  * p_flow (the smart-money confirmation signal) is surfaced as a Decimal;
+  * catalyst_present is a reserved POL-9 seam, inert at S6.
 """
 
 from decimal import Decimal
@@ -42,12 +43,16 @@ def test_zero_inputs_yield_flag_only_never_avoid():
     assert v.p_flow == Decimal(0)
 
 
-def test_critical_composite_avoids_with_detector_reason():
-    # D2 = 0.95 >= critical_subscore (0.8) -> composite band escalates to >= HIGH -> policy AVOID.
+def test_critical_subscore_override_escalates_to_avoid():
+    # D2 = 0.95 >= critical_subscore (0.8) fires the single-Critical-subscore OVERRIDE -> band escalates
+    # to HIGH (NOT the CRITICAL band, which needs composite value >= 7.5 ~= mean subscore >= 0.75) ->
+    # policy AVOID.
     inputs = DetectorInputs(d2=Decimal("0.95"))
     v = _orch().evaluate(_Intent(), inputs=inputs)
     assert v.action == AVOID
-    assert REASON_DETECTOR_AVOID == "detector_avoid"
+    # NB: REASON_DETECTOR_AVOID ("detector_avoid") is the ERS LOOP's reject reason (Task 8 process_pending
+    # maps AVOID -> REJECT detector_avoid); it is NOT a detector-level entry in v.reasons. The behavioral
+    # check is the policy reason below.
     assert "informed_flow" in v.reasons
 
 
@@ -94,3 +99,15 @@ def test_p_flow_surfaces_d6_smart_money_as_decimal():
     # And zero d6 -> zero p_flow.
     z = _orch().evaluate(_Intent(), inputs=DetectorInputs(d6=Decimal(0)))
     assert z.p_flow == Decimal(0)
+
+
+def test_catalyst_present_is_reserved_and_inert_at_s6():
+    # At S6 d2..d6 are PRE-COMPUTED sub-scores; catalyst_present is a RESERVED POL-9 seam the
+    # orchestrator does NOT consume. Two inputs identical except catalyst_present (with a non-zero,
+    # already-computed d3) must yield an IDENTICAL verdict -- pinning the current deferred contract.
+    # POL-9 must make a corroborated catalyst cancel D3 at the sub-score COMPUTATION stage (upstream,
+    # via d3_abnormal_move(move_strength, catalyst_present=...)); this test will change then.
+    base = dict(d3=Decimal("0.8"))
+    v_no = _orch().evaluate(_Intent(), inputs=DetectorInputs(catalyst_present=False, **base))
+    v_yes = _orch().evaluate(_Intent(), inputs=DetectorInputs(catalyst_present=True, **base))
+    assert v_no == v_yes

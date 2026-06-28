@@ -38,6 +38,12 @@ class DetectorInputs:
     d5: Decimal = Decimal(0)
     d6: Decimal = Decimal(0)
     classification: str = "NOISE"
+    # RESERVED POL-9 seam -- NOT consumed at S6. At S6, d2..d6 arrive PRE-COMPUTED (already-normalized
+    # [0,1] sub-scores fed straight to composite()); the raw->sub-score computation is POL-9's job.
+    # POL-9 will apply catalyst_present at THAT stage, where d3_abnormal_move(move_strength,
+    # catalyst_present=...) zeroes D3 on a corroborated public catalyst. The orchestrator must NOT call
+    # d3_abnormal_move on inputs.d3 -- inputs.d3 is already a sub-score, not a raw move_strength
+    # (calling it here would double-compute / type-mismatch).
     catalyst_present: bool = False
 
 
@@ -69,6 +75,9 @@ class DetectorOrchestrator:
             pull_quotes = False
 
         # D2-D6 are already-normalized [0,1] floats at S6 (zeros until POL-9 wires the live inputs).
+        # inputs.d3 is consumed AS A SUB-SCORE -- we do NOT call d3_abnormal_move on it. inputs.catalyst_present
+        # is the RESERVED POL-9 seam (NOT consumed here): POL-9 applies it upstream at the raw->sub-score
+        # stage, where d3_abnormal_move(move_strength, catalyst_present=...) zeroes D3 on a public catalyst.
         d2 = float(inputs.d2)
         d3 = float(inputs.d3)
         d4 = float(inputs.d4)
