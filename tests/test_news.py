@@ -276,3 +276,18 @@ def test_publisher_group_explicit_value_overrides_derivation():
     t = Source("wire-b", "https://news.othercdn.example/b.xml", PRIMARY,
                publisher_group="somewire-group")
     assert s.publisher_group == t.publisher_group
+
+
+def test_default_allowlist_fed_feeds_share_publisher_group():
+    """REGRESSION INVARIANT (S6 truth-gate): fed-press and fed-monetary are BOTH
+    federalreserve.gov, so they MUST resolve to the same publisher_group and therefore
+    NEVER count as two independent corroborating primaries."""
+    from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+
+    by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
+    fed_press = by_name["fed-press"]
+    fed_monetary = by_name["fed-monetary"]
+    assert fed_press.publisher_group == fed_monetary.publisher_group
+    assert fed_press.publisher_group == "federalreserve.gov"
+    assert by_name["sec-press"].publisher_group != fed_press.publisher_group
+    assert by_name["sec-press"].publisher_group == "sec.gov"
