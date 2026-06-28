@@ -69,3 +69,26 @@ def test_record_rejects_non_finite_prob(tmp_path):
             )
         # Nothing was written.
         assert log.all() == ()
+
+
+def test_record_rejects_out_of_range_prob(tmp_path):
+    # mid > 1 is rejected; the field name appears in the error (loud + locatable).
+    with _log(tmp_path) as log:
+        with pytest.raises(ValueError, match="mid"):
+            log.record(
+                "intent-oob",
+                p_news=Decimal("0.70"), p_base=Decimal("0.55"),
+                p_micro=Decimal("0.50"), p_flow=Decimal("0.50"),
+                w_news_effective=0.20, corroborated=True, mid=Decimal("1.5"),
+            )
+        assert log.all() == ()
+
+    # And a negative p_flow is rejected too.
+    with _log(tmp_path) as log:
+        with pytest.raises(ValueError, match="p_flow"):
+            log.record(
+                "intent-neg",
+                p_news=Decimal("0.70"), p_base=Decimal("0.55"),
+                p_micro=Decimal("0.50"), p_flow=Decimal("-0.01"),
+                w_news_effective=0.20, corroborated=True, mid=Decimal("0.52"),
+            )
