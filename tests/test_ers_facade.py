@@ -118,10 +118,21 @@ def test_structural_sweep_no_signer_or_status_path(tmp_path):
 
         # (b) No dispose/mutate/signer attribute is reachable on the facade,
         #     by any access path (hasattr covers inherited + instance attrs).
-        for forbidden in ("place", "flatten", "record_decision", "pending",
-                          "signer", "store"):
-            assert not hasattr(facade, forbidden), forbidden
-            assert forbidden not in dir(facade), forbidden
+        #     Also check the SINGLE-underscore variant: the public==allowed sweep
+        #     in (a) filters out leading-underscore names, so a leaked
+        #     `_sign_and_submit` / `_record_decision` (or a bare `_sign`) would
+        #     slip past it. The facade is the entire safety boundary -- the sweep
+        #     must be airtight.
+        for name in ("place", "flatten", "record_decision", "pending",
+                     "signer", "store", "sign", "submit", "cancel"):
+            assert not hasattr(facade, name), f"forbidden attr exposed: {name}"
+            assert name not in dir(facade), name
+            assert not hasattr(facade, "_" + name), \
+                f"forbidden single-underscore attr exposed: _{name}"
+
+        # (b2) The facade must not be callable -- a __call__ would be an
+        #      unguarded dispatch/payload path outside the 7 named methods.
+        assert not callable(facade), "facade must not be callable (__call__ is an unguarded path)"
 
         # (c) The facade did NOT subclass IntentStore (composition only), so it
         #     inherits none of the store's dispose methods.
