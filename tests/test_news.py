@@ -291,3 +291,17 @@ def test_default_allowlist_fed_feeds_share_publisher_group():
     assert fed_press.publisher_group == "federalreserve.gov"
     assert by_name["sec-press"].publisher_group != fed_press.publisher_group
     assert by_name["sec-press"].publisher_group == "sec.gov"
+
+
+def test_default_allowlist_all_entries_construct_with_a_group():
+    """Backward-compat + completeness: every existing allowlist entry still constructs
+    and exposes a non-empty publisher_group (explicit or derived)."""
+    from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+
+    assert len(DEFAULT_ALLOWLIST) == 6
+    for s in DEFAULT_ALLOWLIST:
+        assert s.publisher_group, f"empty publisher_group for {s.name}"
+    by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
+    assert by_name["bea-news"].publisher_group == "bea.gov"          # apps.bea.gov -> bea.gov
+    assert by_name["cftc-press"].publisher_group == "cftc.gov"
+    assert by_name["google-news-top"].publisher_group == "google.com"
