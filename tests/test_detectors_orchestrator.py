@@ -60,3 +60,14 @@ def test_insider_like_classification_avoids_even_at_low_band():
     v = _orch().evaluate(_Intent(), inputs=inputs)
     assert v.action == AVOID
     assert "insider_like" in v.reasons
+
+
+def test_negative_size_is_caught_and_yields_a_safe_verdict():
+    # A negative buy_size makes toxicity() raise ValueError; the orchestrator must swallow it and
+    # degrade to a safe verdict rather than letting the exception wedge the per-intent guard.
+    inputs = DetectorInputs(buy_size=Decimal("-10"), sell_size=Decimal("50"),
+                            baseline_mean=Decimal("0.2"), baseline_std=Decimal("0.1"))
+    v = _orch().evaluate(_Intent(), inputs=inputs)   # must NOT raise
+    assert v.action == FLAG_ONLY
+    assert v.pull_quotes is False
+    assert v.p_flow == Decimal(0)
