@@ -289,3 +289,47 @@ def test_citations_are_matched_never_fetched(tmp_path):
 
     assert calls == []                                   # no fetch attempted
     assert v.refused is True and v.reason == REASON_TRUTH_GATE_REFUSE
+
+
+def _seed_raw(store, stamper, source, event_id, *, entities):
+    """Like _seed but lets the test set entities directly (incl. an empty tuple or a
+    crafted cross-source event_id reference) -- needed to model the C1 tampering
+    vectors where an attacker controls one allowlisted feed's provenance fields."""
+    store.append(make_envelope(stamper, source=source.name, source_tier=source.tier,
+                               event_id=event_id, content="text",
+                               published_at=None, entities=entities, market_links=()))
+
+
+def test_single_source_cannot_forge_corroboration_via_collision(tmp_path):
+    # C1 regression: a SINGLE attacker-controlled allowlisted feed must NOT be able to
+    # manufacture corroborated=True by making one citation match envelopes across >1
+    # publisher_group. A citation whose matches span >1 group is AMBIGUOUS (a tampering
+    # signature) and contributes ZERO groups. Both confirmed vectors are covered.
+
+    # --- Vector 1: the "entities" provenance-injection vector ---
+    # A real SEC envelope (sec.gov) and an attacker fed-press envelope (federalreserve.gov)
+    # whose entities smuggle the SEC envelope's event_id. ONE citation of that event_id
+    # matches BOTH (SEC via event_id, fed via entities) -> ambiguous -> NOT corroborated.
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev1.db")) as store:
+        _seed_raw(store, stamper, _SEC, "sec-evt-1", entities=())
+        _seed_raw(store, stamper, _FED, "fed-evt-1", entities=("sec-evt-1",))
+        now = stamper.stamp()
+        v = verify(("sec-evt-1",), event_store=store, book=_book(),
+                   allowlist=_ALLOWLIST, now_ns=now, config=_CFG)
+    assert v.corroborated is False   # one controlled source cannot fake independence
+
+    # --- Vector 2: the event_id-collision vector ---
+    # The EventStore key is (source, event_id), so two envelopes can share an event_id.
+    # ONE citation "dup" matches both (fed.gov + sec.gov) -> ambiguous -> contributes
+    # nothing. With NO clean primary attestation, the proposal's only "evidence" is a
+    # cross-group collision, which is not valid evidence -> refuse (truth_gate_refuse).
+    stamper2 = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev2.db")) as store:
+        _seed_raw(store, stamper2, _FED, "dup", entities=())
+        _seed_raw(store, stamper2, _SEC, "dup", entities=())
+        now2 = stamper2.stamp()
+        v2 = verify(("dup",), event_store=store, book=_book(),
+                    allowlist=_ALLOWLIST, now_ns=now2, config=_CFG)
+    assert v2.corroborated is False
+    assert v2.refused is True and v2.reason == REASON_TRUTH_GATE_REFUSE

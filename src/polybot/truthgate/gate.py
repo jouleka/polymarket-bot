@@ -54,22 +54,34 @@ def _group_for(allowlist):
     return {s.name: (s.tier, s.publisher_group) for s in allowlist}
 
 
-def _matched_primaries(citations, *, event_store, by_name):
-    """Resolve citation strings to envelopes (match on event_id OR a provenance link
-    in entities), keep ONLY allowlisted PRIMARY envelopes. Citations are matched,
-    never fetched. Returns the list of (envelope, publisher_group) kept."""
-    wanted = set(citations)
-    kept = []
+def _matches_citation(env, citation):
+    """A citation matches an envelope iff it equals the envelope's event_id (guid) OR
+    appears in its entities (the neutralized provenance link). Citations are matched,
+    never fetched."""
+    return env.event_id == citation or citation in env.entities
+
+
+def _primary_matches_per_citation(citations, *, event_store, by_name):
+    """Resolve EACH DISTINCT citation independently to the allowlisted-PRIMARY
+    envelopes it matches (on event_id OR a provenance link in entities). Returns
+    {citation: [(envelope, publisher_group), ...]}. Citations are matched, never
+    fetched. DISCOVERY / non-allowlisted envelopes never appear (they cannot count
+    toward, or defend against, anything)."""
+    primaries = []
     for env in event_store.all():
-        if env.event_id in wanted or wanted.intersection(env.entities):
-            meta = by_name.get(env.source)
-            if meta is None:
-                continue                      # not allowlisted -> dropped
-            tier, group = meta
-            if tier != PRIMARY:
-                continue                      # DISCOVERY never counts / triggers
-            kept.append((env, group))
-    return kept
+        meta = by_name.get(env.source)
+        if meta is None:
+            continue                          # not allowlisted -> dropped
+        tier, group = meta
+        if tier != PRIMARY:
+            continue                          # DISCOVERY never counts / triggers
+        primaries.append((env, group))
+
+    per_citation = {}
+    for citation in set(citations):
+        per_citation[citation] = [(env, group) for env, group in primaries
+                                  if _matches_citation(env, citation)]
+    return per_citation
 
 
 def _is_thin_pushed(book, config):
@@ -82,6 +94,8 @@ def _is_thin_pushed(book, config):
         return False
     bid_usd = bid * bid_size
     ask_usd = ask * ask_size
+    # min() is an intentional conservative over-approximation of "thin": if EITHER side
+    # is thin the book is treated as thin (easier to trip the collusion guard = safe).
     depth_usd = min(bid_usd, ask_usd)
     spread = ask - bid
     return depth_usd < config.thin_book_depth_usd and spread >= config.thin_book_move
@@ -89,23 +103,50 @@ def _is_thin_pushed(book, config):
 
 def verify(citations, *, event_store, book, allowlist, now_ns, config):
     by_name = _group_for(allowlist)
-    matched = _matched_primaries(citations, event_store=event_store, by_name=by_name)
+    per_citation = _primary_matches_per_citation(
+        citations, event_store=event_store, by_name=by_name)
 
-    if not matched:
-        # news-only with no allowlisted primary corroboration -> refuse-and-alert.
+    # AMBIGUOUS-CITATION EXCLUSION (C1 defense): a SINGLE allowlisted feed must not be
+    # able to forge independent corroboration. Per DISTINCT citation, look at the set of
+    # publisher_groups of the PRIMARY envelopes it matches:
+    #   0 groups -> no match (ignore);
+    #   exactly 1 group -> a CLEAN attestation of that group (record it + freshness);
+    #   >1 group -> AMBIGUOUS (a cross-group collision -- the entities-injection or the
+    #               (source, event_id) collision vector) -> drop entirely, contributes
+    #               nothing. Fail-safe: a tampering signature can never manufacture
+    #               corroboration.
+    clean_groups = set()        # distinct groups with a clean (unambiguous) attestation
+    clean_fresh_groups = set()  # of those, the groups with >=1 FRESH matched envelope
+    for matches in per_citation.values():
+        if not matches:
+            continue
+        groups = {group for _env, group in matches}
+        if len(groups) != 1:
+            continue            # ambiguous cross-group citation -> tampering -> drop
+        (group,) = tuple(groups)
+        clean_groups.add(group)
+        # freshness `<=` is inclusive on purpose: the boundary counts as fresh (the
+        # safe direction for the same-source collusion guard, which fires on freshness).
+        if any(now_ns - env.observed_at <= config.freshness_window_ns
+               for env, _group in matches):
+            clean_fresh_groups.add(group)
+
+    if not clean_groups:
+        # Zero clean allowlisted-primary attestations -> refuse-and-alert. This also
+        # catches the all-ambiguous case (a proposal whose only "evidence" is a
+        # cross-group collision is not valid evidence) so a refuse is never lost.
         return TruthVerdict(refused=True, reason=REASON_TRUTH_GATE_REFUSE,
                             corroborated=False, primary_groups=())
 
-    groups = tuple(sorted({group for _env, group in matched}))
-    corroborated = len(groups) >= 2
+    groups = tuple(sorted(clean_groups))
+    corroborated = len(clean_groups) >= 2
 
     # Same-source / indirect-prompt-injection refusal: the p-moving citations trace to
-    # exactly ONE fresh source AND the book is thin enough that that one source could
-    # have pushed the mid. Corroboration (>=2 distinct groups) defeats this by design.
+    # exactly ONE fresh CLEAN source AND the book is thin enough that that one source
+    # could have pushed the mid. Corroboration (>=2 distinct groups) defeats this by
+    # design.
     if not corroborated:
-        fresh_groups = {group for env, group in matched
-                        if now_ns - env.observed_at <= config.freshness_window_ns}
-        if len(fresh_groups) == 1 and _is_thin_pushed(book, config):
+        if len(clean_fresh_groups) == 1 and _is_thin_pushed(book, config):
             return TruthVerdict(refused=True, reason=REASON_SAME_SOURCE,
                                 corroborated=False, primary_groups=groups)
 
