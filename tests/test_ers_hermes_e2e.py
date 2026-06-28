@@ -174,3 +174,38 @@ def test_e2e_injection_proposal_rejected_same_source_collusion_never_signs(tmp_p
             assert signer.placed == []           # the safety claim: never reached the signer
             assert ledger.get("inj1") is None     # refused -> no forecast logged
             assert clog.all() == ()               # ... and no component row either
+
+
+def test_e2e_uncorroborated_proposal_is_mid_and_prior_only(tmp_path):
+    # A single allowlisted primary -> NOT refused, but corroborated=False -> w_news_effective=0:
+    # Hermes is informational-only and the posterior reduces to mid + base-rate prior (inside the
+    # anchor band). A DEEP, healthy book so the same-source thin-book clause does NOT trip (present-
+    # but-uncorroborated, not refused). The estimate is still logged; k=0 -> SKIP. Pin
+    # w_news_effective == 0.0 and corroborated False on the recorded component row.
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as evstore:
+        _seed(evstore, stamper, source="fed-press", event_id="solo")
+        pipe, ledger, clog = _build_pipeline(tmp_path, stamper, evstore)
+        with IntentStore(str(tmp_path / "i.db"), stamper) as store:
+            facade = ProposeOnlyFacade(store)
+            facade.propose_trade(
+                "u1", token_id="t1", condition_id="m1", event_id="e1", side="BUY",
+                target_price="0.50", max_price="0.60", size_usd_suggestion="100",
+                p="0.95", p_confidence="0.7", resolution_summary="Will the favorite win?",
+                thesis="...", citations=("solo",))
+            signer = PaperSigner()
+            # DEEP, tight book so _is_thin_pushed is False -> single fresh source is present-
+            # uncorroborated (NOT same_source_collusion).
+            deep = _book("0.50", ask_size="100000", bid="0.49", bid_size="100000")
+            process_pending(store, book_for={"t1": deep}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+
+            assert store.get("u1").status == "SKIPPED"     # k=0 paper-only
+            assert store.get("u1").decision_reason == "below_min_floor"
+            assert signer.placed == []
+            rec = ledger.get("u1")
+            assert rec is not None                          # estimate logged (not refused)
+            row = clog.all()[0]
+            assert row.w_news_effective == 0.0              # Hermes informational-only
+            assert row.corroborated is False
