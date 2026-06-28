@@ -26,3 +26,15 @@ def _intent(resolution_summary="Will the incumbent win the 2026 election?"):
 def test_category_for_is_single_unknown_bucket():
     meta = StubMarketMeta()
     assert meta.category_for(_intent()) == "unknown"
+
+
+def test_question_text_for_returns_resolution_summary_verbatim():
+    meta = StubMarketMeta()
+    summary = "Will the Fed hold rates unchanged at the March meeting?"
+    assert meta.question_text_for(_intent(resolution_summary=summary)) == summary
+
+
+def test_question_text_for_passes_through_empty_summary():
+    # resolution_summary defaults to "" upstream; the stub must not substitute or raise.
+    meta = StubMarketMeta()
+    assert meta.question_text_for(_intent(resolution_summary="")) == ""
