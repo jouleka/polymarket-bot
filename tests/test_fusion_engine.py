@@ -54,6 +54,16 @@ def test_config_rejects_nonpositive_clip():
         _cfg(clip_logodds=-1.0)
 
 
+def test_config_rejects_non_finite_weights():
+    # NaN slips past a bare `< 0.0` check (IEEE 754: NaN < 0.0 is False) and would yield a
+    # Decimal("NaN") p_final with no exception -- a silent break of the fail-loud contract.
+    import math
+    for field in ("w_news", "w_base", "w_micro", "w_flow", "clip_logodds"):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValueError):
+                _cfg(**{field: bad})
+
+
 def test_recalibrate_is_identity_stub():
     # The deferred adaptive slice replaces this; v1 is a typed Decimal-in/Decimal-out no-op.
     for x in ("0.01", "0.5", "0.73", "0.999"):
