@@ -31,19 +31,63 @@ DISCOVERY = "DISCOVERY"
 
 
 class Source:
-    """An allowlisted news feed: a stable name, a URL, and a trust tier."""
+    """An allowlisted news feed: a stable name, a URL, and a trust tier.
 
-    def __init__(self, name, url, tier, kind="rss"):
+    ``publisher_group`` is the source-INDEPENDENCE key the S6 truth-gate uses: two
+    citations are independent iff their publisher_groups differ. Left empty it is
+    auto-derived from the registrable domain of ``url`` -- so two feeds on the same
+    host (e.g. both federalreserve.gov feeds) collapse to ONE group and are correctly
+    NOT counted as two independent corroborating sources. Pass an explicit
+    ``publisher_group`` to bind feeds across hosts that share an owner."""
+
+    def __init__(self, name, url, tier, kind="rss", *, publisher_group=""):
         if tier not in (PRIMARY, DISCOVERY):
             raise ValueError(f"unknown news tier: {tier!r}")
         self.name = name
         self.url = url
         self.tier = tier
         self.kind = kind
+        self.publisher_group = publisher_group or _registrable_domain(url)
 
 
 def _local(tag):
     return tag.rsplit("}", 1)[-1]  # drop any XML namespace -> local name
+
+
+# A small set of multi-label public suffixes (no tldextract dependency: pyproject
+# pins only httpx + websockets). Covers the common ccTLD second levels so a UK/AU/etc.
+# host resolves to its registrable domain rather than the bare suffix. Single-label
+# TLDs (.gov, .com, .org, ...) fall through to the simple "last two labels" rule, which
+# is exactly what collapses both federalreserve.gov feeds into one publisher_group.
+_MULTI_LABEL_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "gov.uk", "ac.uk",
+    "com.au", "net.au", "org.au", "gov.au",
+    "co.jp", "or.jp", "go.jp",
+    "co.nz", "govt.nz",
+    "com.br", "gov.br",
+    "co.in", "gov.in",
+    "com.cn", "gov.cn",
+})
+
+
+def _registrable_domain(url):
+    """Best-effort registrable domain (eTLD+1) of a URL, lowercased, no port/userinfo.
+
+    Dependency-free: handles common multi-label ccTLD suffixes explicitly, otherwise
+    takes the last two labels. Returns "" if no host can be parsed."""
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(url).hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return ""
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    last_two = ".".join(labels[-2:])
+    last_three = ".".join(labels[-3:])
+    if last_two in _MULTI_LABEL_SUFFIXES:
+        return last_three
+    return last_two
 
 
 def parse_feed(xml_text):
