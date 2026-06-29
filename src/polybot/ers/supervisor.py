@@ -55,3 +55,43 @@ class OutOfBandSupervisor:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+class WedgedSigner:
+    """Test double that BLOCKS to wedge a real ERS child (S4.3 acceptance gate).
+
+    Implements the Signer seam. The first ``wedge_after`` place() calls behave like a
+    PaperSigner (record + stage a GTD bracket so signer_A.gtd_exits is non-empty); the NEXT
+    place() BLOCKS forever (``time.sleep`` loop), so the ERS loop never returns to beat the
+    heartbeat again -> the file heartbeat goes stale -> the out-of-band supervisor must
+    hard-kill the wedged process. flatten()/cancel_all() exist for protocol completeness.
+    """
+
+    def __init__(self, wedge_after=1):
+        self._wedge_after = wedge_after
+        self._placed = 0
+        self.placed = []
+        self.flattened = []
+        self.cancelled_all = []
+        self.gtd_exits = []
+
+    def place(self, intent, decision):
+        if self._placed >= self._wedge_after:
+            while True:               # genuinely wedged: never returns
+                time.sleep(3600)
+        self._placed += 1
+        self.placed.append({"intent_id": intent.intent_id, "token_id": intent.token_id,
+                            "stake_usd": decision.stake_usd, "price_exec": decision.price_exec})
+
+    def place_gtd_bracket(self, position, *, exit_price, expiry):
+        self.gtd_exits.append({"token_id": position.token_id, "exit_price": exit_price,
+                               "expiry": expiry, "size": position.worst_case_risk})
+
+    def flatten(self, positions):
+        self.flattened.append(tuple(p.token_id for p in positions))
+
+    def cancel_all(self):
+        self.cancelled_all.append(len(self.placed))
+
+    def run_canary(self):
+        return True

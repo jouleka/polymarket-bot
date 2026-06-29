@@ -109,3 +109,125 @@ def test_on_wedge_kills_pid_and_derisks_only_on_signer_b(tmp_path):
         if child.is_alive():
             os.kill(child.pid, signal.SIGKILL)
             child.join(5)
+
+
+# --- Task 4: WedgedSigner + the subprocess-backed ACCEPTANCE GATE ----------------------------
+
+from polybot.core.clock import MonotonicStamper
+from polybot.ers.controller import ERSController
+from polybot.ers.gtd import derive_bracket
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.safety import SafetyController, RUNNING
+from polybot.ers.supervisor import WedgedSigner
+from polybot.ingestion.orderbook import LocalBook
+
+
+# --- the same canonical fixtures the ERS service tests use ---
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+SHORT_TIMEOUT = 1   # seconds; the dead-man window for the gate (real but bounded)
+
+
+def _gtd_for(decision, position, *, caps, standing_exit_total):
+    # The canonical opt-in GTD-bracket derivation (DESIGN §3 S4.2): stage a protective standing
+    # exit on each ACCEPT so signer_A.gtd_exits is non-empty -- the passive backstop the gate
+    # proves SURVIVES the wedge. `expiry` is bound here (a GTD order needs one).
+    return derive_bracket(decision, position, caps=caps, expiry=1700,
+                          standing_exit_total=standing_exit_total)
+
+
+def _wedged_ers_child(db_path, hb_path, gtd_path, ready_path):
+    """A REAL ERS child: accept >=1 position (staging a GTD bracket on signer_A), beat the
+    file heartbeat ONCE, signal ready, then WEDGE forever inside the signer so the loop never
+    beats again. Runs in a forked subprocess -- no shared in-memory state with the parent."""
+    import json as _json
+    stamper = MonotonicStamper()
+    store = IntentStore(db_path, stamper)
+    store.propose_trade("i1", **_P)
+
+    signer_a = WedgedSigner(wedge_after=1)        # places the 1st order, BLOCKS on the 2nd
+    caps = RiskCaps(dead_man_switch_timeout_seconds=SHORT_TIMEOUT)
+    controller = SafetyController(caps=caps, store=store, clock=lambda: 0.0)
+    controller.set_state(RUNNING, reason="gate_test")   # leave HALTED -> no ACCEPT, no GTD bracket
+    # Stamp the heartbeat in the SAME clock domain the parent reads it in (time.monotonic). A wall
+    # clock here vs monotonic in the parent would compute a nonsense (negative) age -> never stale.
+    hb = Heartbeat(hb_path, clock=time.monotonic)
+    ers = ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=caps,
+                        signer=signer_a, controller=controller, heartbeat=hb,
+                        gtd_for=_gtd_for, clock=lambda: 0.0)
+
+    ers.run_cycle()        # heartbeat.beat() + process_pending -> ACCEPT i1 -> signer_a.gtd_exits non-empty
+
+    # Persist the staged GTD brackets so the PARENT (separate process) can assert they survive.
+    with open(gtd_path, "w") as fh:
+        _json.dump([{"token_id": g["token_id"]} for g in signer_a.gtd_exits], fh)
+    open(ready_path, "w").close()   # tell the parent the heartbeat + GTD bracket are on disk
+
+    # Now WEDGE: a second cycle blocks forever inside WedgedSigner.place; the loop never beats again.
+    store.propose_trade("i2", **dict(_P, token_id="t1"))
+    ers.run_cycle()        # blocks inside signer_a.place (wedge_after=1 already consumed)
+
+
+def test_supervisor_hard_kills_wedged_child_and_flattens_on_signer_b(tmp_path):
+    db_path = str(tmp_path / "i.db")
+    hb_path = str(tmp_path / "hb")
+    gtd_path = str(tmp_path / "gtd.json")
+    ready = str(tmp_path / "ready")
+
+    child = mp.Process(target=_wedged_ers_child, args=(db_path, hb_path, gtd_path, ready))
+    child.start()
+    try:
+        # 1. Wait (bounded poll, NO blind sleep) for the child to have staged the GTD + heartbeat.
+        deadline = time.monotonic() + 5
+        while not os.path.exists(ready) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert os.path.exists(ready), "child never reached ready -> it failed to ACCEPT/stage"
+
+        # 2. The pre-staged GTD bracket exists on signer_A (recorded to disk by the child).
+        import json as _json
+        with open(gtd_path) as fh:
+            staged = _json.load(fh)
+        assert staged and staged[0]["token_id"] == "t1", "child did not stage a GTD bracket"
+
+        # 3. Let the FILE heartbeat genuinely go stale past the dead-man timeout (one small real wait).
+        hb = Heartbeat(hb_path)
+        time.sleep(SHORT_TIMEOUT + 0.2)
+        assert not hb.is_alive(now=time.monotonic(), timeout=SHORT_TIMEOUT)
+
+        # 4. The supervisor (its OWN signer_B) decides + acts.
+        signer_a_unused, signer_b = PaperSigner(), PaperSigner()
+        assert signer_b is not signer_a_unused
+        caps = RiskCaps(dead_man_switch_timeout_seconds=SHORT_TIMEOUT)
+        sup = OutOfBandSupervisor(signer=signer_b, heartbeat=hb, caps=caps, clock=time.monotonic)
+        assert sup.decide(now=time.monotonic()) == "FLATTEN_AND_KILL"
+
+        open_positions = (
+            OpenPosition("m1", "e1", "m1", "e1", Decimal("12"), False,
+                         token_id="t1", entry_price=Decimal("0.50"), frozen=False),
+        )
+        sup.on_wedge(child.pid, open_positions)
+
+        # 5. The child REALLY died (hard kill landed past the wedge).
+        child.join(timeout=5)
+        assert child.exitcode is not None
+
+        # 6. De-risk fired on the supervisor's OWN signer_B (cancel working entries + flatten).
+        assert signer_b.cancelled_all
+        assert signer_b.flattened == [("t1",)]
+
+        # 7. The pre-staged GTD EXIT brackets survive the wedge (passive backstop -- still on disk).
+        with open(gtd_path) as fh:
+            survived = _json.load(fh)
+        assert survived and survived[0]["token_id"] == "t1"
+    finally:
+        if child.is_alive():
+            os.kill(child.pid, signal.SIGKILL)
+            child.join(5)
