@@ -96,6 +96,17 @@ class IntentStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS op_audit (
+                op_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+                at     INTEGER NOT NULL,
+                kind   TEXT    NOT NULL,
+                reason TEXT    NOT NULL,
+                detail TEXT    NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def propose_trade(self, intent_id, *, token_id, condition_id, event_id, side,
@@ -154,6 +165,23 @@ class IntentStore:
         ).fetchall()
         return [{"intent_id": r[0], "at": r[1], "verdict": r[2],
                  "stake_usd": _dec(r[3]), "price_exec": _dec(r[4]), "reason": r[5]} for r in rows]
+
+    def record_op_event(self, *, kind, reason, detail=""):
+        """Append an IMMUTABLE op/kill/heartbeat audit row (S4.1). ``kind`` in
+        {state_change, kill, pause, flatten, heartbeat}; ``reason`` is a REASON_* code or a
+        free-form string. Append-only + the shared monotonic stamp, mirroring intent_audit, so
+        the restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
+        self._conn.execute(
+            "INSERT INTO op_audit (at, kind, reason, detail) VALUES (?, ?, ?, ?)",
+            (self._stamper.stamp(), kind, reason, detail),
+        )
+        self._conn.commit()
+
+    def op_audit_log(self):
+        rows = self._conn.execute(
+            "SELECT at, kind, reason, detail FROM op_audit ORDER BY op_id"
+        ).fetchall()
+        return [{"at": r[0], "kind": r[1], "reason": r[2], "detail": r[3]} for r in rows]
 
     def close(self):
         self._conn.close()
