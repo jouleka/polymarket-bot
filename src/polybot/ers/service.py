@@ -241,25 +241,43 @@ def _fold(portfolio, trade_intent, decision):
 
 
 class PaperSigner:
-    """Signer-seam stub: records the orders the ERS WOULD place (shadow) and the FLATTEN exits the
-    L7 breaker WOULD signal -- no keys or network, so the loop runs end-to-end in shadow (S9). The
-    real Rust signer + real venue de-risking replace it."""
+    """Signer-seam stub: records the orders the ERS WOULD place (shadow), the FLATTEN exits the
+    L7/op-FLATTEN path WOULD signal, the working-entry cancels (kill path), and the pre-staged GTD
+    EXIT brackets (the passive backstop) -- no keys or network, so the loop runs end-to-end in
+    shadow (S9). Satisfies the ers.signer.Signer Protocol. The real Rust signer + real venue
+    de-risking (POL-4) replace it.
+
+    Cancel-vs-keep (DESIGN §9): cancel_all() cancels WORKING/unfilled ENTRY orders and leaves the
+    GTD EXIT brackets STANDING -- a cancelAll that also killed the protective exits would INCREASE
+    risk on a wedge. The live POL-4 signer must implement that entry-vs-exit distinction.
+    """
 
     def __init__(self):
         self.placed = []
         self.flattened = []
-        self.cancelled_all = []
+        self.cancelled_all = []   # cancel_all() appends a marker (count of cancels issued)
+        self.gtd_exits = []       # place_gtd_bracket(...) appends the standing protective exit
 
     def place(self, intent, decision):
         self.placed.append({"intent_id": intent.intent_id, "token_id": intent.token_id,
                             "stake_usd": decision.stake_usd, "price_exec": decision.price_exec})
 
     def flatten(self, positions):
-        # Shadow: record which positions the breaker asked to exit. Real venue de-risking
-        # (GTD brackets / cancelAll) is S2/POL-4 + S4.
+        # Shadow: record which positions the breaker / op-FLATTEN asked to exit.
         self.flattened.append(tuple(p.token_id for p in positions))
 
     def cancel_all(self):
-        # Shadow stub (S4.1 seam; full implementation in S4.2 / POL-6). Records the op-FLATTEN
-        # cancel-all signal so the S4.1 tests can assert it was called without depending on S4.2.
-        self.cancelled_all.append("cancel_all")
+        # Shadow: cancel WORKING/unfilled ENTRY orders. Deliberately does NOT touch gtd_exits --
+        # the protective GTD exit brackets are the passive backstop and must SURVIVE the kill.
+        self.cancelled_all.append({"cancelled": "working_entries"})
+
+    def place_gtd_bracket(self, position, *, exit_price, expiry):
+        # Shadow: record a pre-staged protective standing exit (good-til-date). size = the
+        # position's worst-case risk (notional for a long), the dollars the exit protects.
+        self.gtd_exits.append({"token_id": position.token_id, "exit_price": exit_price,
+                               "expiry": expiry, "size": position.worst_case_risk})
+
+    def run_canary(self):
+        # Shadow: a sign+place+cancel min-size canary returns True (real signing is POL-4).
+        # NEVER blind-retries -- a real canary failure must HALT signing (S4.4), not loop.
+        return True
