@@ -64,7 +64,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-12** | C2 — off-loop EventStore writes (unblock WS shards > 2) | **DONE + pushed** |
 | **POL-4** | S2 — signing + order-construction spike (BUILD-GATING) | **BLOCKED** on the operator funding a Polymarket deposit wallet on a CLEAN non-Windows box |
 | **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE + pushed** (slice 3 = co-move matrix + per-cluster cap + L7 breaker, `origin/main` @ `d17224e`) |
-| POL-6 | S4 — Safety envelope + supervisor + reconciliation + Telegram | Not started (needs S3) |
+| **POL-6** | S4 — Safety envelope + supervisor + reconciliation + Telegram | **KILL PATH (S4.1–S4.3) DONE + pushed** (`pol-6-safety-envelope` → main; 517 tests; SafetyController op-state gate + signer de-risk/GTD/startup-self-test + out-of-band supervisor & the WEDGED-PROCESS acceptance gate — proves SIGKILL-necessity, fate-isolated, best-effort-all de-risk on the supervisor's OWN signer, GTD exits survive; PaperSigner-only/no signing; 2 Opus deep-dives + final whole-slice review. **S4.4–S4.7 (L5 anomaly, 3-way reconcile, Telegram, realized-loss breakers) are contract-level in `DESIGN-S4-SAFETY.md`, NOT yet built**) |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
@@ -75,7 +75,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 448 tests)
+## 5. What is already built (all on `origin/main`, all TDD'd + Opus-reviewed + live-verified; 517 tests)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -165,6 +165,27 @@ edge.
   category/question/seconds) · resolution-feedback wiring (warms k) · Hermes catalyst→d3/d5 · real
   cross-event latent clusters · §4.2 edge-hurdle H · a true before/after mid-diff for the same-source gate
   (DESIGN §10; the current thin+wide-book proxy is safe because uncorroborated ⇒ w_news=0 + tight anchor).
+- **S4 kill path (POL-6, S4.1–S4.3) — the safety envelope's go-live gate (shadow/PaperSigner):** `ers/safety.py
+  SafetyController` = the op-state machine (RUNNING/PAUSED/HALTED/FLATTENING) consulted at the TOP of
+  `process_pending` via `controller=` (precedence KILL > op-FLATTENING > L7-FLATTEN > FREEZE > NONE;
+  `controller=None` == pre-S4; verdict returns the SPECIFIC reason l8_kill/l8_paused/unclean_restart/op_flatten;
+  FLATTENING de-risks ONCE then settles to HALTED). `ers/controller.py ERSController` = the runloop (starts HALTED;
+  beats the heartbeat then process_pending; wires `gtd_for`). `ers/signer.py Signer` Protocol + `PaperSigner.cancel_all`
+  (KEEPS the GTD exits — cancels working entries only) / `place_gtd_bracket` / `run_canary`; `ers/gtd.py derive_bracket`
+  (aggregate standing-exit ≤ total_open). New frozen `RiskCaps` fields (weekly/consecutive/rate/GTD/skew/canary/
+  deadman/recon) — tighten-only, content-hashed; `ers/startup_selftest.py verify_or_refuse` (refuse-to-start on
+  caps-hash/pUSD-addr mismatch). `ers/heartbeat.py` = fate-isolated FILE heartbeat (atomic os.replace; +inf
+  fail-closed on missing/non-finite). `ers/supervisor.py OutOfBandSupervisor` = the separate-PROCESS watchdog:
+  `decide` (dead-man timer) + `on_wedge` (SIGKILL the ERS, then best-effort-ALL cancel_all+flatten on its OWN
+  distinct signer_B; a failing cancel can't skip flatten). **THE ACCEPTANCE GATE** (`tests/test_ers_supervisor_kill.py`,
+  subprocess-backed): a real `multiprocessing` child ACCEPTs+stages a GTD bracket then wedges → the parent supervisor
+  SIGKILLs it (child IGNORES SIGTERM/SIGINT so a `-SIGKILL` exitcode PROVES hard-kill necessity; bounded exitcode poll
+  = no flake), de-risks on signer_B, GTD exits survive. `evaluate_intent`/validator/`propose_trade` chokepoint
+  UNCHANGED; nothing signs. 2 Opus deep-dives + a final whole-slice review (APPROVED, shadow-only). **Deferred
+  (contract-level in `DESIGN-S4-SAFETY.md`):** S4.4 L5 AnomalyMonitor (clock-skew/abnormal-book/WS/API-storm/canary;
+  UMA stub) · S4.5 3-way reconciler + restart-reconcile · S4.6 Telegram (auth/nonce/safety-increasing-only) · S4.7
+  realized-loss breakers + ramp-DOWN (consumes the dormant `would_cross_daily_pending_ceiling` predicate) · the
+  live-POL-4 primitives (live cancelAll/credential-separation/real canary) + box hardening (systemd/users/egress).
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -175,6 +196,8 @@ edge.
 - `docs/DESIGN-S5-CALIBRATION.md` · `docs/DESIGN-S7-DETECTORS.md` — the calibration + detector decompositions.
 - `docs/DESIGN-S6-HERMES.md` + `docs/PLAN-S6-HERMES.md` — the S6 design (resolved forks, the 12-step pipeline,
   §10 open risks) + the executed TDD build plan.
+- `docs/DESIGN-S4-SAFETY.md` + `docs/PLAN-S4-SAFETY.md` — the S4 safety-envelope design (the 7 sub-slices, the
+  kill-path architecture, §9 open risks) + the S4.1–S4.3 TDD build plan (S4.4–S4.7 are contract-level / not built).
 - `docs/VERIFICATION-2026-06-24.md` — Phase-0 signing-path verification (rs-clob-client-v2).
 - The **POL-3, POL-5, POL-7, POL-8, POL-9, POL-12 YouTrack comments** — the detailed per-slice record.
 
@@ -188,12 +211,13 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
-- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, AND S6/POL-8 are now
-  DONE + pushed** (see §5). Recommended next, in order:
-  1. **S4 / POL-6 — safety envelope + out-of-band supervisor + 3-way reconciliation + Telegram (the kill
-     path).** Now the natural critical-path next (S4 → S9). Its acceptance gate (kill a deliberately-wedged
-     process + FLATTEN, not just halt-new) is testable against the PaperSigner NOW; only the live `cancelAll()`
-     proof needs POL-4. Mandatory before any real money.
+- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, AND the
+  S4/POL-6 KILL PATH (S4.1–S4.3) are now DONE + pushed** (see §5). Recommended next, in order:
+  1. **Finish the S4 safety envelope (POL-6, S4.4–S4.7)** — kill-path-first is done; the rest is contract-level in
+     `DESIGN-S4-SAFETY.md`, all buildable in shadow: S4.4 L5 AnomalyMonitor (clock-skew/abnormal-book/WS/API-storm/
+     signing-canary; UMA stub) · S4.5 3-way reconciler + restart-reconcile (the injected-divergence test) · S4.6
+     Telegram (auth/nonce/safety-increasing-only, fake transport) · S4.7 realized-loss breakers (daily/weekly/
+     consecutive — wires the dormant `would_cross_daily_pending_ceiling`) + auto ramp-DOWN.
   2. **S8 / POL-10 — maker-rewards module** (shadow, honest net-of-adverse-selection; consumes the D1
      `pull_quotes` seam).
   3. **S9 / POL-11 — shadow harness → ramp controller** (the capstone: paper-trade net of

@@ -114,3 +114,43 @@ def test_persists_across_restart(tmp_path):
         assert [i.intent_id for i in reopened.pending()] == ["i2"]
         assert reopened.get("i1").status == "ACCEPTED"
         assert len(reopened.audit_log()) == 1
+
+
+# --- S4.1: op/kill append-only audit table (POL-6) -------------------------------------------
+from decimal import Decimal  # noqa: F401 (harmless if already imported at top of file)
+from polybot.core.clock import MonotonicStamper
+from polybot.ers.intent_store import IntentStore
+
+
+def _op_store(path):
+    return IntentStore(path, MonotonicStamper())
+
+
+def test_record_op_event_appends_ordered_rows(tmp_path):
+    with _op_store(str(tmp_path / "i.db")) as store:
+        store.record_op_event(kind="state_change", reason="unclean_restart", detail="boot")
+        store.record_op_event(kind="kill", reason="l8_kill")  # detail defaults to ""
+        store.record_op_event(kind="flatten", reason="op_flatten", detail="2 positions")
+
+        rows = store.op_audit_log()
+        assert [r["kind"] for r in rows] == ["state_change", "kill", "flatten"]
+        assert [r["reason"] for r in rows] == ["unclean_restart", "l8_kill", "op_flatten"]
+        assert rows[0]["detail"] == "boot" and rows[1]["detail"] == ""
+        # Each row carries the shared monotonic stamp, strictly increasing in id-order.
+        ats = [r["at"] for r in rows]
+        assert ats == sorted(ats) and len(set(ats)) == 3
+
+
+def test_op_audit_log_persists_across_restart(tmp_path):
+    db = str(tmp_path / "i.db")
+    with _op_store(db) as store:
+        store.record_op_event(kind="pause", reason="l8_paused", detail="operator")
+    # Reopen the SAME path with a FRESH stamper -- the row must survive (append-only + committed).
+    with _op_store(db) as reopened:
+        rows = reopened.op_audit_log()
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "pause" and rows[0]["reason"] == "l8_paused"
+        # A new event after restart appends AFTER the persisted one (id ordering, not stamp clock).
+        reopened.record_op_event(kind="state_change", reason="unclean_restart")
+        rows = reopened.op_audit_log()
+        assert [r["kind"] for r in rows] == ["pause", "state_change"]

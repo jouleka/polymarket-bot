@@ -447,6 +447,39 @@ def test_pipeline_substitutes_fused_clamped_p_into_the_validator(tmp_path, monke
         assert ledger.get("i1").p == Decimal("0.90")
 
 
+# --- S4.2 (POL-6): GTD bracket staging on ACCEPT via opt-in gtd_for -------------------------
+
+
+def test_gtd_bracket_is_staged_for_each_accept(tmp_path):
+    # On ACCEPT the ERS pre-stages a protective GTD exit bracket on the signer right after place.
+    from polybot.ers.gtd import derive_bracket
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        gtd_for = lambda decision, position, *, caps, standing_exit_total: derive_bracket(
+            decision, position, caps=caps, expiry=1700, standing_exit_total=standing_exit_total)
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, gtd_for=gtd_for)
+        assert store.get("i1").status == "ACCEPTED"
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        # The protective standing exit was staged for the accepted position.
+        assert len(signer.gtd_exits) == 1
+        assert signer.gtd_exits[0]["token_id"] == "t1"
+        assert signer.gtd_exits[0]["size"] == Decimal("12")     # == the per_trade-capped stake
+
+
+def test_no_gtd_staging_when_gtd_for_is_none(tmp_path):
+    # gtd_for=None (the default) == today's behavior: no GTD brackets staged. Guards the 469.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer)
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.gtd_exits == []
+
+
 def test_pipeline_records_forecast_and_components_even_when_k0_skips(tmp_path, monkeypatch):
     # k=0 -> frac_eff=0 -> stake below floor -> SKIP(below_min_floor). The estimate is STILL a
     # genuine forecast, so record_forecast + ComponentLog.record happen BEFORE evaluate_intent --
@@ -543,3 +576,128 @@ def test_pipeline_non_finite_p_news_rejects_with_no_orphan_in_either_store(tmp_p
         assert signer.placed == []
         assert ledger.all() == []   # NO orphan forecast row
         assert clog.all() == ()     # and no component row either
+
+
+# --- S4.1: SafetyController loop gate (controller= kwarg) -------------------------------------
+from polybot.ers import safety as _safety
+from polybot.ers.safety import SafetyController
+
+
+def _running_controller(tmp_path, **kw):
+    """A controller already transitioned to RUNNING (so it does not block the loop)."""
+    store = IntentStore(str(tmp_path / "ctl.db"), MonotonicStamper())
+    ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0, **kw)
+    ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+    return ctl, store
+
+
+def test_controller_none_is_exactly_todays_accept_path(tmp_path):
+    # The S4.1 seam is purely additive: controller omitted (None) => identical to slice-3/S6.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, controller=None)
+
+        assert store.get("i1").status == "ACCEPTED"
+        assert store.get("i1").decision_stake_usd == Decimal("12")
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        assert len(final.positions) == 1 and final.positions[0].worst_case_risk == Decimal("12")
+
+
+def test_running_controller_lets_the_accept_path_through(tmp_path):
+    # A RUNNING controller imposes no op-block -> the loop falls through to the normal ACCEPT.
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        with _store(str(tmp_path / "i.db")) as store:
+            store.propose_trade("i1", **_P)
+            signer = PaperSigner()
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, controller=ctl)
+            assert store.get("i1").status == "ACCEPTED"
+            assert [o["token_id"] for o in signer.placed] == ["t1"]
+    finally:
+        ctl_store.close()
+
+
+def _halted_controller(tmp_path):
+    store = IntentStore(str(tmp_path / "ctl.db"), MonotonicStamper())
+    ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # starts HALTED
+    return ctl, store
+
+
+def test_halted_controller_blocks_ahead_of_an_otherwise_clean_loop(tmp_path):
+    # A HALTED controller blocks EVERY pending intent with unclean_restart, before any sizing.
+    ctl, ctl_store = _halted_controller(tmp_path)
+    try:
+        with _store(str(tmp_path / "i.db")) as store:
+            store.propose_trade("i1", **_P)
+            signer = PaperSigner()
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, controller=ctl)
+            assert store.get("i1").status == "REJECTED"
+            assert store.get("i1").decision_reason == "unclean_restart"
+            assert signer.placed == []
+    finally:
+        ctl_store.close()
+
+
+def test_op_flatten_dominates_an_l7_freeze(tmp_path):
+    # The controller is FLATTENING; the L7 breaker (if it ran) would only FREEZE_ADDS. Op-FLATTEN
+    # must dominate: the reason is op_flatten (NOT l7_freeze), and the breaker is never consulted.
+    ctl, ctl_store = _halted_controller(tmp_path)
+    ctl.set_state(_safety.FLATTENING, reason=_safety.REASON_OP_FLATTEN)
+    try:
+        with _store(str(tmp_path / "i.db")) as store:
+            store.propose_trade("i1", **_P)
+            caps = RiskCaps()
+            # A position marked into the L7 FREEZE band (drawdown ~$19.20) -- the breaker WOULD
+            # set l7_freeze, but the op-state blocks first.
+            portfolio = Portfolio(nav=Decimal("300"), positions=(_open("P", "0.50", "24"),))
+            books = {"t1": _book("0.50"), "P": _book("0.12", bid="0.08")}
+            signer = PaperSigner()
+            process_pending(store, book_for=books.get, portfolio=portfolio, caps=caps,
+                            signer=signer, controller=ctl,
+                            breaker=DrawdownBreaker(caps, clock=lambda: 0))
+            assert store.get("i1").status == "REJECTED"
+            assert store.get("i1").decision_reason == "op_flatten"  # NOT l7_freeze
+            assert signer.placed == []
+            # Op-FLATTEN de-risked via the controller (flatten signalled on the ERS's signer).
+            assert signer.flattened  # the op-flatten exit was signalled through the seam
+    finally:
+        ctl_store.close()
+
+
+def test_explicit_kill_dominates_an_l7_flatten(tmp_path):
+    # The controller is HALTED via an explicit KILL; even a position that WOULD trip the L7
+    # FLATTEN must be blocked under the op reason (the op-state is read first; the breaker is
+    # never consulted). Pin that the kill reason dominates and no l7_flatten leaks through.
+    ctl, ctl_store = _halted_controller(tmp_path)
+    ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+    ctl.set_state(_safety.HALTED, reason=_safety.REASON_L8_KILL)
+    try:
+        with _store(str(tmp_path / "i.db")) as store:
+            store.propose_trade("i1", **_P)
+            caps = RiskCaps()
+            positions = (_open("P1", "0.50", "18"), _open("P2", "0.50", "18"))
+            portfolio = Portfolio(nav=Decimal("300"), positions=positions)
+            books = {"t1": _book("0.50"),
+                     "P1": _book("0.06", bid="0.04"), "P2": _book("0.06", bid="0.04")}
+            signer = PaperSigner()
+            process_pending(store, book_for=books.get, portfolio=portfolio, caps=caps,
+                            signer=signer, controller=ctl,
+                            breaker=DrawdownBreaker(caps, clock=lambda: 0))
+            # HALTED (via KILL) blocks; the reason is the specific kill reason (l8_kill).
+            assert store.get("i1").decision_reason == _safety.REASON_L8_KILL
+            assert store.get("i1").decision_reason != "l7_flatten"
+            assert signer.placed == []
+            # HALTED does NOT itself de-risk (only FLATTENING does), so the breaker's flatten
+            # never ran -- nothing was signalled to exit.
+            assert signer.flattened == []
+            # The kill is in the op-audit trail.
+            assert any(r["reason"] == _safety.REASON_L8_KILL for r in ctl_store.op_audit_log())
+    finally:
+        ctl_store.close()
