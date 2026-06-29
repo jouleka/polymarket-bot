@@ -46,6 +46,17 @@ class RiskCaps:
     l7_flatten_floor: Decimal = Decimal("30")
     l7_velocity_delta: Decimal = Decimal("18")
     l7_velocity_window_seconds: int = 900
+    # S4 / POL-6 safety-envelope fields (DECISIONS-S0 §4; DOC-only until now). All frozen +
+    # _verify-checked + auto-covered by content_hash (asdict serialisation).
+    weekly_loss_halt: Decimal = Decimal("36")          # realized weekly loss -> halt+human-review
+    consecutive_loss: int = 3                          # N losing trades in a row -> halt
+    new_positions_per_hour: int = 2                    # budget-independent rate counter
+    new_positions_per_day: int = 6
+    gtd_bracket_aggregate: Decimal = Decimal("60")     # aggregate standing-exit ceiling (= total_open_risk)
+    clock_skew_tolerance_seconds: int = 2              # wall vs NTP skew that halts SIGNING (L5)
+    signing_canary_interval_seconds: int = 300         # cadence of the sign+place+cancel canary
+    dead_man_switch_timeout_seconds: int = 30          # stale-heartbeat age -> supervisor FLATTEN_AND_KILL
+    reconcile_tolerance: Decimal = Decimal("0.50")     # 3-way divergence tolerance (settle-window-aware)
 
     def __post_init__(self):
         self._verify()
@@ -106,6 +117,35 @@ class RiskCaps:
             raise ValueError(
                 f"l7_velocity_window_seconds must be > 0, got {self.l7_velocity_window_seconds}"
             )
+        # --- S4 / POL-6 additive invariants ---
+        # A weekly realized-loss halt must not sit BELOW the daily-pending ceiling.
+        if self.daily_pending_ceiling > self.weekly_loss_halt:
+            raise ValueError(
+                f"weekly_loss_halt({self.weekly_loss_halt}) must be >= daily_pending_ceiling "
+                f"({self.daily_pending_ceiling})"
+            )
+        # The aggregate GTD standing-exit ceiling IS the absolute at-risk ceiling -- never looser.
+        if self.gtd_bracket_aggregate != self.total_open_risk:
+            raise ValueError(
+                f"gtd_bracket_aggregate({self.gtd_bracket_aggregate}) must equal total_open_risk "
+                f"({self.total_open_risk})"
+            )
+        # The hourly new-position rate cannot exceed the daily rate.
+        if self.new_positions_per_hour > self.new_positions_per_day:
+            raise ValueError(
+                f"new_positions_per_hour({self.new_positions_per_hour}) must be <= "
+                f"new_positions_per_day({self.new_positions_per_day})"
+            )
+        # All the new strictly-positive scalars.
+        if self.weekly_loss_halt <= 0:
+            raise ValueError(f"weekly_loss_halt must be > 0, got {self.weekly_loss_halt}")
+        if self.reconcile_tolerance <= 0:
+            raise ValueError(f"reconcile_tolerance must be > 0, got {self.reconcile_tolerance}")
+        for name in ("consecutive_loss", "new_positions_per_hour", "new_positions_per_day",
+                     "clock_skew_tolerance_seconds", "signing_canary_interval_seconds",
+                     "dead_man_switch_timeout_seconds"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be > 0, got {getattr(self, name)}")
 
     def cluster_cap(self, rho):
         """Aggregate worst-case-risk cap for a WARM co-move cluster with representative
