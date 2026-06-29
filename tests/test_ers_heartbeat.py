@@ -42,6 +42,18 @@ def test_counter_increases_monotonically_across_beats(tmp_path):
     assert c1 < c2 < c3
 
 
+def test_non_finite_stamp_is_fail_closed_not_alive(tmp_path):
+    # A corrupt / injected non-finite stamp must NOT defeat the dead-man switch. A +inf stored
+    # time would otherwise compute age = now - (+inf) = -inf -> "alive forever" -> the switch
+    # never fires. We reject ANY non-finite stamp (math.isfinite) -> +inf age -> fail closed.
+    path = str(tmp_path / "hb")
+    writer = Heartbeat(path, clock=lambda: float("inf"))
+    writer.beat()
+    reader = Heartbeat(path, clock=lambda: 100.0)   # own handle, out-of-process style
+    assert reader.last_beat_age(now=100.0) == math.inf
+    assert not reader.is_alive(now=100.0, timeout=5.0)
+
+
 def test_read_is_out_of_process_safe_via_a_fresh_handle(tmp_path):
     # A reader constructed AFTER the writer (no shared in-memory state) sees the beat:
     # this is exactly what the supervisor in another process does.

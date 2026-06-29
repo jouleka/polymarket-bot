@@ -149,6 +149,11 @@ def _wedged_ers_child(db_path, hb_path, gtd_path, ready_path):
     file heartbeat ONCE, signal ready, then WEDGE forever inside the signer so the loop never
     beats again. Runs in a forked subprocess -- no shared in-memory state with the parent."""
     import json as _json
+    # A genuinely-wedged interpreter can swallow SIGTERM/SIGINT (the whole reason the supervisor
+    # uses SIGKILL). Model that here: IGNORE both so ONLY SIGKILL can take this child down. This
+    # makes the gate itself PROVE SIGKILL-necessity -- a SIGTERM would no longer kill the child.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     stamper = MonotonicStamper()
     store = IntentStore(db_path, stamper)
     store.propose_trade("i1", **_P)
@@ -215,15 +220,21 @@ def test_supervisor_hard_kills_wedged_child_and_flattens_on_signer_b(tmp_path):
         )
         sup.on_wedge(child.pid, open_positions)
 
-        # 5. The child REALLY died (hard kill landed past the wedge).
+        # 5. The child REALLY died BY SIGKILL (not a clean SIGTERM exit). The child IGNORES
+        #    SIGTERM/SIGINT, so a -signal.SIGKILL exitcode proves the supervisor's hard kill (not a
+        #    softer signal) is what took the wedged process down -- the SIGKILL rationale, asserted.
         child.join(timeout=5)
-        assert child.exitcode is not None
+        assert child.exitcode == -signal.SIGKILL
 
         # 6. De-risk fired on the supervisor's OWN signer_B (cancel working entries + flatten).
         assert signer_b.cancelled_all
         assert signer_b.flattened == [("t1",)]
 
-        # 7. The pre-staged GTD EXIT brackets survive the wedge (passive backstop -- still on disk).
+        # 7. The staged GTD bracket is still on disk -- venue-side standing exits are OUT of the
+        #    kill path's reach and persist a wedge (this proves persistence past the wedge, NOT the
+        #    cancel-vs-keep semantics: on_wedge's cancel_all fired on the PARENT's separate signer_B
+        #    in a different process and physically cannot touch this file). The cancel_all-leaves-
+        #    exits invariant is proven separately by test_cancel_all_keeps_the_gtd_exit_brackets.
         with open(gtd_path) as fh:
             survived = _json.load(fh)
         assert survived and survived[0]["token_id"] == "t1"
