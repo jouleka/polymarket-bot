@@ -163,3 +163,34 @@ def test_read_tools_fail_loud_without_reader(tmp_path):
             facade.get_ledger()
         with pytest.raises(TypeError):
             facade.get_flags("t1")
+
+
+def test_structural_sweep_no_s4_kill_or_op_state_surface(tmp_path):
+    """S4.1 (POL-6): the new operational control surface (kill / pause / flatten / cancel_all /
+    op-state mutation) is a SEPARATE authority path (L6 supervisor + L8 Telegram) and must NOT be
+    reachable through the Hermes facade. A compromised/confused Hermes can at worst enqueue a
+    PROPOSED row -- it can never stop, flatten, cancel, or re-state the bot. Mirror the existing
+    sweep: forbid the bare AND single-underscore form of every S4 control verb."""
+    with _store(tmp_path) as store:
+        facade = ProposeOnlyFacade(store)
+
+        # (a) The public surface is STILL exactly the 7 allowed names -- S4 added nothing.
+        allowed = {
+            "propose_trade", "get", "audit_log",
+            "get_market", "get_book", "get_ledger", "get_flags",
+        }
+        public = {name for name in dir(facade) if not name.startswith("_")}
+        assert public == allowed, f"S4 leaked public surface: {public ^ allowed}"
+
+        # (b) No S4 kill-path / op-state-mutation attribute is reachable, bare OR single-underscore.
+        for name in ("cancel_all", "kill", "pause", "resume", "halt", "flatten",
+                     "set_state", "state", "verdict", "active_caps", "controller",
+                     "record_op_event", "op_audit_log", "place_gtd_bracket", "run_canary"):
+            assert not hasattr(facade, name), f"S4 forbidden attr exposed: {name}"
+            assert name not in dir(facade), name
+            assert not hasattr(facade, "_" + name), \
+                f"S4 forbidden single-underscore attr exposed: _{name}"
+
+        # (c) Still not callable and still composition-only over the store (no new dispatch path).
+        assert not callable(facade)
+        assert getattr(facade, "_ProposeOnlyFacade__store", None) is store
