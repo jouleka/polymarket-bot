@@ -107,8 +107,12 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             portfolio = _fold(portfolio, trade_intent, decision)
             if gtd_for is not None:
                 # Pre-stage the protective GTD exit for the just-folded position (the passive
-                # backstop). standing_exit_total = the aggregate already staged this cycle, so the
-                # derivation enforces caps.gtd_bracket_aggregate. The folded position is the last one.
+                # backstop), enforcing caps.gtd_bracket_aggregate via the derivation. The folded
+                # position is the last one. NOTE (shadow limitation): standing sums the append-only
+                # gtd_exits, which is never decremented on exit/flatten -- it's CUMULATIVE, not
+                # currently-standing, so over a long shadow run it can over-approximate and
+                # fail-CLOSED (refuse a legitimate new bracket). Safe (never over-stages); the live
+                # POL-4 signer must track currently-STANDING exits, not the cumulative total.
                 position = portfolio.positions[-1]
                 standing = sum((Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0))
                 bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
