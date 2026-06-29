@@ -95,13 +95,13 @@ reconcile as a dormant-by-default seam.
    │  -> ReconResult(status, divergences, onchain_confirmed_exposure, settling_tokens, triggers)                   │
    └───────────────────────────────────────────────┬───────────────────────────────────────────────────────────┘
                           ┌─────────────────────────┴──────────────────────────┐
-                          ▼ (boot)                                              ▼ (per cycle, dormant-by-default seam)
-   ┌──── RestartReconciler.reconcile_on_boot() ────┐         ┌──── ERSController.run_cycle (reconciler=None seam) ────┐
-   │  replay stores -> rebuild internal ledger      │         │  OK/DORMANT keep RUNNING; DIVERGED -> set_state(HALTED,│
-   │  -> rebuild Portfolio from on-chain-confirmed  │         │  l5_recon_mismatch). reconciler=None => no reconcile   │
-   │     ∩ ACCEPTED -> reconcile                     │         │  (the scaffold's behavior; shadow tests stay green).   │
-   │  OK/DORMANT -> set_state(RUNNING); else stay    │         └────────────────────────────────────────────────────┘
-   │  HALTED(unclean_restart). Returns the portfolio.│
+                          ▼ (boot — THIS slice)                                 ▼ (per-cycle running cadence — DEFERRED to S4.4)
+   ┌──── RestartReconciler.reconcile_on_boot() ────┐         ┌──── S4.4 AnomalyMonitor (consumes ReconResult) ────────┐
+   │  replay stores -> rebuild internal ledger      │         │  OK/DORMANT keep RUNNING; DIVERGED -> the AnomalyMonitor│
+   │  -> rebuild Portfolio from on-chain-confirmed  │         │  sets op-state HALTED(l5_recon_mismatch). S4.5 delivers │
+   │     ∩ ACCEPTED -> reconcile                     │         │  the pure reconciler the cadence will call; the cadence │
+   │  OK/DORMANT -> set_state(RUNNING); else stay    │         │  SEAM + its action are S4.4's (no dead half-wire now).  │
+   │  HALTED(unclean_restart). Returns the portfolio.│         └────────────────────────────────────────────────────┘
    └────────────────────────────────────────────────┘
 ```
 
