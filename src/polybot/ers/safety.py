@@ -25,6 +25,9 @@ PAUSED = "PAUSED"
 HALTED = "HALTED"
 FLATTENING = "FLATTENING"
 
+# The complete op-state vocabulary -- set_state whitelists against it (fail-closed on anything else).
+_VALID_STATES = frozenset({RUNNING, PAUSED, HALTED, FLATTENING})
+
 # --- S4.1 reason codes (free-form Decision.reason strings; NO validator/schema change) -------
 REASON_L8_KILL = "l8_kill"
 REASON_L8_PAUSED = "l8_paused"
@@ -69,7 +72,13 @@ class SafetyController:
         """Operator/L8-driven transition. Appends an immutable op-audit row, then swaps the
         in-memory op-state + reason. Audit-before-mutate so a crash mid-call leaves an
         explanation. The stored reason is what verdict() reports -- so a kill records l8_kill
-        and verdict blocks with l8_kill (not a generic 'halted'). Same for pause/flatten."""
+        and verdict blocks with l8_kill (not a generic 'halted'). Same for pause/flatten.
+
+        M1: this is the privileged L8/operator authority path, so it fail-closes on an unknown
+        op-state (ValueError) -- validated BEFORE the audit write so a bogus state is never even
+        recorded or applied."""
+        if op_state not in _VALID_STATES:
+            raise ValueError(f"unknown op_state: {op_state!r} (expected one of {sorted(_VALID_STATES)})")
         self._store.record_op_event(kind="state_change", reason=reason, detail=op_state)
         self._state = op_state
         self._reason = reason
@@ -87,8 +96,10 @@ class SafetyController:
         RUNNING    -> no block (None): the loop falls through to the L7 breaker unchanged.
         HALTED     -> block with the stored reason.
         PAUSED     -> block with the stored reason.
-        FLATTENING -> block with stored reason AND de-risk: signal the exit + cancel working
-                      entries, exactly as the L7-FLATTEN short-circuit does, but ahead of it.
+        FLATTENING -> block with stored reason AND de-risk ONCE: signal the exit + cancel working
+                      entries, exactly as the L7-FLATTEN short-circuit does, but ahead of it, THEN
+                      settle to HALTED (I1) so subsequent cycles block via HALTED and do NOT re-fire
+                      the de-risk (a repeated live cancelAll would churn the protective GTD exits).
 
         A KILL is modelled as the HALTED op-state reached via set_state(HALTED, reason=l8_kill);
         the stored reason is l8_kill, and verdict() blocks with l8_kill -- distinct from the
@@ -106,6 +117,15 @@ class SafetyController:
             self._store.record_op_event(
                 kind="flatten", reason=REASON_OP_FLATTEN,
                 detail=f"{len(portfolio.positions)} positions")
-            return OpVerdict(FLATTENING, self._reason, REASON_OP_FLATTEN, ("op_flatten",))
-        # HALTED (startup default unclean_restart OR explicit kill/halt) -> block with stored reason.
-        return OpVerdict(HALTED, self._reason, None, ("halted",))
+            verdict = OpVerdict(FLATTENING, self._reason, REASON_OP_FLATTEN, ("op_flatten",))
+            # I1: de-risk fires ONCE -- settle to HALTED (reason unchanged) so the NEXT cycle blocks
+            # via HALTED without re-firing flatten/cancel_all. This cycle still reports FLATTENING.
+            self._state = HALTED
+            return verdict
+        if self._state == HALTED:
+            # HALTED (startup default unclean_restart OR explicit kill/halt) -> block (stored reason).
+            return OpVerdict(HALTED, self._reason, None, ("halted",))
+        # M2: defensive fallthrough -- block under the stored reason but report the state HONESTLY
+        # (action=self._state) so a future unexpected state truthfully reaches the S4.3 supervisor /
+        # audit consumer rather than masquerading as HALTED.
+        return OpVerdict(self._state, self._reason, None, (self._state.lower(),))

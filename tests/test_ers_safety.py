@@ -150,3 +150,36 @@ def test_startup_halted_returns_unclean_restart_reason(tmp_path):
         v = ctl.verdict(Portfolio(nav=Decimal("300")), _RecordingSigner())
         assert v.block_reason == safety.REASON_UNCLEAN_RESTART
         assert v.block_reason != safety.REASON_L8_KILL
+
+
+def test_flattening_derisks_once_then_settles_to_halted(tmp_path):
+    # I1 lifecycle: FLATTENING must de-risk EXACTLY ONCE, then settle to HALTED so subsequent
+    # cycles block via HALTED without re-firing flatten/cancel_all (a repeated live cancelAll would
+    # churn the protective GTD exit brackets). The FIRST verdict reports op_flatten + de-risks;
+    # after it the state is HALTED and the de-risk does not fire again.
+    with _store(tmp_path) as store:
+        ctl = _ctl(tmp_path, store)
+        ctl.set_state(safety.FLATTENING, reason=safety.REASON_OP_FLATTEN)
+        signer = _RecordingSigner()
+        portfolio = Portfolio(nav=Decimal("300"), positions=(_pos("A"), _pos("B")))
+
+        first = ctl.verdict(portfolio, signer)
+        assert first.block_reason == safety.REASON_OP_FLATTEN
+        assert first.action == safety.FLATTENING
+        # After the first cycle the controller has settled to HALTED (reason unchanged).
+        assert ctl.state() == safety.HALTED
+
+        # A second cycle still BLOCKS but must NOT re-fire the de-risk.
+        ctl.verdict(portfolio, signer)
+        assert len(signer.flattened) == 1     # de-risk fired ONCE, not twice
+        assert len(signer.cancelled_all) == 1
+
+
+def test_set_state_rejects_unknown_state(tmp_path):
+    # M1: set_state is the privileged L8/operator authority path -- it must fail closed on an
+    # unknown op-state rather than silently accept a state verdict() can't reason about.
+    import pytest
+    with _store(tmp_path) as store:
+        ctl = _ctl(tmp_path, store)
+        with pytest.raises(ValueError):
+            ctl.set_state("BOGUS", reason=safety.REASON_L8_PAUSED)

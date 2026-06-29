@@ -248,6 +248,7 @@ class PaperSigner:
     def __init__(self):
         self.placed = []
         self.flattened = []
+        self.cancelled_all = []
 
     def place(self, intent, decision):
         self.placed.append({"intent_id": intent.intent_id, "token_id": intent.token_id,
@@ -261,5 +262,4 @@ class PaperSigner:
     def cancel_all(self):
         # Shadow stub (S4.1 seam; full implementation in S4.2 / POL-6). Records the op-FLATTEN
         # cancel-all signal so the S4.1 tests can assert it was called without depending on S4.2.
-        self.cancelled_all = getattr(self, "cancelled_all", [])
         self.cancelled_all.append("cancel_all")
