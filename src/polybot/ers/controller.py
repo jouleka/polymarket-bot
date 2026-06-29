@@ -1,0 +1,48 @@
+"""ERSController -- the long-lived runloop / cadence driver (S4.1 scaffold / POL-6).
+
+NONE exists today: process_pending is per-call pure, and S3 had no loop owner. This scaffold owns
+the SafetyController, wraps process_pending, and exposes the cadence hook (run_cycle) that later
+sub-slices extend (L7 evaluate is already wired via the breaker= passthrough; S4.2 adds the
+signing canary, S4.5 the reconcile). It starts effectively HALTED: the held SafetyController is
+HALTED on construction, so the first cycle never trades until a clean transition (S4.5) flips it
+to RUNNING.
+
+Each run_cycle: beat the heartbeat (fate-isolated file; if wired) THEN drive process_pending with
+the controller consulted FIRST. The beat-before-process order matters: the out-of-band supervisor
+(S4.3) watches the heartbeat, so a cycle that is about to process must first prove liveness.
+Clocks are injected for deterministic TDD.
+"""
+
+from polybot.ers.service import process_pending
+
+
+class ERSController:
+    def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
+                 heartbeat=None, clock):
+        self._store = store
+        self._book_for = book_for
+        self._caps = caps
+        self._signer = signer
+        self._controller = controller   # the SafetyController (starts HALTED)
+        self._breaker = breaker
+        self._pipeline = pipeline
+        self._heartbeat = heartbeat
+        self._clock = clock
+        # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
+        # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
+        self._portfolio = self._empty_portfolio()
+
+    def _empty_portfolio(self):
+        from polybot.ers.validator import Portfolio
+        return Portfolio(nav=self._caps.nav)
+
+    def run_cycle(self):
+        """One cadence tick: beat (if wired) THEN process_pending(controller=...). Returns the
+        updated portfolio (threaded for the next cycle)."""
+        if self._heartbeat is not None:
+            self._heartbeat.beat()
+        self._portfolio = process_pending(
+            self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
+            signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
+            controller=self._controller)
+        return self._portfolio
