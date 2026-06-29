@@ -17,6 +17,7 @@ POL-4-deferred; this is the shadow PaperSigner proof.
 
 import os
 import signal
+import sys
 import time
 
 OK = "OK"
@@ -30,6 +31,9 @@ class OutOfBandSupervisor:
         self._heartbeat = heartbeat
         self._caps = caps
         self._clock = clock or time.monotonic
+        # De-risk failures (cancel_all / flatten) are RECORDED here rather than propagated -- the
+        # kill is the critical part; de-risk is best-effort (see on_wedge).
+        self.derisk_errors = []
 
     def decide(self, now):
         timeout = self._caps.dead_man_switch_timeout_seconds
@@ -38,14 +42,27 @@ class OutOfBandSupervisor:
         return FLATTEN_AND_KILL   # stale / never-beaten -> fail closed
 
     def on_wedge(self, ers_pid, open_positions):
-        """Hard-kill the wedged ERS, then de-risk on the supervisor's OWN signer.
+        """Hard-kill the wedged ERS, then de-risk (best-effort) on the supervisor's OWN signer.
 
         Order is load-bearing: kill FIRST (stop the wedged loop from doing anything more),
         THEN cancel working entries + flatten on signer_B. The GTD exit brackets staged on
-        signer_A are left standing (the passive backstop)."""
+        signer_A are left standing (the passive backstop).
+
+        De-risk is BEST-EFFORT-ALL: cancel_all and flatten run in SEPARATE try/except blocks, so a
+        failing cancel_all (a live venue/network error -- precisely the wedge scenario) does NOT
+        skip the flatten, and NEITHER failure propagates out of on_wedge. The kill already landed;
+        a de-risk that raised would only strand the rest of the de-risk. Failures are recorded on
+        self.derisk_errors (the supervisor is its own process)."""
         self._hard_kill(ers_pid)
-        self._signer.cancel_all()
-        self._signer.flatten(open_positions)
+        self._best_effort("cancel_all", lambda: self._signer.cancel_all())
+        self._best_effort("flatten", lambda: self._signer.flatten(open_positions))
+
+    def _best_effort(self, name, fn):
+        try:
+            fn()
+        except Exception as exc:   # noqa: BLE001 -- de-risk MUST NOT propagate; record + continue
+            self.derisk_errors.append((name, repr(exc)))
+            print(f"OutOfBandSupervisor de-risk {name} failed: {exc!r}", file=sys.stderr)
 
     @staticmethod
     def _hard_kill(pid):

@@ -94,9 +94,11 @@ def test_on_wedge_kills_pid_and_derisks_only_on_signer_b(tmp_path):
         )
         sup.on_wedge(child.pid, open_positions)
 
-        # (a) the child PID was hard-killed
-        child.join(timeout=5)
-        assert child.exitcode is not None
+        # (a) the child PID was hard-killed. Bounded poll (not a single fixed join): the join can
+        # return before the OS has reaped the SIGKILLed child -> exitcode None -> spurious red.
+        deadline = time.monotonic() + 3.0
+        while child.exitcode is None and time.monotonic() < deadline:
+            child.join(timeout=0.05)
         assert child.exitcode == -signal.SIGKILL   # killed by SIGKILL, not a clean exit
 
         # (b) de-risk landed on signer_B's OWN seam ...
@@ -105,6 +107,77 @@ def test_on_wedge_kills_pid_and_derisks_only_on_signer_b(tmp_path):
         # ... and signer_A (the wedged ERS signer) was NOT touched
         assert signer_a.cancelled_all == []
         assert signer_a.flattened == []
+    finally:
+        if child.is_alive():
+            os.kill(child.pid, signal.SIGKILL)
+            child.join(5)
+
+
+# --- on_wedge de-risk is BEST-EFFORT-ALL (a failing primitive can't skip the others) ---------
+
+
+class _RaisingCancelSigner:
+    """signer_B double whose cancel_all() raises (a live venue/network error -- the wedge case)."""
+
+    def __init__(self):
+        self.flattened = []
+
+    def cancel_all(self):
+        raise RuntimeError("venue cancel_all timed out")
+
+    def flatten(self, positions):
+        self.flattened.append(tuple(p.token_id for p in positions))
+
+
+class _RaisingFlattenSigner:
+    """signer_B double whose flatten() raises after cancel_all() has already run."""
+
+    def __init__(self):
+        self.cancelled_all = []
+
+    def cancel_all(self):
+        self.cancelled_all.append("working_entries")
+
+    def flatten(self, positions):
+        raise RuntimeError("venue flatten timed out")
+
+
+def _one_position():
+    return (
+        OpenPosition("m", "e", "s", "c", Decimal("12"), False,
+                     token_id="t1", entry_price=Decimal("0.50"), frozen=False),
+    )
+
+
+def test_on_wedge_flattens_even_if_cancel_all_raises(tmp_path):
+    # The kill already landed; de-risk must be best-effort. A failing cancel_all must NOT skip the
+    # flatten, and the exception must NOT propagate out of on_wedge (the kill is the critical part).
+    signer_b = _RaisingCancelSigner()
+    sup = OutOfBandSupervisor(signer=signer_b, heartbeat=Heartbeat(str(tmp_path / "hb")),
+                              caps=_caps_dms(5), clock=time.monotonic)
+    child = mp.Process(target=_sleep_forever)
+    child.start()
+    try:
+        sup.on_wedge(child.pid, _one_position())   # must NOT raise despite cancel_all failing
+        assert signer_b.flattened == [("t1",)]      # flatten STILL ran after the cancel raise
+        assert sup.derisk_errors                     # the cancel failure was recorded, not swallowed silently
+    finally:
+        if child.is_alive():
+            os.kill(child.pid, signal.SIGKILL)
+            child.join(5)
+
+
+def test_on_wedge_does_not_propagate_when_flatten_raises(tmp_path):
+    # Symmetric: a failing flatten must not propagate; cancel_all already ran before it.
+    signer_b = _RaisingFlattenSigner()
+    sup = OutOfBandSupervisor(signer=signer_b, heartbeat=Heartbeat(str(tmp_path / "hb")),
+                              caps=_caps_dms(5), clock=time.monotonic)
+    child = mp.Process(target=_sleep_forever)
+    child.start()
+    try:
+        sup.on_wedge(child.pid, _one_position())   # must NOT raise despite flatten failing
+        assert signer_b.cancelled_all == ["working_entries"]  # cancel_all ran before the flatten raise
+        assert sup.derisk_errors                              # the flatten failure was recorded
     finally:
         if child.is_alive():
             os.kill(child.pid, signal.SIGKILL)
@@ -223,7 +296,12 @@ def test_supervisor_hard_kills_wedged_child_and_flattens_on_signer_b(tmp_path):
         # 5. The child REALLY died BY SIGKILL (not a clean SIGTERM exit). The child IGNORES
         #    SIGTERM/SIGINT, so a -signal.SIGKILL exitcode proves the supervisor's hard kill (not a
         #    softer signal) is what took the wedged process down -- the SIGKILL rationale, asserted.
-        child.join(timeout=5)
+        #    Bounded poll, not a single fixed join: the join can return before the OS reaps the
+        #    SIGKILLed child -> exitcode None -> a spurious red on this GO-LIVE gate. Reaping is
+        #    near-instant; the poll absorbs scheduler jitter and makes the gate deterministic.
+        deadline = time.monotonic() + 3.0
+        while child.exitcode is None and time.monotonic() < deadline:
+            child.join(timeout=0.05)
         assert child.exitcode == -signal.SIGKILL
 
         # 6. De-risk fired on the supervisor's OWN signer_B (cancel working entries + flatten).
