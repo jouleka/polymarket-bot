@@ -447,6 +447,39 @@ def test_pipeline_substitutes_fused_clamped_p_into_the_validator(tmp_path, monke
         assert ledger.get("i1").p == Decimal("0.90")
 
 
+# --- S4.2 (POL-6): GTD bracket staging on ACCEPT via opt-in gtd_for -------------------------
+
+
+def test_gtd_bracket_is_staged_for_each_accept(tmp_path):
+    # On ACCEPT the ERS pre-stages a protective GTD exit bracket on the signer right after place.
+    from polybot.ers.gtd import derive_bracket
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        gtd_for = lambda decision, position, *, caps, standing_exit_total: derive_bracket(
+            decision, position, caps=caps, expiry=1700, standing_exit_total=standing_exit_total)
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, gtd_for=gtd_for)
+        assert store.get("i1").status == "ACCEPTED"
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        # The protective standing exit was staged for the accepted position.
+        assert len(signer.gtd_exits) == 1
+        assert signer.gtd_exits[0]["token_id"] == "t1"
+        assert signer.gtd_exits[0]["size"] == Decimal("12")     # == the per_trade-capped stake
+
+
+def test_no_gtd_staging_when_gtd_for_is_none(tmp_path):
+    # gtd_for=None (the default) == today's behavior: no GTD brackets staged. Guards the 469.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer)
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.gtd_exits == []
+
+
 def test_pipeline_records_forecast_and_components_even_when_k0_skips(tmp_path, monkeypatch):
     # k=0 -> frac_eff=0 -> stake below floor -> SKIP(below_min_floor). The estimate is STILL a
     # genuine forecast, so record_forecast + ComponentLog.record happen BEFORE evaluate_intent --
