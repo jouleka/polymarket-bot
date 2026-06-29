@@ -49,9 +49,15 @@ class Heartbeat:
         if len(parts) != 2:
             return None
         try:
-            return int(parts[0]), float(parts[1])
+            counter, ts = int(parts[0]), float(parts[1])
         except ValueError:
             return None
+        if not math.isfinite(ts):
+            # A corrupt / injected non-finite stamp (inf/-inf/nan) must NOT defeat the dead-man:
+            # a -inf stamp would yield a -inf age (always "alive"). Treat it as unreadable ->
+            # +inf age -> fail closed (the switch fires).
+            return None
+        return counter, ts
 
     def read_counter(self):
         rec = self._read()
