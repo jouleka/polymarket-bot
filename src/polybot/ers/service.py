@@ -51,16 +51,33 @@ class HermesPipeline:
 
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
-                    cluster_model=None, breaker=None, pipeline=None):
+                    cluster_model=None, breaker=None, pipeline=None, controller=None,
+                    gtd_for=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
     FREEZE_ADDS blocks adds (l7_freeze). Each surviving intent is processed inside a per-intent
     try/except so one malformed intent can't wedge the FIFO queue. On ACCEPT the signer is called
     THEN the portfolio is folded before the next intent (the cross-intent caps contract). When
-    pipeline is None this is exactly slice-3; when supplied, the S6 chain engages."""
+    pipeline is None this is exactly slice-3; when supplied, the S6 chain engages.
+
+    gtd_for (S4.2): optional callable ``(decision, position, *, caps, standing_exit_total) ->
+    Bracket`` -- when supplied, a protective GTD exit bracket is pre-staged for every ACCEPT.
+    ``gtd_for=None`` (the default) == today's behavior: no GTD staging, the 469 baseline holds."""
+    # 1. Op-state gate (S4.1): consulted FIRST so a KILL/PAUSE/op-FLATTEN op-state dominates the
+    #    L7 breaker. controller=None => exactly today's behavior (the existing tests stay green).
+    #    Precedence: KILL/PAUSE/op_flatten (controller) > l7_flatten > l7_freeze > none.
     block_reason = None
-    if breaker is not None:
+    if controller is not None:
+        op = controller.verdict(portfolio, signer)
+        if op.block_reason is not None:
+            # The controller already fired any de-risk (op-FLATTEN -> signer.flatten/cancel_all)
+            # inside verdict(); here we just dominate the loop with its block_reason.
+            block_reason = op.block_reason
+
+    # 2. L7 drawdown breaker (EXISTING, unchanged) -- only consulted if the op-state did NOT
+    #    already block, so op_flatten can never be overwritten by a weaker l7_freeze/none.
+    if block_reason is None and breaker is not None:
         state = breaker.evaluate(portfolio.positions, book_for)
         if state.action == FLATTEN:
             signer.flatten(portfolio.positions)
@@ -88,6 +105,19 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
         if decision.verdict == "ACCEPT":
             signer.place(intent, decision)
             portfolio = _fold(portfolio, trade_intent, decision)
+            if gtd_for is not None:
+                # Pre-stage the protective GTD exit for the just-folded position (the passive
+                # backstop), enforcing caps.gtd_bracket_aggregate via the derivation. The folded
+                # position is the last one. NOTE (shadow limitation): standing sums the append-only
+                # gtd_exits, which is never decremented on exit/flatten -- it's CUMULATIVE, not
+                # currently-standing, so over a long shadow run it can over-approximate and
+                # fail-CLOSED (refuse a legitimate new bracket). Safe (never over-stages); the live
+                # POL-4 signer must track currently-STANDING exits, not the cumulative total.
+                position = portfolio.positions[-1]
+                standing = sum((Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0))
+                bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
+                signer.place_gtd_bracket(position, exit_price=bracket.exit_price,
+                                         expiry=bracket.expiry)
     return portfolio
 
 
@@ -229,19 +259,43 @@ def _fold(portfolio, trade_intent, decision):
 
 
 class PaperSigner:
-    """Signer-seam stub: records the orders the ERS WOULD place (shadow) and the FLATTEN exits the
-    L7 breaker WOULD signal -- no keys or network, so the loop runs end-to-end in shadow (S9). The
-    real Rust signer + real venue de-risking replace it."""
+    """Signer-seam stub: records the orders the ERS WOULD place (shadow), the FLATTEN exits the
+    L7/op-FLATTEN path WOULD signal, the working-entry cancels (kill path), and the pre-staged GTD
+    EXIT brackets (the passive backstop) -- no keys or network, so the loop runs end-to-end in
+    shadow (S9). Satisfies the ers.signer.Signer Protocol. The real Rust signer + real venue
+    de-risking (POL-4) replace it.
+
+    Cancel-vs-keep (DESIGN §9): cancel_all() cancels WORKING/unfilled ENTRY orders and leaves the
+    GTD EXIT brackets STANDING -- a cancelAll that also killed the protective exits would INCREASE
+    risk on a wedge. The live POL-4 signer must implement that entry-vs-exit distinction.
+    """
 
     def __init__(self):
         self.placed = []
         self.flattened = []
+        self.cancelled_all = []   # cancel_all() appends a marker (count of cancels issued)
+        self.gtd_exits = []       # place_gtd_bracket(...) appends the standing protective exit
 
     def place(self, intent, decision):
         self.placed.append({"intent_id": intent.intent_id, "token_id": intent.token_id,
                             "stake_usd": decision.stake_usd, "price_exec": decision.price_exec})
 
     def flatten(self, positions):
-        # Shadow: record which positions the breaker asked to exit. Real venue de-risking
-        # (GTD brackets / cancelAll) is S2/POL-4 + S4.
+        # Shadow: record which positions the breaker / op-FLATTEN asked to exit.
         self.flattened.append(tuple(p.token_id for p in positions))
+
+    def cancel_all(self):
+        # Shadow: cancel WORKING/unfilled ENTRY orders. Deliberately does NOT touch gtd_exits --
+        # the protective GTD exit brackets are the passive backstop and must SURVIVE the kill.
+        self.cancelled_all.append({"cancelled": "working_entries"})
+
+    def place_gtd_bracket(self, position, *, exit_price, expiry):
+        # Shadow: record a pre-staged protective standing exit (good-til-date). size = the
+        # position's worst-case risk (notional for a long), the dollars the exit protects.
+        self.gtd_exits.append({"token_id": position.token_id, "exit_price": exit_price,
+                               "expiry": expiry, "size": position.worst_case_risk})
+
+    def run_canary(self):
+        # Shadow: a sign+place+cancel min-size canary returns True (real signing is POL-4).
+        # NEVER blind-retries -- a real canary failure must HALT signing (S4.4), not loop.
+        return True
