@@ -51,14 +51,19 @@ class HermesPipeline:
 
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
-                    cluster_model=None, breaker=None, pipeline=None, controller=None):
+                    cluster_model=None, breaker=None, pipeline=None, controller=None,
+                    gtd_for=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
     FREEZE_ADDS blocks adds (l7_freeze). Each surviving intent is processed inside a per-intent
     try/except so one malformed intent can't wedge the FIFO queue. On ACCEPT the signer is called
     THEN the portfolio is folded before the next intent (the cross-intent caps contract). When
-    pipeline is None this is exactly slice-3; when supplied, the S6 chain engages."""
+    pipeline is None this is exactly slice-3; when supplied, the S6 chain engages.
+
+    gtd_for (S4.2): optional callable ``(decision, position, *, caps, standing_exit_total) ->
+    Bracket`` -- when supplied, a protective GTD exit bracket is pre-staged for every ACCEPT.
+    ``gtd_for=None`` (the default) == today's behavior: no GTD staging, the 469 baseline holds."""
     # 1. Op-state gate (S4.1): consulted FIRST so a KILL/PAUSE/op-FLATTEN op-state dominates the
     #    L7 breaker. controller=None => exactly today's behavior (the existing tests stay green).
     #    Precedence: KILL/PAUSE/op_flatten (controller) > l7_flatten > l7_freeze > none.
@@ -100,6 +105,15 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
         if decision.verdict == "ACCEPT":
             signer.place(intent, decision)
             portfolio = _fold(portfolio, trade_intent, decision)
+            if gtd_for is not None:
+                # Pre-stage the protective GTD exit for the just-folded position (the passive
+                # backstop). standing_exit_total = the aggregate already staged this cycle, so the
+                # derivation enforces caps.gtd_bracket_aggregate. The folded position is the last one.
+                position = portfolio.positions[-1]
+                standing = sum((Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0))
+                bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
+                signer.place_gtd_bracket(position, exit_price=bracket.exit_price,
+                                         expiry=bracket.expiry)
     return portfolio
 
 
