@@ -51,7 +51,7 @@ class HermesPipeline:
 
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
-                    cluster_model=None, breaker=None, pipeline=None):
+                    cluster_model=None, breaker=None, pipeline=None, controller=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
@@ -59,8 +59,20 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
     try/except so one malformed intent can't wedge the FIFO queue. On ACCEPT the signer is called
     THEN the portfolio is folded before the next intent (the cross-intent caps contract). When
     pipeline is None this is exactly slice-3; when supplied, the S6 chain engages."""
+    # 1. Op-state gate (S4.1): consulted FIRST so a KILL/PAUSE/op-FLATTEN op-state dominates the
+    #    L7 breaker. controller=None => exactly today's behavior (the existing tests stay green).
+    #    Precedence: KILL/PAUSE/op_flatten (controller) > l7_flatten > l7_freeze > none.
     block_reason = None
-    if breaker is not None:
+    if controller is not None:
+        op = controller.verdict(portfolio, signer)
+        if op.block_reason is not None:
+            # The controller already fired any de-risk (op-FLATTEN -> signer.flatten/cancel_all)
+            # inside verdict(); here we just dominate the loop with its block_reason.
+            block_reason = op.block_reason
+
+    # 2. L7 drawdown breaker (EXISTING, unchanged) -- only consulted if the op-state did NOT
+    #    already block, so op_flatten can never be overwritten by a weaker l7_freeze/none.
+    if block_reason is None and breaker is not None:
         state = breaker.evaluate(portfolio.positions, book_for)
         if state.action == FLATTEN:
             signer.flatten(portfolio.positions)
@@ -245,3 +257,9 @@ class PaperSigner:
         # Shadow: record which positions the breaker asked to exit. Real venue de-risking
         # (GTD brackets / cancelAll) is S2/POL-4 + S4.
         self.flattened.append(tuple(p.token_id for p in positions))
+
+    def cancel_all(self):
+        # Shadow stub (S4.1 seam; full implementation in S4.2 / POL-6). Records the op-FLATTEN
+        # cancel-all signal so the S4.1 tests can assert it was called without depending on S4.2.
+        self.cancelled_all = getattr(self, "cancelled_all", [])
+        self.cancelled_all.append("cancel_all")
