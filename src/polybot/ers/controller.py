@@ -18,7 +18,7 @@ from polybot.ers.service import process_pending
 
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
-                 heartbeat=None, clock):
+                 heartbeat=None, gtd_for=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -27,6 +27,10 @@ class ERSController:
         self._breaker = breaker
         self._pipeline = pipeline
         self._heartbeat = heartbeat
+        # gtd_for (S4.2 seam): an opt-in callable that pre-stages a protective GTD exit bracket on
+        # each ACCEPT (passed straight through to process_pending). gtd_for=None (the default) ==
+        # today's behavior -- no GTD staging -- so the S4.1 controller tests stay green.
+        self._gtd_for = gtd_for
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -44,5 +48,5 @@ class ERSController:
         self._portfolio = process_pending(
             self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
-            controller=self._controller)
+            controller=self._controller, gtd_for=self._gtd_for)
         return self._portfolio
