@@ -129,3 +129,17 @@ class SafetyController:
         # (action=self._state) so a future unexpected state truthfully reaches the S4.3 supervisor /
         # audit consumer rather than masquerading as HALTED.
         return OpVerdict(self._state, self._reason, None, (self._state.lower(),))
+
+
+# --- S4.2 / POL-6: pure halt-new predicates -------------------------------------------------
+
+
+def would_cross_daily_pending_ceiling(*, pending_today, new_worst_case, caps):
+    """True if accepting ``new_worst_case`` would push today's pending worst-case-risk FLOW past
+    caps.daily_pending_ceiling ($24). A pending-FLOW rate gate (new dollars proposed per day),
+    DISTINCT from the validator's at-risk STOCK cap (total_open_risk) and the L7 unrealized
+    breaker -- so it never double-counts. Fail-closed: blocks on a STRICT crossing (> ceiling);
+    allows at-or-below. The SafetyController (S4.1) consults this and emits the halt-new
+    block_reason; the per-day pending total is read from the durable fill/op tables.
+    """
+    return (pending_today + new_worst_case) > caps.daily_pending_ceiling
