@@ -158,8 +158,10 @@ Build order front-loads the acceptance gate. **S4.1–S4.3 are this effort.** Ea
   auto-covered by `content_hash`): `weekly_loss_halt=36`, `consecutive_loss=3`, `new_positions_rate` (≤2/hr
   ≤6/day), `gtd_bracket_aggregate` sizing rule, `clock_skew_tolerance_seconds=2`, `signing_canary_interval`,
   `dead_man_switch_timeout`, `reconcile_tolerance`. Extend `_verify` ordering invariants (e.g.
-  `consecutive_loss_$ ≤ daily_pending_ceiling ≤ weekly_loss_halt`). **Wire the existing-but-unenforced
-  `daily_pending_ceiling` ($24)** into the loop's halt-new check.
+  `consecutive_loss_$ ≤ daily_pending_ceiling ≤ weekly_loss_halt`). Build the `daily_pending_ceiling`
+  ($24) halt-new check as a **pure tested predicate** (`would_cross_daily_pending_ceiling`); its actual
+  *consumption* (the SafetyController emitting the halt-new block_reason) is **S4.7** (which adds the durable
+  per-day pending total it needs) — staged here but dormant until then.
 - **Startup self-test** (`ers/startup_selftest.py`): promote `content_hash()` to a real refuse-to-start gate —
   verify the signed `RiskCaps` `content_hash`, the pUSD address `0xC011a7E1…E82DFB`, and the
   contract/struct/domain hashes. (ERC-20 allowance + real sign-canary checks are seams → POL-4/deploy.)

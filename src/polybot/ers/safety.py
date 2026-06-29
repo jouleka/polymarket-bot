@@ -139,7 +139,10 @@ def would_cross_daily_pending_ceiling(*, pending_today, new_worst_case, caps):
     caps.daily_pending_ceiling ($24). A pending-FLOW rate gate (new dollars proposed per day),
     DISTINCT from the validator's at-risk STOCK cap (total_open_risk) and the L7 unrealized
     breaker -- so it never double-counts. Fail-closed: blocks on a STRICT crossing (> ceiling);
-    allows at-or-below. The SafetyController (S4.1) consults this and emits the halt-new
-    block_reason; the per-day pending total is read from the durable fill/op tables.
+    allows at-or-below. SEAM (not yet wired): this is a pure, tested predicate staged ahead of
+    its consumer. The S4.7 realized-loss-breaker sub-slice WILL call it (and have the
+    SafetyController emit the halt-new block_reason) once the durable per-day pending total
+    exists -- that fill/pending ledger does not exist yet (only op_audit does), so wiring it
+    now would require fabricated state. Until S4.7, this gate is dormant.
     """
     return (pending_today + new_worst_case) > caps.daily_pending_ceiling
