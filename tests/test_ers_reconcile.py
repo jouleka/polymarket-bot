@@ -123,3 +123,49 @@ def test_clob_balances_ignores_non_positions_data_api_envelope():
                      observed_at=1, content=json.dumps({"asset": "99", "size": "5"}))
     out = clob_balances([trade, _positions_env("42", "7")])
     assert set(out) == {"42"}
+
+
+# ---------------------------------------------------------------------------
+# Task 8: onchain_balances -- fold Polygon ERC-1155 transfers (DORMANT sentinel + fail-closed)
+# ---------------------------------------------------------------------------
+
+def _chain_env(event, *, eid="0xtx:0"):
+    # Mirrors polygon.py: content is json.dumps({"log": log, "event": event}).
+    return Envelope(source="polygon-chain", source_tier="CHAIN", event_id=eid,
+                    observed_at=1, content=json.dumps({"log": {}, "event": event},
+                                                      sort_keys=True, default=str))
+
+
+def _single(frm, to, token, value):
+    return {"kind": "transfer_single", "operator": "0xop", "from": frm, "to": to,
+            "token_id": token, "value": value}
+
+
+WALLET = "0xCAFE000000000000000000000000000000000001"
+
+
+def test_onchain_balances_wallet_none_is_dormant_sentinel():
+    """In pure shadow there is no chain truth; wallet=None returns the DORMANT
+    sentinel None so the reconciler short-circuits to DORMANT (permits RUNNING)."""
+    from polybot.ers.reconcile import onchain_balances
+    assert onchain_balances([_chain_env(_single("0xa", WALLET, "42", "5000000"))],
+                            wallet=None) is None
+
+
+def test_onchain_balances_credits_a_transfer_to_our_wallet():
+    """A TransferSingle with to == our wallet credits +value/10**6 shares for that
+    token_id; address comparison is case-insensitive (the chain emits checksum case)."""
+    from polybot.ers.reconcile import onchain_balances
+    out = onchain_balances([_chain_env(_single("0xseller", WALLET, "42", "5000000"))],
+                           wallet=WALLET.lower())
+    assert out["42"].shares == Decimal("5")  # 5_000_000 / 10**6
+    assert out["42"].latest_fill_at is None
+
+
+def test_onchain_balances_ignores_a_transfer_not_involving_our_wallet():
+    """A transfer between two third parties touches neither from nor to == our wallet,
+    so it nets to nothing -- the token is absent (no spurious balance)."""
+    from polybot.ers.reconcile import onchain_balances
+    out = onchain_balances([_chain_env(_single("0xa", "0xb", "42", "5000000"))],
+                           wallet=WALLET.lower())
+    assert out.get("42") is None or out["42"].shares == Decimal("0")

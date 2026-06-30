@@ -88,3 +88,50 @@ def clob_balances(envelopes):
         total = shares + (prev.shares if prev else Decimal(0))
         out[token] = Balance(token_id=token, shares=total, latest_fill_at=None)
     return out
+
+
+def onchain_balances(envelopes, *, wallet):
+    """Fold Polygon ERC-1155 transfer Envelopes into {token_id: Balance}, or return
+    the DORMANT sentinel None when wallet is None (pure shadow: no chain truth).
+
+    Keep source == "polygon-chain"; on event kind in {transfer_single, transfer_batch}
+    credit +value where to == wallet and debit -value where from == wallet (addresses
+    compared lowercased), netting per token_id. shares = net / 10**_SHARE_DECIMALS. A
+    row that fails to parse is skipped (fail-closed; a bad row never "agrees")."""
+    if wallet is None:
+        return None
+    wallet = wallet.lower()
+    net: dict[str, int] = {}
+    for env in envelopes:
+        if env.source != "polygon-chain":
+            continue
+        try:
+            event = json.loads(env.content)["event"]
+            kind = event["kind"]
+            if kind == "transfer_single":
+                pairs = [(event["token_id"], event["value"])]
+            elif kind == "transfer_batch":
+                pairs = list(zip(event["token_ids"], event["values"]))
+            else:
+                continue
+            frm = event["from"].lower()
+            to = event["to"].lower()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue  # malformed row: skip, never fold a bad value as agreement
+        sign = 0
+        if to == wallet:
+            sign += 1
+        if frm == wallet:
+            sign -= 1
+        if sign == 0:
+            continue
+        for token, raw in pairs:
+            try:
+                net[token] = net.get(token, 0) + sign * int(raw)
+            except (ValueError, TypeError):
+                continue  # non-integer value -> fail-closed: drop this entry
+    scale = Decimal(10 ** _SHARE_DECIMALS)
+    return {
+        token: Balance(token_id=token, shares=Decimal(value) / scale, latest_fill_at=None)
+        for token, value in net.items()
+    }
