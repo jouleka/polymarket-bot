@@ -57,8 +57,11 @@ orphan, or unconfirmed-but-recent state it cannot explain. Default under ambigui
 
 **Goal.** A pure `ThreeWayReconciler` + a `RestartReconciler` state machine + the durable append-only
 `fills` ledger they read, all proven in shadow by an **injected-divergence acceptance test** (no live data).
-Wire the restart-reconcile into `ERSController` boot (replacing `_empty_portfolio`) and expose the per-cycle
-reconcile as a dormant-by-default seam.
+`RestartReconciler` ships as a STANDALONE boot state machine (it owns the `HALTED→RUNNING` decision); **wiring
+it into `ERSController` boot — replacing `_empty_portfolio` — is deferred to the live runloop / S9 harness
+assembly**, and the per-cycle running-cadence reconcile is deferred to S4.4. S4.5 delivers the pure units +
+the boot reconcile they call; until the boot wiring lands, an un-wired `ERSController` stays fail-closed
+HALTED (it never trades), so the deferral is safe.
 
 **Non-goals (deferred behind documented seams):**
 - Live wallet-scoped CLOB/on-chain feeds (POL-4 — a funded clean-box wallet; keys never touch this box).
