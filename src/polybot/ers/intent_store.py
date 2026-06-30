@@ -170,6 +170,15 @@ class IntentStore:
             (_PROPOSED,),
         )
 
+    def accepted(self):
+        # The ACCEPTED set, ORDER BY rowid -- mirrors pending(); RestartReconciler (S4.5d) reads it
+        # to rebuild the in-memory Portfolio at boot. Re-uses _row_to_intent (the decision fields
+        # round-trip so each OpenPosition can be reconstructed).
+        return self._query(
+            f"SELECT {_COLUMNS} FROM pending_intents WHERE status=? ORDER BY rowid",
+            ("ACCEPTED",),
+        )
+
     def get(self, intent_id):
         rows = self._query(f"SELECT {_COLUMNS} FROM pending_intents WHERE intent_id=?", (intent_id,))
         return rows[0] if rows else None
