@@ -103,3 +103,26 @@ def test_injected_onchain_divergence_stays_halted(tmp_path):
     finally:
         store.close()
         events.close()
+
+
+def test_clean_live_reconcile_transitions_running(tmp_path):
+    # Live (wallet injected) AND internal == on-chain within tolerance => OK => the controller
+    # transitions HALTED->RUNNING(restart_reconciled). This proves DORMANT is NOT the only RUNNING
+    # path: a genuine clean 3-way match also resumes. (Distinguishes a real clean chain from shadow.)
+    wallet = "0xabc"
+    store = IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+    events = EventStore(str(tmp_path / "e.db"))
+    try:
+        _accept_one(store)  # internal: 16 shares of t1
+        # Chain shows EXACTLY 16 shares of t1 to the wallet (16 * 10**6 raw, 6-decimal scaled).
+        events.append(_onchain_env("t1", 16_000_000, wallet=wallet, observed_at=1))
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        rr = RestartReconciler(store=store, event_store=events,
+                               reconciler=ThreeWayReconciler(caps=RiskCaps()), controller=ctl,
+                               caps=RiskCaps(), clock=lambda: 5_000_000_000, wallet=wallet)
+        rr.reconcile_on_boot()
+        assert ctl.state() == _safety.RUNNING
+        assert store.op_audit_log()[-1]["reason"] == "restart_reconciled"
+    finally:
+        store.close()
+        events.close()
