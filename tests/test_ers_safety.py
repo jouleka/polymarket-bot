@@ -183,3 +183,12 @@ def test_set_state_rejects_unknown_state(tmp_path):
         ctl = _ctl(tmp_path, store)
         with pytest.raises(ValueError):
             ctl.set_state("BOGUS", reason=safety.REASON_L8_PAUSED)
+
+
+def test_s4_5_reason_constants_exist():
+    # S4.5d defines the two NET-NEW op-state reason codes here: the running-cadence recon-mismatch
+    # reason (S4.4 consumes it) and the clean HALTED->RUNNING restart-reconciled reason. Both are
+    # free-form strings (NO validator/schema change), matching the existing REASON_* convention.
+    from polybot.ers import safety as _s
+    assert _s.REASON_L5_RECON_MISMATCH == "l5_recon_mismatch"
+    assert _s.REASON_RESTART_RECONCILED == "restart_reconciled"

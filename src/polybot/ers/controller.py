@@ -18,7 +18,7 @@ from polybot.ers.service import process_pending
 
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
-                 heartbeat=None, gtd_for=None, clock):
+                 heartbeat=None, gtd_for=None, fill_sink=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -31,6 +31,10 @@ class ERSController:
         # each ACCEPT (passed straight through to process_pending). gtd_for=None (the default) ==
         # today's behavior -- no GTD staging -- so the S4.1 controller tests stay green.
         self._gtd_for = gtd_for
+        # fill_sink (S4.5a seam): an opt-in recording callable (make_fill_sink(store)) passed
+        # straight through to process_pending so every ACCEPT appends a durable fill. fill_sink=None
+        # (the default) == today's behavior -- no fills recorded -- so the S4.1 tests stay green.
+        self._fill_sink = fill_sink
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -48,5 +52,5 @@ class ERSController:
         self._portfolio = process_pending(
             self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
-            controller=self._controller, gtd_for=self._gtd_for)
+            controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink)
         return self._portfolio
