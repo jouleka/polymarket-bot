@@ -33,6 +33,9 @@ REASON_L8_KILL = "l8_kill"
 REASON_L8_PAUSED = "l8_paused"
 REASON_OP_FLATTEN = "op_flatten"
 REASON_UNCLEAN_RESTART = "unclean_restart"
+# --- S4.5 reason codes (NET-NEW; free-form Decision.reason / op-audit strings) ----------------
+REASON_L5_RECON_MISMATCH = "l5_recon_mismatch"     # running-cadence recon-mismatch (S4.4 consumer)
+REASON_RESTART_RECONCILED = "restart_reconciled"   # the clean restart-reconcile HALTED->RUNNING reason
 
 
 @dataclass(frozen=True)
