@@ -67,3 +67,24 @@ def internal_balances(fills_log, *, in_session=True):
                        latest_fill_at=(latest[token] if in_session else None))
         for token, total in shares.items()
     }
+
+
+def clob_balances(envelopes):
+    """Fold Data-API /positions Envelopes into {token_id: Balance}. Keep only
+    source == "data-api" with an event_id starting "/positions:"; key by item["asset"]
+    (the decimal token_id), shares = Decimal(str(item["size"])). Any missing field or
+    parse error on a row -> skip THAT row (fail-closed; a bad row never "agrees")."""
+    out: dict[str, Balance] = {}
+    for env in envelopes:
+        if env.source != "data-api" or not env.event_id.startswith("/positions:"):
+            continue
+        try:
+            item = json.loads(env.content)
+            token = item["asset"]
+            shares = Decimal(str(item["size"]))
+        except (ValueError, KeyError, TypeError, ArithmeticError):
+            continue  # malformed row: skip, never fold a bad value as agreement
+        prev = out.get(token)
+        total = shares + (prev.shares if prev else Decimal(0))
+        out[token] = Balance(token_id=token, shares=total, latest_fill_at=None)
+    return out

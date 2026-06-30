@@ -82,3 +82,44 @@ def test_internal_balances_replayed_nulls_latest_fill_at():
     out = internal_balances(rows, in_session=False)
     assert out["42"].shares == Decimal("5")
     assert out["42"].latest_fill_at is None
+
+
+# ---------------------------------------------------------------------------
+# Task 7: clob_balances -- fold Data-API /positions Envelopes (fail-closed)
+# ---------------------------------------------------------------------------
+
+def _positions_env(asset, size, *, eid_suffix="0xwallet"):
+    # Mirrors data_api.py: content is json.dumps(item); event_id is "/positions:<id>".
+    item = {"asset": asset, "size": size, "conditionId": "0xcond"}
+    return Envelope(source="data-api", source_tier="DATA",
+                    event_id=f"/positions:{eid_suffix}", observed_at=1,
+                    content=json.dumps(item, sort_keys=True, default=str))
+
+
+def test_clob_balances_parses_a_positions_envelope():
+    """A /positions Envelope folds to a Balance keyed by item['asset'] (token_id) with
+    shares = Decimal(str(size)); latest_fill_at is None (CLOB leg carries no fill stamp)."""
+    from polybot.ers.reconcile import clob_balances
+    out = clob_balances([_positions_env("42", "7")])
+    assert out["42"].shares == Decimal("7")
+    assert out["42"].latest_fill_at is None
+
+
+def test_clob_balances_skips_a_malformed_row_fail_closed():
+    """A /positions Envelope whose content lacks 'asset' (or won't parse) is skipped,
+    not folded -- a bad row must never silently 'agree' with the other legs."""
+    from polybot.ers.reconcile import clob_balances
+    bad = Envelope(source="data-api", source_tier="DATA", event_id="/positions:x",
+                   observed_at=1, content=json.dumps({"size": "7"}))  # no 'asset'
+    out = clob_balances([bad, _positions_env("42", "7")])
+    assert set(out) == {"42"}  # the bad row contributed nothing
+
+
+def test_clob_balances_ignores_non_positions_data_api_envelope():
+    """A data-api Envelope from another path (e.g. /trades) is not a positions row;
+    only event_id starting '/positions:' is folded into the CLOB balance leg."""
+    from polybot.ers.reconcile import clob_balances
+    trade = Envelope(source="data-api", source_tier="DATA", event_id="/trades:abc",
+                     observed_at=1, content=json.dumps({"asset": "99", "size": "5"}))
+    out = clob_balances([trade, _positions_env("42", "7")])
+    assert set(out) == {"42"}
