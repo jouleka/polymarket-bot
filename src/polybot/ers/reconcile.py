@@ -10,7 +10,7 @@ is skipped (never silently "agrees"); money is Decimal; addresses compare lowerc
 """
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 
 OK = "OK"
