@@ -135,3 +135,67 @@ def onchain_balances(envelopes, *, wallet):
         token: Balance(token_id=token, shares=Decimal(value) / scale, latest_fill_at=None)
         for token, value in net.items()
     }
+
+
+class ThreeWayReconciler:
+    """Pure three-way reconcile (S4.5c). On-chain is AUTHORITATIVE; CLOB advisory; default = HOLD.
+
+    Returns DORMANT when there is no wallet / no chain leg (shadow); otherwise compares the
+    internal ledger against the on-chain set per token_id over the UNION of all three legs
+    (orphans on any leg surface as the absent leg's 0 shares). A per-token share-delta valued at
+    the $1 outcome-resolution ceiling that exceeds caps.reconcile_tolerance, and whose internal
+    fill is NOT inside the settle-window, is a DIVERGED divergence."""
+
+    def __init__(self, *, caps):
+        self._caps = caps
+
+    def reconcile(self, internal, clob, onchain, *, wallet, now):
+        if wallet is None or onchain is None:
+            return ReconResult(
+                status=DORMANT,
+                divergences=(),
+                onchain_confirmed_exposure=Decimal(0),
+                settling_tokens=(),
+                triggers=("dormant_no_wallet",),
+            )
+        window_ns = self._caps.reconcile_settle_window_seconds * 1_000_000_000
+        divergences = []
+        settling = []
+        triggers = []
+        for token_id in internal.keys() | clob.keys() | onchain.keys():
+            i = internal.get(token_id)
+            o = onchain.get(token_id)
+            si = i.shares if i is not None else Decimal(0)
+            so = o.shares if o is not None else Decimal(0)
+            d_dollars = abs(si - so) * Decimal(1)
+            if d_dollars <= self._caps.reconcile_tolerance:
+                continue
+            if i is not None and i.latest_fill_at is not None and (now - i.latest_fill_at) < window_ns:
+                settling.append(token_id)
+                triggers.append(f"settling:{token_id}")
+                continue
+            divergences.append(Divergence(
+                token_id=token_id,
+                internal_shares=si,
+                onchain_shares=so,
+                dollars=d_dollars,
+            ))
+            c = clob.get(token_id)
+            if c is not None and c.shares == so:
+                triggers.append(f"clob_confirms_chain:{token_id}")
+        onchain_confirmed_exposure = sum(
+            (b.shares * Decimal(1) for b in onchain.values()), Decimal(0)
+        )
+        if divergences:
+            status = DIVERGED
+        elif settling:
+            status = SETTLING
+        else:
+            status = OK
+        return ReconResult(
+            status=status,
+            divergences=tuple(divergences),
+            onchain_confirmed_exposure=onchain_confirmed_exposure,
+            settling_tokens=tuple(settling),
+            triggers=tuple(triggers),
+        )
