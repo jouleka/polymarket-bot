@@ -78,3 +78,30 @@ def test_sub_tolerance_delta_is_still_ok():
     result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
     assert result.status == OK
     assert result.divergences == ()
+
+
+def test_injected_divergence_internal_holds_onchain_empty_is_diverged():
+    """HEADLINE acceptance criterion: the ERS believes it holds 7 shares of a token the chain
+    shows ZERO of (wallet injected). The 7-share gap valued at the $1 resolution ceiling = $7.00
+    > $0.50 tolerance, and the internal fill is replayed (latest_fill_at=None -> no settle grace)
+    -> DIVERGED, with a single Divergence pinning internal=7, onchain=0, dollars=$7.00."""
+    internal = {"t1": _bal("t1", "7", latest_fill_at=None)}
+    onchain = {}  # chain shows nothing for t1
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert result.divergences == (
+        Divergence(token_id="t1", internal_shares=Decimal("7"),
+                   onchain_shares=Decimal("0"), dollars=Decimal("7")),
+    )
+    assert result.settling_tokens == ()
+    assert result.onchain_confirmed_exposure == Decimal("0")
+
+
+def test_just_over_tolerance_diverges():
+    """A 0.6-share gap = $0.60 > the $0.50 tolerance with a replayed fill -> DIVERGED (the band
+    is exclusive just past the tolerance), pinning dollars=$0.60."""
+    internal = {"t1": _bal("t1", "10.6", latest_fill_at=None)}
+    onchain = {"t1": _bal("t1", "10")}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert result.divergences[0].dollars == Decimal("0.6")
