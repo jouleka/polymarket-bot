@@ -55,3 +55,26 @@ def test_onchain_none_with_a_wallet_is_still_dormant():
     result = _recon().reconcile(internal, {}, None, wallet="0xabc", now=0)
     assert result.status == DORMANT
     assert result.triggers == ("dormant_no_wallet",)
+
+
+def test_internal_equals_onchain_within_tolerance_is_ok():
+    """When every token's internal shares equal the on-chain shares (delta 0 <= $0.50 tol),
+    the verdict is OK with no divergences; onchain_confirmed_exposure sums the on-chain shares
+    at the $1/share resolution ceiling."""
+    internal = {"t1": _bal("t1", "10"), "t2": _bal("t2", "3")}
+    onchain = {"t1": _bal("t1", "10"), "t2": _bal("t2", "3")}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == OK
+    assert result.divergences == ()
+    assert result.settling_tokens == ()
+    assert result.onchain_confirmed_exposure == Decimal("13")
+
+
+def test_sub_tolerance_delta_is_still_ok():
+    """A share-delta valued under the $0.50 reconcile_tolerance (0.4 shares = $0.40) does NOT
+    diverge -- the tolerance band is inclusive at the boundary's interior."""
+    internal = {"t1": _bal("t1", "10.4")}
+    onchain = {"t1": _bal("t1", "10")}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == OK
+    assert result.divergences == ()
