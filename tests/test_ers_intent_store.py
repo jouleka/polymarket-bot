@@ -208,3 +208,22 @@ def test_fills_log_persists_across_restart(tmp_path):
                              side="BUY", shares=Decimal("4"), price_exec=Decimal("0.50"),
                              worst_case_risk=Decimal("2"))
         assert [r["intent_id"] for r in reopened.fills_log()] == ["i1", "i2"]
+
+
+def test_accepted_returns_accepted_rows_in_rowid_order(tmp_path):
+    # accepted() mirrors pending() but selects status=ACCEPTED, ORDER BY rowid. RestartReconciler
+    # uses it to rebuild the Portfolio at boot. PROPOSED/REJECTED/SKIPPED rows are excluded; the
+    # decision fields (stake/price) round-trip so the rebuild can reconstruct each OpenPosition.
+    with _fills_store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("acc", **_PROPOSAL)
+        store.propose_trade("rej", **_PROPOSAL)
+        store.propose_trade("prop", **_PROPOSAL)  # left PROPOSED
+        store.record_decision("acc", Decision("ACCEPT", Decimal("8"), Decimal("0.55"), "kelly"))
+        store.record_decision("rej", Decision("REJECT", None, Decimal("0.55"), "book_stale"))
+
+        acc = store.accepted()
+        assert [i.intent_id for i in acc] == ["acc"]   # only the ACCEPTED row
+        assert acc[0].status == "ACCEPTED"
+        assert acc[0].decision_stake_usd == Decimal("8")
+        assert acc[0].decision_price_exec == Decimal("0.55")
+        assert acc[0].token_id == "t1"
