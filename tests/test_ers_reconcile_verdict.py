@@ -105,3 +105,31 @@ def test_just_over_tolerance_diverges():
     result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
     assert result.status == DIVERGED
     assert result.divergences[0].dollars == Decimal("0.6")
+
+
+def test_onchain_only_orphan_diverges():
+    """A token present ONLY on-chain (the internal ledger never recorded it) is an orphan: the
+    union iteration sees internal=absent=0 vs onchain=5 -> $5 > tol -> DIVERGED, pinning
+    internal=0, onchain=5, dollars=$5."""
+    internal = {}
+    onchain = {"t1": _bal("t1", "5")}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert result.divergences == (
+        Divergence(token_id="t1", internal_shares=Decimal("0"),
+                   onchain_shares=Decimal("5"), dollars=Decimal("5")),
+    )
+    assert result.onchain_confirmed_exposure == Decimal("5")
+
+
+def test_internal_only_orphan_past_window_diverges():
+    """A token present ONLY internally with a REPLAYED fill (latest_fill_at=None -> no grace) and
+    nothing on-chain is the inverse orphan -> DIVERGED, internal=4, onchain=0, dollars=$4."""
+    internal = {"t1": _bal("t1", "4", latest_fill_at=None)}
+    onchain = {}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert result.divergences == (
+        Divergence(token_id="t1", internal_shares=Decimal("4"),
+                   onchain_shares=Decimal("0"), dollars=Decimal("4")),
+    )
