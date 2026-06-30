@@ -701,3 +701,58 @@ def test_explicit_kill_dominates_an_l7_flatten(tmp_path):
             assert any(r["reason"] == _safety.REASON_L8_KILL for r in ctl_store.op_audit_log())
     finally:
         ctl_store.close()
+
+
+# --- S4.5a (POL-6): durable fills ledger via the fill_sink seam ------------------------------
+from polybot.ers.service import make_fill_sink
+
+
+def test_no_fill_recorded_when_fill_sink_is_none(tmp_path):
+    # fill_sink=None (the default) == today's behavior: an ACCEPT places + folds but writes NO
+    # fills row. Guards the 520 baseline -- the seam is purely additive.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, fill_sink=None)
+        assert store.get("i1").status == "ACCEPTED"
+        assert [o["token_id"] for o in signer.placed] == ["t1"]
+        assert len(final.positions) == 1
+        assert store.fills_log() == []   # NO durable fill recorded
+
+
+def test_wired_fill_sink_records_one_fill_per_accept_decimal_exact(tmp_path):
+    # A make_fill_sink(store) wired sink records exactly one fill per ACCEPT, with shares =
+    # worst_case_risk / entry_price (Decimal-exact), side="BUY", and the folded position's ids.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)  # token t1, condition m1, event e1
+        signer = PaperSigner()
+        final = process_pending(store, book_for={"t1": _book("0.50")}.get,
+                                portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                                signer=signer, fill_sink=make_fill_sink(store))
+        assert store.get("i1").status == "ACCEPTED"
+        pos = final.positions[-1]   # stake $12 @ entry 0.50
+        fills = store.fills_log()
+        assert len(fills) == 1
+        f = fills[0]
+        assert f["intent_id"] == "i1" and f["token_id"] == "t1"
+        assert f["condition_id"] == "m1" and f["event_id"] == "e1"
+        assert f["side"] == "BUY"
+        assert f["price_exec"] == Decimal("0.50") == pos.entry_price
+        assert f["worst_case_risk"] == Decimal("12") == pos.worst_case_risk
+        # shares = worst_case_risk / entry_price = 12 / 0.50 = 24 (Decimal-exact, no float)
+        assert f["shares"] == Decimal("24") and isinstance(f["shares"], Decimal)
+
+
+def test_fill_sink_records_nothing_on_a_reject(tmp_path):
+    # A REJECT (missing book -> no_book) never reaches the ACCEPT branch, so the wired sink writes
+    # no fill -- recording is strictly on ACCEPT.
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={}.get,  # no book for t1 -> REJECT(no_book)
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, fill_sink=make_fill_sink(store))
+        assert store.get("i1").status == "REJECTED"
+        assert store.fills_log() == []
