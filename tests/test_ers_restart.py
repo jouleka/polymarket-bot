@@ -18,7 +18,6 @@ from polybot.ers.intent_store import IntentStore
 from polybot.ers.reconcile import ThreeWayReconciler
 from polybot.ers.restart import RestartReconciler
 from polybot.ers.safety import SafetyController
-from polybot.ers.service import make_fill_sink
 from polybot.ers.validator import Decision, Portfolio
 from polybot.storage.market_memory import EventStore
 
@@ -123,6 +122,36 @@ def test_clean_live_reconcile_transitions_running(tmp_path):
         rr.reconcile_on_boot()
         assert ctl.state() == _safety.RUNNING
         assert store.op_audit_log()[-1]["reason"] == "restart_reconciled"
+    finally:
+        store.close()
+        events.close()
+
+
+def test_reconcile_on_boot_uses_in_session_false_for_replayed_fills(monkeypatch, tmp_path):
+    # The replayed fills MUST be folded with in_session=False so latest_fill_at=None => NO
+    # settle-window grace (a prior monotonic epoch is not comparable to this process's now). This
+    # flag is load-bearing but invisible at the controller level (at boot both DIVERGED and SETTLING
+    # collapse to HALTED), so we pin it directly: spy on the module-level internal_balances and assert
+    # reconcile_on_boot passed in_session=False. Mutation in_session=False->True flips this to True.
+    import polybot.ers.restart as restart_mod
+    seen = {}
+    real = restart_mod.internal_balances
+
+    def spy(fills_log, *, in_session=True):
+        seen["in_session"] = in_session
+        return real(fills_log, in_session=in_session)
+
+    monkeypatch.setattr(restart_mod, "internal_balances", spy)
+    store = IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+    events = EventStore(str(tmp_path / "e.db"))
+    try:
+        _accept_one(store)
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        rr = RestartReconciler(store=store, event_store=events,
+                               reconciler=ThreeWayReconciler(caps=RiskCaps()), controller=ctl,
+                               caps=RiskCaps(), clock=lambda: 0, wallet=None)
+        rr.reconcile_on_boot()
+        assert seen["in_session"] is False
     finally:
         store.close()
         events.close()
