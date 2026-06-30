@@ -172,3 +172,30 @@ def test_replayed_fill_latest_fill_at_none_gets_no_grace():
     assert result.status == DIVERGED
     assert result.settling_tokens == ()
     assert result.divergences[0].token_id == "t1"
+
+
+def test_clob_only_mismatch_does_not_halt():
+    """On-chain is authoritative; CLOB advisory. Internal and on-chain AGREE (both 10 shares),
+    but the CLOB/positions leg disagrees (3 shares -- e.g. post-redemption lossy /positions).
+    The verdict is OK: a CLOB-only mismatch never drives a halt and never appears as a
+    Divergence."""
+    internal = {"t1": _bal("t1", "10")}
+    clob = {"t1": _bal("t1", "3")}
+    onchain = {"t1": _bal("t1", "10")}
+    result = _recon().reconcile(internal, clob, onchain, wallet="0xabc", now=0)
+    assert result.status == OK
+    assert result.divergences == ()
+    assert result.settling_tokens == ()
+
+
+def test_clob_confirms_chain_trigger_on_a_real_divergence():
+    """When a genuine on-chain divergence exists AND the CLOB leg corroborates the chain
+    (clob shares == onchain shares), the advisory cross-check records a clob_confirms_chain
+    trigger -- evidence the chain truth is doubly-attested -- without changing the DIVERGED
+    verdict (still driven by on-chain)."""
+    internal = {"t1": _bal("t1", "9", latest_fill_at=None)}
+    clob = {"t1": _bal("t1", "0")}
+    onchain = {"t1": _bal("t1", "0")}
+    result = _recon().reconcile(internal, clob, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert "clob_confirms_chain:t1" in result.triggers
