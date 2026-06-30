@@ -52,7 +52,7 @@ class HermesPipeline:
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
                     cluster_model=None, breaker=None, pipeline=None, controller=None,
-                    gtd_for=None):
+                    gtd_for=None, fill_sink=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
@@ -118,7 +118,25 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
                 bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
                 signer.place_gtd_bracket(position, exit_price=bracket.exit_price,
                                          expiry=bracket.expiry)
+            if fill_sink is not None:
+                # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded position.
+                # fill_sink=None (the default) => no fills row => byte-for-byte today's behavior.
+                fill_sink(intent, decision, portfolio.positions[-1])
     return portfolio
+
+
+def make_fill_sink(store):
+    """Return the recording callable wired into process_pending(fill_sink=...) so every ACCEPT
+    appends a durable fill (the internal reconcile leg). Long convention: side is ALWAYS "BUY";
+    shares = worst_case_risk / entry_price (notional / entry). entry_price > 0 holds on any ACCEPT,
+    so the division is exact and never divides by zero."""
+    def _sink(intent, decision, position):
+        store.record_fill(
+            intent_id=intent.intent_id, token_id=position.token_id,
+            condition_id=position.condition_id, event_id=position.event_id, side="BUY",
+            shares=(position.worst_case_risk / position.entry_price),
+            price_exec=position.entry_price, worst_case_risk=position.worst_case_risk)
+    return _sink
 
 
 def _process_intent_slice3(intent, book_for, portfolio, caps, calib_score, cluster_model):
