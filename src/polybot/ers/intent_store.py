@@ -107,6 +107,22 @@ class IntentStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fills (
+                fill_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                at              INTEGER NOT NULL,
+                intent_id       TEXT    NOT NULL,
+                token_id        TEXT    NOT NULL,
+                condition_id    TEXT    NOT NULL,
+                event_id        TEXT    NOT NULL,
+                side            TEXT    NOT NULL,
+                shares          TEXT    NOT NULL,
+                price_exec      TEXT    NOT NULL,
+                worst_case_risk TEXT    NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def propose_trade(self, intent_id, *, token_id, condition_id, event_id, side,
@@ -154,6 +170,15 @@ class IntentStore:
             (_PROPOSED,),
         )
 
+    def accepted(self):
+        # The ACCEPTED set, ORDER BY rowid -- mirrors pending(); RestartReconciler (S4.5d) reads it
+        # to rebuild the in-memory Portfolio at boot. Re-uses _row_to_intent (the decision fields
+        # round-trip so each OpenPosition can be reconstructed).
+        return self._query(
+            f"SELECT {_COLUMNS} FROM pending_intents WHERE status=? ORDER BY rowid",
+            ("ACCEPTED",),
+        )
+
     def get(self, intent_id):
         rows = self._query(f"SELECT {_COLUMNS} FROM pending_intents WHERE intent_id=?", (intent_id,))
         return rows[0] if rows else None
@@ -182,6 +207,28 @@ class IntentStore:
             "SELECT at, kind, reason, detail FROM op_audit ORDER BY op_id"
         ).fetchall()
         return [{"at": r[0], "kind": r[1], "reason": r[2], "detail": r[3]} for r in rows]
+
+    def record_fill(self, *, intent_id, token_id, condition_id, event_id, side, shares,
+                    price_exec, worst_case_risk):
+        """Append an IMMUTABLE fill row -- the durable INTERNAL leg the S4.5 reconcile + restart
+        replays. Append-only + the shared monotonic stamp (mirrors record_op_event); every Decimal
+        is stored as an exact string. ``side`` is "BUY" for a long entry."""
+        self._conn.execute(
+            "INSERT INTO fills (at, intent_id, token_id, condition_id, event_id, side, shares, "
+            "price_exec, worst_case_risk) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (self._stamper.stamp(), intent_id, token_id, condition_id, event_id, side,
+             str(shares), str(price_exec), str(worst_case_risk)),
+        )
+        self._conn.commit()
+
+    def fills_log(self):
+        rows = self._conn.execute(
+            "SELECT at, intent_id, token_id, condition_id, event_id, side, shares, price_exec, "
+            "worst_case_risk FROM fills ORDER BY fill_id"
+        ).fetchall()
+        return [{"at": r[0], "intent_id": r[1], "token_id": r[2], "condition_id": r[3],
+                 "event_id": r[4], "side": r[5], "shares": Decimal(r[6]),
+                 "price_exec": Decimal(r[7]), "worst_case_risk": Decimal(r[8])} for r in rows]
 
     def close(self):
         self._conn.close()

@@ -170,3 +170,20 @@ def test_non_positive_new_field_fails_verify():
         RiskCaps(consecutive_loss=0)
     with pytest.raises(ValueError, match="dead_man_switch_timeout_seconds|> 0"):
         RiskCaps(dead_man_switch_timeout_seconds=0)
+
+
+def test_reconcile_settle_window_default_and_hashed():
+    # S4.5d: the settle-window is a hashed, _verify-checked RiskCaps field (default 90s); changing
+    # it changes the signed envelope's content_hash (so a tamper to the window is detectable).
+    caps = RiskCaps()
+    assert caps.reconcile_settle_window_seconds == 90
+    base = RiskCaps().content_hash()
+    tweaked = RiskCaps(reconcile_settle_window_seconds=60).content_hash()
+    assert base != tweaked
+
+
+def test_reconcile_settle_window_non_positive_fails_verify():
+    # A non-positive settle-window is a wiring error: fail loud at construction (joins the
+    # strictly-positive-int loop alongside clock_skew_tolerance_seconds etc).
+    with pytest.raises(ValueError, match="reconcile_settle_window_seconds|> 0"):
+        RiskCaps(reconcile_settle_window_seconds=0)
