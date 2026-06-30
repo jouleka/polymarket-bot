@@ -133,3 +133,42 @@ def test_internal_only_orphan_past_window_diverges():
         Divergence(token_id="t1", internal_shares=Decimal("4"),
                    onchain_shares=Decimal("0"), dollars=Decimal("4")),
     )
+
+
+def test_in_session_fill_inside_window_is_settling_not_diverged():
+    """An in-session internal fill (latest_fill_at set, now - latest_fill_at < 90s window) that
+    the chain has not confirmed yet is SETTLING, NOT DIVERGED -- expected in-flight state. With
+    now = _WINDOW_NS and latest_fill_at = 1ns, age = _WINDOW_NS-1 < window -> exempt."""
+    internal = {"t1": _bal("t1", "9", latest_fill_at=1)}
+    onchain = {}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=_WINDOW_NS)
+    assert result.status == SETTLING
+    assert result.divergences == ()
+    assert result.settling_tokens == ("t1",)
+    assert "settling:t1" in result.triggers
+
+
+def test_same_fill_aged_past_window_flips_to_diverged():
+    """The SAME unconfirmed fill, once its age reaches the window (age == window is NOT < window),
+    loses the exemption and DIVERGES -- a SETTLING token can never permanently mask a real
+    divergence. now = latest_fill_at + _WINDOW_NS -> age == window -> DIVERGED."""
+    internal = {"t1": _bal("t1", "9", latest_fill_at=1)}
+    onchain = {}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=1 + _WINDOW_NS)
+    assert result.status == DIVERGED
+    assert result.settling_tokens == ()
+    assert result.divergences == (
+        Divergence(token_id="t1", internal_shares=Decimal("9"),
+                   onchain_shares=Decimal("0"), dollars=Decimal("9")),
+    )
+
+
+def test_replayed_fill_latest_fill_at_none_gets_no_grace():
+    """A replayed/pre-restart fill carries latest_fill_at=None (a prior monotonic epoch is not
+    comparable to this `now`), so it receives NO settle-window grace -> DIVERGED even at now=0."""
+    internal = {"t1": _bal("t1", "9", latest_fill_at=None)}
+    onchain = {}
+    result = _recon().reconcile(internal, {}, onchain, wallet="0xabc", now=0)
+    assert result.status == DIVERGED
+    assert result.settling_tokens == ()
+    assert result.divergences[0].token_id == "t1"
