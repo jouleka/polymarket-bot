@@ -57,6 +57,9 @@ class RiskCaps:
     signing_canary_interval_seconds: int = 300         # cadence of the sign+place+cancel canary
     dead_man_switch_timeout_seconds: int = 30          # stale-heartbeat age -> supervisor FLATTEN_AND_KILL
     reconcile_tolerance: Decimal = Decimal("0.50")     # 3-way divergence tolerance (settle-window-aware)
+    reconcile_settle_window_seconds: int = 90          # internal-fill age under which a not-yet-on-chain
+    # token is SETTLING (exempt from the divergence halt), NOT DIVERGED. Tighten-only: a future S4.7
+    # ratchet may only DECREASE it. Added + hashed + _verify'd here (the guard enforcement is S4.7).
 
     def __post_init__(self):
         self._verify()
@@ -143,7 +146,7 @@ class RiskCaps:
             raise ValueError(f"reconcile_tolerance must be > 0, got {self.reconcile_tolerance}")
         for name in ("consecutive_loss", "new_positions_per_hour", "new_positions_per_day",
                      "clock_skew_tolerance_seconds", "signing_canary_interval_seconds",
-                     "dead_man_switch_timeout_seconds"):
+                     "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be > 0, got {getattr(self, name)}")
 
