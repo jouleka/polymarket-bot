@@ -49,3 +49,36 @@ def test_divergence_and_reconresult_field_shapes():
     r = ReconResult(status=OK, divergences=(), onchain_confirmed_exposure=Decimal("0"),
                     settling_tokens=(), triggers=())
     assert r.status == "OK" and r.divergences == ()
+
+
+# ---------------------------------------------------------------------------
+# Task 6: internal_balances -- fold the durable fills rows
+# ---------------------------------------------------------------------------
+
+def _fill(token, side, shares, at, *, intent="i1"):
+    # Mirrors IntentStore.fills_log() row shape (S4.5a): Decimals already converted.
+    return {"at": at, "intent_id": intent, "token_id": token, "condition_id": "0xcond",
+            "event_id": "evt", "side": side, "shares": Decimal(shares),
+            "price_exec": Decimal("0.50"), "worst_case_risk": Decimal(shares) * Decimal("0.50")}
+
+
+def test_internal_balances_folds_buys_and_sells_per_token():
+    """Two in-session fills on one token net to (BUY - SELL) shares, and
+    latest_fill_at is the max `at` among that token's rows (newest fill stamp)."""
+    from polybot.ers.reconcile import internal_balances
+    rows = [_fill("42", "BUY", "5", at=100), _fill("42", "SELL", "2", at=250)]
+    out = internal_balances(rows, in_session=True)
+    assert set(out) == {"42"}
+    assert out["42"].shares == Decimal("3")
+    assert out["42"].latest_fill_at == 250
+
+
+def test_internal_balances_replayed_nulls_latest_fill_at():
+    """With in_session=False (the RestartReconciler's replay path) latest_fill_at is
+    None for every token: a prior monotonic epoch is not comparable to this `now`, so
+    a replayed unconfirmed fill gets NO settle-window grace (fail-closed at boot)."""
+    from polybot.ers.reconcile import internal_balances
+    rows = [_fill("42", "BUY", "5", at=100)]
+    out = internal_balances(rows, in_session=False)
+    assert out["42"].shares == Decimal("5")
+    assert out["42"].latest_fill_at is None

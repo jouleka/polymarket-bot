@@ -47,3 +47,23 @@ class ReconResult:
     onchain_confirmed_exposure: Decimal
     settling_tokens: tuple         # tuple[str, ...]
     triggers: tuple                # tuple[str, ...]
+
+
+def internal_balances(fills_log, *, in_session=True):
+    """Fold the durable fills rows into {token_id: Balance}. shares = sum(+shares if
+    side == "BUY" else -shares). latest_fill_at = max(at) among that token's rows when
+    in_session, else None (replayed rows get no settle-window grace -> fail-closed)."""
+    shares: dict[str, Decimal] = {}
+    latest: dict[str, int] = {}
+    for row in fills_log:
+        token = row["token_id"]
+        signed = row["shares"] if row["side"] == "BUY" else -row["shares"]
+        shares[token] = shares.get(token, Decimal(0)) + signed
+        at = row["at"]
+        if token not in latest or at > latest[token]:
+            latest[token] = at
+    return {
+        token: Balance(token_id=token, shares=total,
+                       latest_fill_at=(latest[token] if in_session else None))
+        for token, total in shares.items()
+    }
