@@ -154,3 +154,57 @@ def test_op_audit_log_persists_across_restart(tmp_path):
         reopened.record_op_event(kind="state_change", reason="unclean_restart")
         rows = reopened.op_audit_log()
         assert [r["kind"] for r in rows] == ["pause", "state_change"]
+
+
+# --- S4.5a: durable fills ledger (POL-6) -----------------------------------------------------
+from decimal import Decimal  # noqa: F401 (harmless if already imported at top of file)
+from polybot.core.clock import MonotonicStamper  # noqa: F401
+from polybot.ers.intent_store import IntentStore  # noqa: F401
+
+
+def _fills_store(path):
+    return IntentStore(path, MonotonicStamper())
+
+
+def test_record_fill_appends_ordered_decimal_exact_rows(tmp_path):
+    # The fills ledger is the durable INTERNAL leg of S4.5 reconciliation: append-only, ordered by
+    # fill_id, every Decimal round-tripped EXACTLY (stored as string, read back as Decimal), and each
+    # row carries the shared monotonic stamp. Mirrors record_op_event / op_audit_log.
+    with _fills_store(str(tmp_path / "i.db")) as store:
+        store.record_fill(intent_id="i1", token_id="t1", condition_id="0xabc", event_id="e1",
+                          side="BUY", shares=Decimal("24"), price_exec=Decimal("0.50"),
+                          worst_case_risk=Decimal("12"))
+        store.record_fill(intent_id="i2", token_id="t2", condition_id="0xdef", event_id="e2",
+                          side="BUY", shares=Decimal("13.333333"), price_exec=Decimal("0.45"),
+                          worst_case_risk=Decimal("6"))
+
+        rows = store.fills_log()
+        assert [r["intent_id"] for r in rows] == ["i1", "i2"]   # ORDER BY fill_id
+        assert [r["token_id"] for r in rows] == ["t1", "t2"]
+        assert rows[0]["condition_id"] == "0xabc" and rows[0]["event_id"] == "e1"
+        assert rows[0]["side"] == "BUY"
+        # Decimal-exact round-trip (NOT float):
+        assert rows[0]["shares"] == Decimal("24") and isinstance(rows[0]["shares"], Decimal)
+        assert rows[0]["price_exec"] == Decimal("0.50")
+        assert rows[0]["worst_case_risk"] == Decimal("12")
+        assert rows[1]["shares"] == Decimal("13.333333")
+        # Each row carries the shared monotonic stamp, strictly increasing in id-order.
+        ats = [r["at"] for r in rows]
+        assert ats == sorted(ats) and len(set(ats)) == 2 and ats[0] > 0
+
+
+def test_fills_log_persists_across_restart(tmp_path):
+    # Append-only + committed: a fill survives a process restart and a fresh stamper, and a new fill
+    # appends AFTER the persisted one (id ordering, not the per-process stamp clock).
+    db = str(tmp_path / "i.db")
+    with _fills_store(db) as store:
+        store.record_fill(intent_id="i1", token_id="t1", condition_id="0xabc", event_id="e1",
+                          side="BUY", shares=Decimal("24"), price_exec=Decimal("0.50"),
+                          worst_case_risk=Decimal("12"))
+    with _fills_store(db) as reopened:
+        rows = reopened.fills_log()
+        assert len(rows) == 1 and rows[0]["token_id"] == "t1"
+        reopened.record_fill(intent_id="i2", token_id="t2", condition_id="0xdef", event_id="e2",
+                             side="BUY", shares=Decimal("4"), price_exec=Decimal("0.50"),
+                             worst_case_risk=Decimal("2"))
+        assert [r["intent_id"] for r in reopened.fills_log()] == ["i1", "i2"]
