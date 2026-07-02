@@ -11,7 +11,12 @@ and each consumer converts the raise into its fail-closed action.
 
 from decimal import Decimal
 
-from polybot.ers.safety import REASON_RATE_DAILY, REASON_RATE_HOURLY
+from polybot.ers.safety import (
+    REASON_DAILY_CEILING,
+    REASON_RATE_DAILY,
+    REASON_RATE_HOURLY,
+    would_cross_daily_pending_ceiling,
+)
 
 _KINDS = ("accept", "realized")
 
@@ -85,5 +90,9 @@ def make_flow_gate(store, caps_provider, *, wall_clock):
             return REASON_RATE_HOURLY
         if accepts_in_window(rows, wall_now=now, window_seconds=86400) >= caps.new_positions_per_day:
             return REASON_RATE_DAILY
+        if would_cross_daily_pending_ceiling(
+                pending_today=pending_in_window(rows, wall_now=now),
+                new_worst_case=caps.per_trade, caps=caps):
+            return REASON_DAILY_CEILING
         return None
     return _gate
