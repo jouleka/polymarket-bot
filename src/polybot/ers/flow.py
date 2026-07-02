@@ -38,3 +38,22 @@ def accepts_in_window(rows, *, wall_now, window_seconds):
     convention; keeping the boundary row is the tighter direction)."""
     return sum(1 for r in rows
                if r["kind"] == "accept" and wall_now - r["wall_at"] <= window_seconds)
+
+
+def pending_in_window(rows, *, wall_now, window_seconds=86400):
+    """Today's pending worst-case-risk FLOW: the sum of accept amounts in the rolling window
+    plus abs(amount) for realized LOSSES (amount < 0) in the window. Wins (amount >= 0)
+    NEVER offset -- conservative. In-window iff ``wall_now - wall_at <= window_seconds``
+    (INCLUSIVE old edge). Every row is read in full regardless of window, so a missing key
+    propagates KeyError -- callers convert the raise to their fail-closed action."""
+    total = Decimal("0")
+    for r in rows:
+        kind = r["kind"]
+        amount = r["amount"]
+        if wall_now - r["wall_at"] > window_seconds:
+            continue
+        if kind == "accept":
+            total += amount
+        elif kind == "realized" and amount < Decimal("0"):
+            total += -amount
+    return total
