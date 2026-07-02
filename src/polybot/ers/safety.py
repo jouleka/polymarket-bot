@@ -169,7 +169,12 @@ class SafetyController:
             # without touching op-state -- when the window slides the block evaporates (no new
             # auto-resume path; sticky transitions stay the S4.4 edge-triggered doctrine).
             if self._flow_gate is not None:
-                reason = self._flow_gate()
+                try:
+                    reason = self._flow_gate()
+                except Exception:
+                    # A raising gate is corruption in our OWN safety ledger: fail CLOSED with
+                    # its own reason -- never propagate, never silently pass (design SS6.4).
+                    reason = REASON_FLOW_GATE_ERROR
                 if reason is not None:
                     return OpVerdict(RUNNING, reason, None, (reason,))
             # RUNNING -> no op-block; the loop proceeds to the L7 breaker unchanged.

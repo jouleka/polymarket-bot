@@ -113,3 +113,58 @@ def test_running_verdict_with_gate_reason_blocks_but_op_state_and_audit_are_unto
         assert ctl_store.op_audit_log() == audit_before
     finally:
         ctl_store.close()
+
+
+def test_raising_gate_fail_closes_with_flow_gate_error_and_state_stays_running(tmp_path):
+    # Fail closed on our own data (design SS6.4): a raising gate means the flow_journal read
+    # is corrupt -- the verdict blocks with flow_gate_error instead of propagating, and the
+    # op-state is untouched (the block clears if the read recovers; no operator unwind needed).
+    # Kills: letting the exception escape verdict (wedges process_pending), or except-ing to a
+    # silent no-block pass (trades through corruption).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        def _corrupt_gate():
+            raise RuntimeError("flow_journal corrupted")
+        ctl.wire_flow_gate(_corrupt_gate)
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v == OpVerdict(_safety.RUNNING, "flow_gate_error", None, ("flow_gate_error",))
+        assert ctl.state() == _safety.RUNNING
+    finally:
+        ctl_store.close()
+
+
+def test_paused_verdict_never_consults_the_gate(tmp_path):
+    # The consult lives ONLY in the RUNNING branch: PAUSED blocks under its stored reason and
+    # the gate is never called. Kills: hoisting the consult above the state dispatch (a gate
+    # reason could then overwrite the sticky paused reason the operator must see).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        calls = []
+        def _counting_gate():
+            calls.append(1)
+            return None
+        ctl.wire_flow_gate(_counting_gate)
+        ctl.set_state(_safety.PAUSED, reason=_safety.REASON_L8_PAUSED)
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v.block_reason == "l8_paused"
+        assert calls == []
+    finally:
+        ctl_store.close()
+
+
+def test_halted_verdict_never_consults_the_gate(tmp_path):
+    # HALTED boundary partner (the boot default): blocks unclean_restart, gate never called.
+    # Kills: hoisting the consult above the state dispatch.
+    store = IntentStore(str(tmp_path / "ctl.db"), MonotonicStamper())
+    try:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # starts HALTED
+        calls = []
+        def _counting_gate():
+            calls.append(1)
+            return None
+        ctl.wire_flow_gate(_counting_gate)
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v.block_reason == "unclean_restart"
+        assert calls == []
+    finally:
+        store.close()
