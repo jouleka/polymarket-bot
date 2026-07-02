@@ -294,3 +294,29 @@ def test_paused_loop_escalates_to_halted_on_an_anomaly(tmp_path):
         assert len(signer.cancelled_all) == 1
         rows = store.op_audit_log()
         assert ("cancel_all", "l5_clock_skew") in [(r["kind"], r["reason"]) for r in rows]
+
+
+def test_halt_is_sticky_after_the_anomaly_clears_and_next_intent_rejects_with_the_l5_reason(tmp_path):
+    # Fork 1 / design §6.1 STICKY: the anomaly CLEARING does not resume the loop -- op-state
+    # stays HALTED with the stored l5 reason, and an intent proposed AFTER the halt is
+    # REJECTED with Decision.reason == "l5_clock_skew" (the controller's stored reason
+    # surfaces verbatim through the untouched verdict path, §6.6). Recovery is operator-owned.
+    # MUTATION KILLED: any auto-resume branch in run_cycle (see the Step-2 mutation check),
+    # and a generic reason string masking the specific l5_* one.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        skew = _SkewDouble(True)
+        signer = PaperSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(skew))
+        rc.run_cycle()                       # cycle 1: anomaly -> halt + one-shot de-risk
+        assert ctl.state() == _safety.HALTED
+
+        skew.is_skewed = False               # the anomaly CLEARS...
+        store.propose_trade("i1", **_P)      # ...and a fresh intent arrives
+        rc.run_cycle()                       # cycle 2
+
+        assert ctl.state() == _safety.HALTED             # ...but the halt is STICKY
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "l5_clock_skew"
+        assert len(signer.cancelled_all) == 1            # and the one-shot stayed one-shot
