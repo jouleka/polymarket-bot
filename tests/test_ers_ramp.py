@@ -15,6 +15,10 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers import ramp
+from polybot.ers import safety as _safety
+from polybot.ers.controller import ERSController
+from polybot.ers.service import PaperSigner
+from polybot.ingestion.orderbook import LocalBook
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.safety import SafetyController
@@ -262,5 +266,69 @@ def test_swap_caps_audits_before_mutating(tmp_path, monkeypatch):
         with pytest.raises(RuntimeError):
             ctl.swap_caps(ramp.step_daily(RiskCaps()), reason="ramp_down")
         assert ctl.active_caps() is original
+    finally:
+        store.close()
+
+
+# --- B6: the run_cycle active_caps() re-plumb --------------------------------------------------
+
+
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+
+def test_run_cycle_sizes_off_the_controllers_active_caps_not_the_constructor_caps(tmp_path):
+    # The re-plumb itself: the ERSController is built with DEFAULT caps (per_trade 12) while
+    # the SafetyController holds the daily-stepped envelope (per_trade 9) -- the cycle's
+    # accept must clamp at 9, proving process_pending received controller.active_caps().
+    # Kills: reverting the caps= arg to self._caps
+    store = _store(tmp_path)
+    try:
+        ctl = SafetyController(caps=ramp.step_daily(RiskCaps()), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        rc = ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=RiskCaps(),
+                           signer=signer, controller=ctl, clock=lambda: 0)
+        rc.run_cycle()
+        decided = store.get("i1")
+        assert decided.status == "ACCEPTED"
+        assert decided.decision_reason == "per_trade_cap"
+        assert decided.decision_stake_usd == Decimal("9")
+    finally:
+        store.close()
+
+
+def test_swap_caps_between_cycles_bites_the_next_cycles_validator(tmp_path):
+    # The at/after pair: cycle 1 clamps at the signed per_trade 12; a step_daily swap BETWEEN
+    # cycles clamps cycle 2's fresh intent (own market/event -- no shared-cap confound) at 9.
+    # Kills: run_cycle caching active_caps() at construction instead of reading it per cycle
+    store = _store(tmp_path)
+    try:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        books = {"t1": _book("0.50"), "t2": _book("0.50")}
+        rc = ERSController(store=store, book_for=books.get, caps=RiskCaps(),
+                           signer=signer, controller=ctl, clock=lambda: 0)
+        store.propose_trade("i1", **_P)
+        rc.run_cycle()
+        assert store.get("i1").decision_stake_usd == Decimal("12")   # pre-swap clamp
+
+        assert ctl.swap_caps(ramp.step_daily(ctl.active_caps()), reason="ramp_down") is True
+        store.propose_trade("i2", **{**_P, "token_id": "t2", "condition_id": "m2",
+                                     "event_id": "e2"})
+        rc.run_cycle()
+        decided = store.get("i2")
+        assert decided.status == "ACCEPTED"
+        assert decided.decision_reason == "per_trade_cap"
+        assert decided.decision_stake_usd == Decimal("9")            # the swap bit next cycle
     finally:
         store.close()
