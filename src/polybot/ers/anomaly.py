@@ -8,6 +8,7 @@ STICKY (Fork 1): this module only ever REPORTS anomalies; recovery is operator-o
 nothing here touches the op-state machine.
 """
 
+from collections import deque
 from dataclasses import dataclass
 
 from polybot.ers.safety import REASON_L5_CLOCK_SKEW
@@ -40,6 +41,24 @@ class ClockSkewSentinel:
 
     def skewed(self):
         return abs(self._wall_clock() - self._ntp_ref()) > self._caps.clock_skew_tolerance_seconds
+
+
+class ApiStormSentinel:
+    """L5 API error-storm seam (design §3 #3): the (deploy-time) API caller records every
+    response status via ``record``; the monitor polls ``storming(now)``. Windowed deque of
+    ``(now_s, int(status))`` in the monitor's monotonic-seconds clock domain.
+    Auth counting + window pruning arrive in the next two TDD steps."""
+
+    def __init__(self, caps):
+        self._caps = caps
+        self._events = deque()  # (now_s, int(status))
+
+    def record(self, status, *, now):
+        self._events.append((now, int(status)))
+
+    def storming(self, now):
+        fivexx = sum(1 for _, s in self._events if s >= 500)
+        return fivexx >= self._caps.api_5xx_storm_count
 
 
 class AnomalyMonitor:
