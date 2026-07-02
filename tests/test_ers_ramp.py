@@ -13,8 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from polybot.core.clock import MonotonicStamper
 from polybot.ers import ramp
 from polybot.ers.caps import RiskCaps
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.safety import SafetyController
 
 
 def test_tighten_direction_covers_exactly_the_riskcaps_fields():
@@ -175,3 +178,89 @@ def test_step_weekly_is_idempotent_by_hash():
     # Kills: a subtractive weekly step that keeps tightening on re-application
     once = ramp.step_weekly(RiskCaps())
     assert ramp.step_weekly(once).content_hash() == once.content_hash()
+
+
+# --- B5: SafetyController.swap_caps -----------------------------------------------------------
+
+
+def _store(tmp_path):
+    return IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+
+
+def test_swap_caps_real_swap_returns_true_and_installs_the_new_caps(tmp_path):
+    # The controller starts HALTED and no set_state is issued: a tighten swap applies in ANY
+    # op-state (DESIGN SS6.7). Kills: swap_caps never assigning self._caps / gating on op-state
+    store = _store(tmp_path)
+    try:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        tightened = ramp.step_daily(RiskCaps())
+        assert ctl.swap_caps(tightened, reason="ramp_down") is True
+        assert ctl.active_caps() is tightened
+    finally:
+        store.close()
+
+
+def test_swap_caps_real_swap_audits_caps_swap_with_both_hash_prefixes(tmp_path):
+    # Kills: a missing/mis-formatted caps_swap audit row (the 16-char hash pair IS the
+    # tamper-evidence trail of which envelope replaced which)
+    store = _store(tmp_path)
+    try:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        old_hash = RiskCaps().content_hash()
+        tightened = ramp.step_daily(RiskCaps())
+        ctl.swap_caps(tightened, reason="ramp_down")
+        rows = [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()]
+        assert rows == [("caps_swap", "ramp_down",
+                         f"{old_hash[:16]}->{tightened.content_hash()[:16]}")]
+    finally:
+        store.close()
+
+
+def test_swap_caps_noop_swap_returns_false_with_no_audit_row(tmp_path):
+    # Hash-identical caps => idempotent re-application writes NOTHING (run_cycle re-applies
+    # steps while a trigger holds -- no audit spam). Kills: auditing/mutating on a no-op
+    store = _store(tmp_path)
+    try:
+        original = RiskCaps()
+        ctl = SafetyController(caps=original, store=store, clock=lambda: 0)
+        assert ctl.swap_caps(RiskCaps(), reason="ramp_down") is False
+        assert ctl.active_caps() is original
+        assert store.op_audit_log() == []
+    finally:
+        store.close()
+
+
+def test_swap_caps_rejects_a_loosening_swap_untouched_and_unaudited(tmp_path):
+    # Default caps LOOSEN the daily-stepped ones (total_open_risk 45 -> 60 fires first in
+    # declaration order). Kills: the tighten-only guard dropped, or caps mutated / a row
+    # written on the reject path
+    store = _store(tmp_path)
+    try:
+        tightened = ramp.step_daily(RiskCaps())
+        ctl = SafetyController(caps=tightened, store=store, clock=lambda: 0)
+        with pytest.raises(ValueError, match="total_open_risk"):
+            ctl.swap_caps(RiskCaps(), reason="ramp_down")
+        assert ctl.active_caps() is tightened
+        assert store.op_audit_log() == []
+    finally:
+        store.close()
+
+
+def _raising_op_event(**kwargs):
+    raise RuntimeError("op_audit write refused")
+
+
+def test_swap_caps_audits_before_mutating(tmp_path, monkeypatch):
+    # Audit-before-mutate: a refused audit write must leave the OLD caps active, so a crash
+    # mid-swap always leaves the explanation AHEAD of the effect (the set_state doctrine).
+    # Kills: mutate-then-audit reordering
+    store = _store(tmp_path)
+    try:
+        original = RiskCaps()
+        ctl = SafetyController(caps=original, store=store, clock=lambda: 0)
+        monkeypatch.setattr(store, "record_op_event", _raising_op_event)
+        with pytest.raises(RuntimeError):
+            ctl.swap_caps(ramp.step_daily(RiskCaps()), reason="ramp_down")
+        assert ctl.active_caps() is original
+    finally:
+        store.close()
