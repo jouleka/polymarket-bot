@@ -429,3 +429,49 @@ def test_frozen_position_tokens_are_plumbed_into_the_consult(tmp_path):
         ))
         rc.run_cycle()
         assert double.frozen_seen == [frozenset({"t9"})]
+
+
+def _daily_swap_detail():
+    from polybot.ers.ramp import step_daily
+    return RiskCaps().content_hash()[:16] + "->" + step_daily(RiskCaps()).content_hash()[:16]
+
+
+def _weekly_swap_detail():
+    from polybot.ers.ramp import step_weekly
+    return RiskCaps().content_hash()[:16] + "->" + step_weekly(RiskCaps()).content_hash()[:16]
+
+
+def test_ramp_steps_tighten_active_caps_even_on_a_halted_loop_with_a_caps_swap_audit_row(tmp_path):
+    # DESIGN §2/§6.7: swaps are applied from ls.ramp_steps in ANY op-state (tightening while
+    # halted is harmless and desirable) -- and via SafetyController.swap_caps, so the audit
+    # row carries reason=ramp_down and the old->new hash detail. A PAUSE verdict on a
+    # boot-HALTED loop must NOT transition state (edge guard) but MUST still tighten.
+    # Kills: gating the swap loop on op-state, wiring step_daily to the "weekly" key (or vice
+    # versa), or bypassing swap_caps (no audit row).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot: HALTED
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("PAUSE", ("daily_pending_pause",), ("daily",)))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED                       # no downgrade, no upgrade
+        assert ctl.active_caps().per_trade == Decimal("9")         # step A bit
+        assert ctl.active_caps().total_open_risk == Decimal("45")
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("caps_swap", "ramp_down", _daily_swap_detail()),
+        ]
+
+
+def test_reapplying_the_same_ramp_step_next_cycle_is_a_hash_identical_no_op(tmp_path):
+    # Idempotent swaps (DESIGN §6.7): the second cycle's step_daily(min'd caps) is
+    # hash-identical -> swap_caps returns False -> NO second audit row, caps unchanged.
+    # Kills: audit spam on re-application, or a step that keeps compounding.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("PAUSE", ("daily_pending_pause",), ("daily",)))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        rc.run_cycle()
+        assert ctl.active_caps().per_trade == Decimal("9")
+        assert len([r for r in store.op_audit_log() if r["kind"] == "caps_swap"]) == 1
