@@ -19,6 +19,8 @@ This matches the design's distinct §6 reason codes + the audit trail.
 
 from dataclasses import dataclass
 
+from polybot.ers.ramp import assert_tighten_only
+
 # --- op-state vocabulary (NET-NEW; FLATTENING != breaker.py FLATTEN) -------------------------
 RUNNING = "RUNNING"
 PAUSED = "PAUSED"
@@ -76,6 +78,26 @@ class SafetyController:
     def active_caps(self):
         # The swappable RiskCaps reference (the S4.7 ramp-DOWN ratchet replaces it atomically).
         return self._caps
+
+    def swap_caps(self, new_caps, *, reason):
+        """The S4.7 ramp-DOWN ratchet: atomically install a NEW re-verified RiskCaps.
+
+        Tighten-only (assert_tighten_only over every field per ramp.TIGHTEN_DIRECTION -- a
+        loosening swap raises ValueError and changes NOTHING); idempotent (a hash-identical
+        new_caps returns False and writes NO audit row); audited (kind=caps_swap,
+        detail=old->new 16-char content-hash prefixes) BEFORE the in-memory mutate, so a
+        crash mid-swap leaves the explanation ahead of the effect (the set_state doctrine).
+        Applies in ANY op-state -- tightening while halted is harmless and desirable.
+        Returns True iff the caps actually changed."""
+        assert_tighten_only(self._caps, new_caps)
+        old_hash = self._caps.content_hash()
+        new_hash = new_caps.content_hash()
+        if new_hash == old_hash:
+            return False
+        self._store.record_op_event(
+            kind="caps_swap", reason=reason, detail=f"{old_hash[:16]}->{new_hash[:16]}")
+        self._caps = new_caps
+        return True
 
     def set_state(self, op_state, *, reason):
         """Operator/L8-driven transition. Appends an immutable op-audit row, then swaps the
