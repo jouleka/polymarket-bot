@@ -254,6 +254,24 @@ def test_recon_mismatch_outranks_canary_fail_in_the_triggers_order():
     assert state.triggers == ("l5_recon_mismatch", "l5_canary_fail")
 
 
+# --- Task E7: the inert dispute_flagger stub seam ----------------------------------------------
+
+def test_dispute_flagger_seam_is_stored_but_never_consulted_by_evaluate():
+    """S4.4 ships the dispute_flagger SEAM only (no dispute-ingestion source exists): the
+    monitor stores it and evaluate NEVER calls it. A flagger that raises on ANY call, with a
+    held position and a healthy non-stale book (so every wired check path actually runs),
+    still yields NONE. Kills the mutation that activates the dead branch: any S4.4 evaluate
+    path consulting the stub would raise the AssertionError."""
+    def _never(token_id):
+        raise AssertionError("dispute_flagger must not be consulted in S4.4")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, dispute_flagger=_never)
+    state = monitor.evaluate((_pos("t1"),), {"t1": _book("0.50")}.get)
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
 def test_recon_seam_provider_returning_none_result_is_skipped():
     """A wired provider yielding None (no result this cycle) is a SKIP -- not a fire, not a
     crash. Kills: unconditional r.status attribute access on a None result."""
