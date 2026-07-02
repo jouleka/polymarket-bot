@@ -123,6 +123,18 @@ class IntentStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_journal (
+                flow_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+                at       INTEGER NOT NULL,
+                wall_at  REAL    NOT NULL,
+                kind     TEXT    NOT NULL,
+                token_id TEXT    NOT NULL,
+                amount   TEXT    NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def propose_trade(self, intent_id, *, token_id, condition_id, event_id, side,
@@ -193,7 +205,7 @@ class IntentStore:
 
     def record_op_event(self, *, kind, reason, detail=""):
         """Append an IMMUTABLE op/kill/heartbeat audit row (S4.1). ``kind`` in
-        {state_change, kill, pause, flatten, heartbeat, cancel_all}; ``reason`` is a REASON_* code
+        {state_change, kill, pause, flatten, heartbeat, cancel_all, caps_swap}; ``reason`` is a REASON_* code
         or a free-form string. Append-only + the shared monotonic stamp, mirroring intent_audit,
         so the restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
         self._conn.execute(
@@ -229,6 +241,27 @@ class IntentStore:
         return [{"at": r[0], "intent_id": r[1], "token_id": r[2], "condition_id": r[3],
                  "event_id": r[4], "side": r[5], "shares": Decimal(r[6]),
                  "price_exec": Decimal(r[7]), "worst_case_risk": Decimal(r[8])} for r in rows]
+
+    def record_flow_event(self, *, kind, token_id, amount, wall_at):
+        """Append an IMMUTABLE flow-journal row (S4.7): ``kind`` in {accept, realized}.
+        Dual-stamped: ``at`` = the shared monotonic stamp (cross-table ordering; NOT
+        cross-restart comparable), ``wall_at`` = the caller-supplied wall clock in epoch
+        seconds (windowing; the ONLY cross-restart-comparable time in the store). ``amount``
+        is stored as an exact string: accept => worst_case_risk (+); realized => signed
+        PnL (+win / -loss). Commit per write, mirroring record_op_event."""
+        self._conn.execute(
+            "INSERT INTO flow_journal (at, wall_at, kind, token_id, amount) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._stamper.stamp(), wall_at, kind, token_id, str(amount)),
+        )
+        self._conn.commit()
+
+    def flow_log(self):
+        rows = self._conn.execute(
+            "SELECT at, wall_at, kind, token_id, amount FROM flow_journal ORDER BY flow_id"
+        ).fetchall()
+        return [{"at": r[0], "wall_at": r[1], "kind": r[2], "token_id": r[3],
+                 "amount": Decimal(r[4])} for r in rows]
 
     def close(self):
         self._conn.close()
