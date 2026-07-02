@@ -59,6 +59,37 @@ def test_flow_journal_survives_close_and_reopen(tmp_path):
         assert rows[0]["amount"] == Decimal("12") and rows[0]["wall_at"] == 500.0
 
 
+def test_flow_journal_round_trips_a_float_unrepresentable_decimal_exactly(tmp_path):
+    # MUTATION KILLED: storing str(amount) -> float(amount) silently corrupts high-precision
+    # risk figures feeding the pending>ceiling boundary compare -- the read-back must equal
+    # the float-unrepresentable Decimal EXACTLY (str storage leg, never a float leg).
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="t1",
+                                amount=Decimal("33.333333333333333333"), wall_at=1.0)
+        assert store.flow_log()[0]["amount"] == Decimal("33.333333333333333333")
+
+
+def test_flow_log_orders_by_flow_id_even_when_at_stamps_descend(tmp_path):
+    # MUTATION KILLED: ORDER BY at instead of flow_id -- indistinguishable under the real
+    # MonotonicStamper (whose stamps only ascend), so a duck-typed fake whose stamps DESCEND
+    # makes the two orderings diverge: flow_log must return INSERTION order regardless.
+    class _DescendingStamper:
+        def __init__(self):
+            self._stamps = [900, 800, 700]
+
+        def stamp(self):
+            return self._stamps.pop(0)
+
+    with IntentStore(str(tmp_path / "i.db"), _DescendingStamper()) as store:
+        store.record_flow_event(kind="accept", token_id="t1", amount=Decimal("1"), wall_at=1.0)
+        store.record_flow_event(kind="realized", token_id="t2", amount=Decimal("-2"), wall_at=2.0)
+        store.record_flow_event(kind="accept", token_id="t3", amount=Decimal("3"), wall_at=3.0)
+        rows = store.flow_log()
+        assert [(r["kind"], r["token_id"]) for r in rows] == [
+            ("accept", "t1"), ("realized", "t2"), ("accept", "t3")]
+        assert [r["at"] for r in rows] == [900, 800, 700]  # insertion order, NOT at order
+
+
 # --- S4.7a: make_flow_recorder (ers/flow.py -- the fill_sink-shaped accept recorder) ----------
 from polybot.ers.flow import make_flow_recorder
 from polybot.ers.validator import OpenPosition
@@ -212,6 +243,17 @@ def test_pending_in_window_propagates_key_error_on_a_missing_amount_key():
     rows = [{"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1"}]
     with pytest.raises(KeyError):
         pending_in_window(rows, wall_now=100.0)
+
+
+def test_pending_in_window_raises_on_an_out_of_window_corrupt_row():
+    # MUTATION KILLED: moving the _KINDS check after the window-skip lets months-old
+    # corruption be silently skipped instead of tripping the breakers' flow_data_error HALT
+    # -- validation happens BEFORE the window filter (the docstring's "regardless of window"
+    # clause): a corrupt row far outside the default 86400s window must STILL raise.
+    rows = [{"at": 1, "wall_at": 1.0, "kind": "flattened", "token_id": "t1",
+             "amount": Decimal("1")}]
+    with pytest.raises(ValueError):
+        pending_in_window(rows, wall_now=1_000_000.0)
 
 
 def test_flow_module_source_never_references_the_resume_state_or_set_state():
