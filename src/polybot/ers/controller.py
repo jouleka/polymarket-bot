@@ -75,8 +75,12 @@ class ERSController:
                     # failure; the pre-staged GTD exits are the backstop.
                     self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
                                                 detail=f"FAILED: {exc}")
+        # THE S4.7 re-plumb: read the SWAPPABLE caps from the SafetyController EVERY cycle so
+        # a ramp-DOWN swap_caps lands on the very next cycle's validator/GTD derivation.
+        # self._caps remains only the construction-time NAV source for the scaffold portfolio.
         self._portfolio = process_pending(
-            self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
+            self._store, book_for=self._book_for, portfolio=self._portfolio,
+            caps=self._controller.active_caps(),
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
             controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink)
         return self._portfolio
