@@ -179,6 +179,29 @@ def test_depth_collapse_to_exactly_the_80_percent_threshold_fires():
     assert REASON_L5_ABNORMAL_BOOK in state.triggers
 
 
+def test_two_positions_on_the_same_token_fire_l5_abnormal_book_once():
+    # Pinned contract: check every position's token, DEDUPE tokens. Kills: iterating
+    # positions without a seen-set (a shared crossed book double-appends the trigger).
+    mon = _monitor()
+    book = _book(bid="0.60", ask="0.55")  # crossed
+    state = mon.evaluate([_pos("t1"), _pos("t1")], lambda token: book)
+    assert state.action == HALT
+    assert state.triggers.count(REASON_L5_ABNORMAL_BOOK) == 1
+
+
+def test_simultaneous_jump_and_collapse_fire_l5_abnormal_book_once():
+    # Pinned contract: all three checks fire the SAME trigger string ONCE, not three times.
+    # Cycle 2 trips BOTH the jump (0.50 -> 0.65 = 0.15 >= 0.15) and the collapse
+    # (1000 -> 200 <= 200). Kills: appending per-condition instead of once per cycle.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="500", ask_size="500"))   # mid 0.50 depth 1000
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.64", ask="0.66",
+                                                           bid_size="100", ask_size="100"))  # mid 0.65 depth 200
+    assert state.action == HALT
+    assert state.triggers.count(REASON_L5_ABNORMAL_BOOK) == 1
+
+
 def test_depth_drop_to_just_over_the_80_percent_threshold_does_not_fire():
     # Boundary pair, JUST OVER: 1000 -> 201 shares survives (200 is the line).
     mon = _monitor()

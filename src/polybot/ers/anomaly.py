@@ -121,14 +121,22 @@ class AnomalyMonitor:
         return AnomalyState(HALT, tuple(triggers))
 
     def _check_abnormal_book(self, positions, book_for, triggers):
-        """L5 trigger 1 (DESIGN-S4.4 §3): structural + depth-collapse + midpoint-jump legs.
-        Depth = top-of-book bid_size + ask_size; collapse fires when prev_depth >=
-        caps.depth_collapse_min_prev_shares (the >= floor is pinned by the exactly-1000 test)
-        AND depth <= prev_depth * (1 - caps.depth_collapse_fraction) (the <= compare is
-        pinned by the exactly-200 test). Prev memory updates AFTER comparisons and ONLY on
-        a valid non-stale mid -- a stale interlude preserves the last VALID baseline."""
+        """L5 trigger 1 (DESIGN-S4.4 §3): crossed/locked/empty-side, depth-collapse and
+        midpoint-jump on HELD tokens with NON-stale books. Tokens are DEDUPED (many
+        positions can share one token -- its book is checked once per cycle) and all three
+        checks fire the SAME reason string at most ONCE per cycle (the count==1 tests pin
+        both). Frozen positions are NOT skipped (book structure, not P&L). Per-token
+        prev-mid/prev-depth memory updates AFTER comparisons and ONLY on a valid non-stale
+        mid, so first observation never fires jump/collapse and a stale interlude preserves
+        the last VALID baseline. Stale books -> breaker/validator domain; absent books ->
+        validator no_book domain."""
+        abnormal = False
+        seen = set()
         for pos in positions:
             token = pos.token_id
+            if token in seen:
+                continue  # dedupe: one structural check per token per cycle
+            seen.add(token)
             book = book_for(token)
             if book is None:
                 continue
@@ -136,7 +144,7 @@ class AnomalyMonitor:
                 continue
             mid = book.midpoint()
             if mid is None:
-                triggers.append(REASON_L5_ABNORMAL_BOOK)  # crossed/locked/empty side
+                abnormal = True  # non-stale yet mid-less = crossed/locked/empty side
                 continue
             _bid, bid_size, _ask, ask_size = book.top_of_book()
             depth = ((bid_size if bid_size is not None else Decimal("0"))
@@ -145,9 +153,11 @@ class AnomalyMonitor:
             if (prev_depth is not None
                     and prev_depth >= self._caps.depth_collapse_min_prev_shares
                     and depth <= prev_depth * (Decimal(1) - self._caps.depth_collapse_fraction)):
-                triggers.append(REASON_L5_ABNORMAL_BOOK)
+                abnormal = True
             prev_mid = self._prev_mid.get(token)
             if prev_mid is not None and abs(mid - prev_mid) >= self._caps.midpoint_jump_halt:
-                triggers.append(REASON_L5_ABNORMAL_BOOK)
+                abnormal = True
             self._prev_mid[token] = mid      # AFTER comparisons; valid non-stale mids only
             self._prev_depth[token] = depth
+        if abnormal:
+            triggers.append(REASON_L5_ABNORMAL_BOOK)  # once per cycle, never per check
