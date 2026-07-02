@@ -61,3 +61,37 @@ def test_monitor_with_all_seams_none_is_inert_and_returns_action_none():
     state = monitor.evaluate((), {}.get)
     assert state.action == A_NONE
     assert state.triggers == ()
+
+
+class _SkewDouble:
+    """Duck-typed skew-sentinel double (.skewed() -> bool); the real ClockSkewSentinel lands
+    in S4.4b. Mutable so the sticky tests can CLEAR the anomaly between cycles."""
+
+    def __init__(self, skewed):
+        self.is_skewed = skewed
+
+    def skewed(self):
+        return self.is_skewed
+
+
+def test_truthy_skew_sentinel_fires_halt_with_the_l5_clock_skew_trigger():
+    # Fire side of the skew boundary pair. MUTATION KILLED: dropping the skew consult, or
+    # appending the wrong reason string (the controller reports triggers[0] verbatim as the
+    # set_state reason).
+    from polybot.ers.anomaly import HALT as A_HALT, AnomalyMonitor
+    from polybot.ers.caps import RiskCaps
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=_SkewDouble(True))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == A_HALT
+    assert state.triggers == ("l5_clock_skew",)
+
+
+def test_falsy_skew_sentinel_keeps_action_none_with_no_triggers():
+    # No-fire side of the pair (explicit boundary partner of the test above). MUTATION
+    # KILLED: inverting the .skewed() check (`if not ...skewed()`).
+    from polybot.ers.anomaly import NONE as A_NONE, AnomalyMonitor
+    from polybot.ers.caps import RiskCaps
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=_SkewDouble(False))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == A_NONE
+    assert state.triggers == ()

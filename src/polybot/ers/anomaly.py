@@ -10,6 +10,8 @@ nothing here touches the op-state machine.
 
 from dataclasses import dataclass
 
+from polybot.ers.safety import REASON_L5_CLOCK_SKEW
+
 NONE = "NONE"
 HALT = "HALT"
 
@@ -41,6 +43,11 @@ class AnomalyMonitor:
 
     def evaluate(self, positions, book_for):
         triggers = []
+        # Severity slot 1 of the pinned order (skew, recon, canary, book, api, ws): clock
+        # skew. Slots 2-6 land in S4.4b-e.
+        if self._skew_sentinel is not None:
+            if self._skew_sentinel.skewed():
+                triggers.append(REASON_L5_CLOCK_SKEW)
         if not triggers:
             return AnomalyState(NONE, ())
         return AnomalyState(HALT, tuple(triggers))
