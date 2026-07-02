@@ -11,6 +11,8 @@ and each consumer converts the raise into its fail-closed action.
 
 from decimal import Decimal
 
+_KINDS = ("accept", "realized")
+
 
 def make_flow_recorder(store, *, wall_clock):
     """Return a fill_sink-shaped callable ``(intent, decision, position)`` appending one
@@ -44,16 +46,19 @@ def pending_in_window(rows, *, wall_now, window_seconds=86400):
     """Today's pending worst-case-risk FLOW: the sum of accept amounts in the rolling window
     plus abs(amount) for realized LOSSES (amount < 0) in the window. Wins (amount >= 0)
     NEVER offset -- conservative. In-window iff ``wall_now - wall_at <= window_seconds``
-    (INCLUSIVE old edge). Every row is read in full regardless of window, so a missing key
-    propagates KeyError -- callers convert the raise to their fail-closed action."""
+    (INCLUSIVE old edge). A malformed row (unknown kind / missing key) RAISES
+    (ValueError / KeyError propagate) -- corruption in our own journal is never skipped;
+    every row is validated in full regardless of window."""
     total = Decimal("0")
     for r in rows:
         kind = r["kind"]
+        if kind not in _KINDS:
+            raise ValueError(f"unknown flow kind: {kind!r}")
         amount = r["amount"]
         if wall_now - r["wall_at"] > window_seconds:
             continue
         if kind == "accept":
             total += amount
-        elif kind == "realized" and amount < Decimal("0"):
+        elif amount < Decimal("0"):
             total += -amount
     return total
