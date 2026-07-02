@@ -475,3 +475,92 @@ def test_reapplying_the_same_ramp_step_next_cycle_is_a_hash_identical_no_op(tmp_
         rc.run_cycle()
         assert ctl.active_caps().per_trade == Decimal("9")
         assert len([r for r in store.op_audit_log() if r["kind"] == "caps_swap"]) == 1
+
+
+class _StateSnoopingSigner(PaperSigner):
+    """PaperSigner recording the op-state AT THE MOMENT cancel_all is called -- proves the
+    gate closed (HALTED) BEFORE the de-risk fired."""
+
+    def __init__(self, ctl):
+        super().__init__()
+        self._ctl = ctl
+        self.state_at_cancel = []
+
+    def cancel_all(self):
+        self.state_at_cancel.append(self._ctl.state())
+        super().cancel_all()
+
+
+def test_loss_halt_from_running_swaps_then_halts_first_then_cancels_once_with_exact_rows(tmp_path):
+    # DESIGN §2 step 3: swaps FIRST (any op-state), then the edge-guarded halt (set_state
+    # audits it), THEN exactly ONE cancel_all with reason=triggers[0] and
+    # detail=",".join(triggers). The daily step composes into the weekly one (min'd) so only
+    # ONE caps_swap row appears. Kills: swapping the halt/cancel order (state_at_cancel would
+    # read the live state), double-firing cancel_all, wrong reason/detail strings, or
+    # applying the swaps after the halt (row order).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = _StateSnoopingSigner(ctl)
+        double = _LossDouble(_loss_state(
+            "HALT", ("weekly_loss_halt", "daily_pending_pause"), ("weekly", "daily")))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert signer.state_at_cancel == [_safety.HALTED]   # already closed at cancel time
+        assert len(signer.cancelled_all) == 1
+        assert ctl.active_caps().per_trade == Decimal("6")  # step B bit
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", _safety.RUNNING),
+            ("caps_swap", "ramp_down", _weekly_swap_detail()),
+            ("state_change", "weekly_loss_halt", _safety.HALTED),
+            ("cancel_all", "weekly_loss_halt", "weekly_loss_halt,daily_pending_pause"),
+        ]
+
+
+def test_loss_halt_escalates_a_paused_loop_to_halted_with_the_one_shot(tmp_path):
+    # PAUSED is a LIVE loop -- a weekly loss halt must still escalate it (edge guard is
+    # (RUNNING, PAUSED), the S4.4 doctrine). Kills: over-tightening the guard to
+    # RUNNING-only.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.PAUSED, reason=_safety.REASON_L8_PAUSED)
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("HALT", ("weekly_loss_halt",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert len(signer.cancelled_all) == 1
+        assert ("cancel_all", "weekly_loss_halt") in [
+            (r["kind"], r["reason"]) for r in store.op_audit_log()]
+
+
+class _RaisingCancelSigner(PaperSigner):
+    """cancel_all raises (venue/RPC down at the worst moment): the halt must already be in
+    place and must SURVIVE; the failure is audited; the cycle continues."""
+
+    def cancel_all(self):
+        raise RuntimeError("venue rejected cancelAll")
+
+
+def test_raising_cancel_all_is_audited_failed_and_never_unwinds_the_loss_halt_or_the_cycle(tmp_path):
+    # The S4.4 pattern verbatim: gate closed FIRST, the failure lands in op_audit as
+    # detail="FAILED: ...", and process_pending still runs (the pending intent REJECTs under
+    # the stored weekly_loss_halt reason; the standing GTD exits are the backstop).
+    # Kills: letting the exception propagate out of run_cycle (the S4.3 supervisor would
+    # SIGKILL a healthy loop), or auditing an unconditional success detail.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = _RaisingCancelSigner()
+        double = _LossDouble(_loss_state("HALT", ("weekly_loss_halt",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()                                   # must NOT raise
+        assert ctl.state() == _safety.HALTED             # the halt held
+        cancel_rows = [r for r in store.op_audit_log() if r["kind"] == "cancel_all"]
+        assert len(cancel_rows) == 1
+        assert cancel_rows[0]["reason"] == "weekly_loss_halt"
+        assert cancel_rows[0]["detail"] == "FAILED: venue rejected cancelAll"
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "weekly_loss_halt"
