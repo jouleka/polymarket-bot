@@ -209,5 +209,12 @@ def make_recon_provider(store, event_store, reconciler, *, wallet, clock_ns):
     DORMANT path without scanning the event store -- cheap enough to run every cycle until a
     POL-4 wallet exists."""
     def _provider():
-        return reconciler.reconcile({}, {}, None, wallet=None, now=clock_ns())
+        if wallet is None:
+            return reconciler.reconcile({}, {}, None, wallet=None, now=clock_ns())
+        envelopes = event_store.all()  # ONE scan per cycle feeds BOTH external legs
+        return reconciler.reconcile(
+            internal_balances(store.fills_log(), in_session=True),
+            clob_balances(envelopes),
+            onchain_balances(envelopes, wallet=wallet),
+            wallet=wallet, now=clock_ns())
     return _provider

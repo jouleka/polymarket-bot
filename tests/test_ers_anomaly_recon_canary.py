@@ -136,3 +136,33 @@ def test_make_recon_provider_wallet_none_short_circuits_to_dormant_without_scann
                                    wallet=None, clock_ns=lambda: 0)
     result = provider()
     assert result.status == DORMANT
+
+
+# --- Task E2: make_recon_provider with a real wallet builds the three legs ---------------------
+
+def test_make_recon_provider_with_wallet_agreement_across_three_legs_is_ok():
+    """wallet set: the provider folds internal_balances(store.fills_log(), in_session=True) +
+    clob_balances(event_store.all()) + onchain_balances(event_store.all(), wallet=wallet) and
+    hands them to the reconciler. 5 internal shares vs 5 on-chain shares (raw 5_000_000 /
+    10**6) agree -> OK. Kills the mutation that keeps the E1 shadow short-circuit for a real
+    wallet (that would report DORMANT, not OK)."""
+    store = _FillsStore([_fill("42", "BUY", "5", at=0)])
+    events = _EventStore([_positions_env("42", "5"),
+                          _chain_env(_single("0xseller", WALLET, "42", "5000000"))])
+    provider = make_recon_provider(store, events, ThreeWayReconciler(caps=RiskCaps()),
+                                   wallet=WALLET, clock_ns=lambda: 200_000_000_000)
+    assert provider().status == OK
+
+
+def test_make_recon_provider_with_wallet_unexplained_internal_excess_is_diverged():
+    """wallet set: 5 internal shares with NO on-chain transfer is a $5 delta over the $0.50
+    tolerance, and now (200s in ns) is far past the fill's settle window (fill at=0, window
+    90s) -> DIVERGED with the token named. Kills the mutation that drops/swaps the internal
+    leg (an empty internal fold would read OK)."""
+    store = _FillsStore([_fill("42", "BUY", "5", at=0)])
+    events = _EventStore([_positions_env("42", "0", eid_suffix="0xother")])
+    provider = make_recon_provider(store, events, ThreeWayReconciler(caps=RiskCaps()),
+                                   wallet=WALLET, clock_ns=lambda: 200_000_000_000)
+    result = provider()
+    assert result.status == DIVERGED
+    assert [d.token_id for d in result.divergences] == ["42"]
