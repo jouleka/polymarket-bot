@@ -240,6 +240,30 @@ def test_canary_failure_is_never_blind_retried_before_the_next_interval():
     assert calls["n"] == 1
 
 
+def test_raising_canary_is_never_blind_retried_before_the_next_interval():
+    """DESIGN §3 #6, the RAISING flavor: a canary that RAISES at t=0 fires l5_canary_fail and
+    must NOT be re-invoked at t=1 (well inside the 300s interval) -- last_run was stamped
+    BEFORE the call, so even a wedged signer is left alone until the next due tick.
+    MUTATION KILLED: stamping _canary_last_run AFTER the call (inside the try) leaves a
+    raising canary unstamped -> blind re-invocation of a wedged signer every cycle (the falsy
+    no-retry test alone misses this: a falsy RETURN still reaches a post-call stamp)."""
+    calls = {"n": 0}
+
+    def _boom():
+        calls["n"] += 1
+        raise RuntimeError("signer wedged mid-canary")
+
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=_boom)
+    state = monitor.evaluate((), {}.get)      # t=0: due, RAISES -> fired, 1 call
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+    assert calls["n"] == 1
+    box["now"] = 1.0
+    monitor.evaluate((), {}.get)              # not re-due: never re-poke the wedged signer
+    assert calls["n"] == 1
+
+
 def test_recon_mismatch_outranks_canary_fail_in_the_triggers_order():
     """evaluate collects ALL firing triggers in the pinned severity order, so a cycle where
     BOTH recon and canary fail reports ("l5_recon_mismatch", "l5_canary_fail") -- triggers[0]
