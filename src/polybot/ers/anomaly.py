@@ -89,6 +89,7 @@ class AnomalyMonitor:
         # in S4.4 -- no dispute-ingestion source exists yet.
         self._dispute_flagger = dispute_flagger
         self._canary_last_run = None               # float | None: the canary scheduler's memory
+        self._prev_mid = {}   # token_id -> last VALID (non-stale) midpoint observed (S4.4c)
 
     def evaluate(self, positions, book_for):
         now = self._clock()
@@ -118,16 +119,23 @@ class AnomalyMonitor:
         return AnomalyState(HALT, tuple(triggers))
 
     def _check_abnormal_book(self, positions, book_for, triggers):
-        """L5 trigger 1, structural leg (DESIGN-S4.4 §3): a HELD token whose NON-stale book
-        has no usable midpoint (crossed/locked/empty side) is an integrity anomaly.
-        Stale books are SKIPPED (validator book_stale / breaker stale_mark own those);
-        absent books are SKIPPED (validator no_book domain). Frozen positions are NOT
-        skipped -- this checks book structure, not P&L."""
+        """L5 trigger 1 (DESIGN-S4.4 §3): structural (crossed/locked/empty side) +
+        midpoint-jump legs. Per-token prev-mid memory: FIRST observation never fires the
+        jump; prev updates ONLY after comparisons and ONLY on a valid non-stale mid, so a
+        stale interlude preserves the last VALID baseline. Jump fires at
+        |mid - prev_mid| >= caps.midpoint_jump_halt (the exact-0.15 boundary test pins >=)."""
         for pos in positions:
-            book = book_for(pos.token_id)
+            token = pos.token_id
+            book = book_for(token)
             if book is None:
                 continue
             if book.is_stale():
                 continue
-            if book.midpoint() is None:
+            mid = book.midpoint()
+            if mid is None:
+                triggers.append(REASON_L5_ABNORMAL_BOOK)  # crossed/locked/empty side
+                continue
+            prev_mid = self._prev_mid.get(token)
+            if prev_mid is not None and abs(mid - prev_mid) >= self._caps.midpoint_jump_halt:
                 triggers.append(REASON_L5_ABNORMAL_BOOK)
+            self._prev_mid[token] = mid  # AFTER comparisons; valid non-stale mids only

@@ -99,3 +99,56 @@ def test_missing_book_none_is_skipped_silently():
     state = mon.evaluate([_pos("t1")], lambda token: None)
     assert state.action == NONE
     assert state.triggers == ()
+
+
+def test_first_observation_of_token_never_fires_midpoint_jump():
+    # Kills: seeding prev-mid with a default (e.g. 0 -> |0.40 - 0| >= 0.15 would false-fire
+    # the very first time a token is seen). First observation is memory-building ONLY.
+    mon = _monitor()
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.39", ask="0.41"))  # mid 0.40
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_midpoint_jump_of_exactly_the_threshold_0_15_fires():
+    # Boundary pair, AT threshold: design says |mid - prev_mid| >= midpoint_jump_halt (0.15).
+    # 0.40 -> 0.55 is EXACTLY 0.15. Kills: '>=' -> '>' on the jump compare.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.39", ask="0.41"))          # mid 0.40
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.54", ask="0.56"))  # mid 0.55
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_midpoint_jump_just_under_the_threshold_does_not_fire():
+    # Boundary pair, JUST UNDER: 0.40 -> 0.549 = 0.149 < 0.15. Kills: loosening the
+    # threshold or comparing against the wrong caps field.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.39", ask="0.41"))            # mid 0.40
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.539", ask="0.559"))  # mid 0.549
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_midpoint_drop_of_exactly_the_threshold_0_15_fires():
+    # Kills: dropping abs() -- a DOWNWARD jump (0.55 -> 0.40) is exactly as anomalous.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.54", ask="0.56"))          # mid 0.55
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.39", ask="0.41"))  # mid 0.40
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_stale_interlude_preserves_prev_mid_so_drift_across_the_gap_still_fires():
+    # Kills: updating/clearing per-token memory on a stale cycle. The last VALID mid (0.50)
+    # must stay the baseline across the gap: 0.65 - 0.50 = 0.15 fires. A mutant that books
+    # the stale book's would-be mid (0.57) sees only 0.08 and stays silent.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51"))          # mid 0.50
+    stale = _book(bid="0.56", ask="0.58")                                            # would-be mid 0.57
+    stale.mark_stale()
+    gap = mon.evaluate([_pos("t1")], lambda token: stale)
+    assert gap.action == NONE                                                        # stale cycle inert
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.64", ask="0.66"))  # mid 0.65
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
