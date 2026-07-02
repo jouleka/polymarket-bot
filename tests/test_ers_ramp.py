@@ -95,3 +95,45 @@ def test_assert_tighten_only_rejects_a_lowered_fixed_field_min_position_floor():
     # Kills: "fixed" degraded to "down" (a lowered dust floor must still be refused)
     with pytest.raises(ValueError, match="min_position_floor"):
         ramp.assert_tighten_only(RiskCaps(), _fake_caps(min_position_floor=Decimal("4.99")))
+
+
+# --- B3: step_daily ---------------------------------------------------------------------------
+
+
+def test_step_daily_pins_the_exact_operator_signed_values():
+    # Kills: any wrong step constant (fork 1 signed: per_trade 9, total 45, reserve 255, gtd 45)
+    stepped = ramp.step_daily(RiskCaps())
+    assert stepped.per_trade == Decimal("9")
+    assert stepped.total_open_risk == Decimal("45")
+    assert stepped.reserve_floor == Decimal("255")
+    assert stepped.gtd_bracket_aggregate == Decimal("45")
+
+
+def test_step_daily_touches_only_the_four_ratchet_fields():
+    # Kills: a step that silently changes a construction-captured field (the stale-copy
+    # boundary of DESIGN SS2 -- v1 steps must never touch L7/anomaly sentinel inputs)
+    base = dataclasses.asdict(RiskCaps())
+    stepped = dataclasses.asdict(ramp.step_daily(RiskCaps()))
+    changed = {name for name in base if base[name] != stepped[name]}
+    assert changed == {"per_trade", "total_open_risk", "reserve_floor", "gtd_bracket_aggregate"}
+
+
+def test_step_daily_reconstructs_a_verified_riskcaps_with_a_fresh_hash():
+    # dataclasses.replace re-runs __post_init__/_verify, so returning at all proves
+    # constructibility. Kills: returning a non-RiskCaps bag / a hash that does not change
+    # (the caps_swap audit detail would show old==new)
+    stepped = ramp.step_daily(RiskCaps())
+    assert isinstance(stepped, RiskCaps)
+    assert stepped.content_hash() != RiskCaps().content_hash()
+
+
+def test_step_daily_passes_the_tighten_only_guard():
+    # Kills: a step constant drifting loose -- swap_caps would refuse its own ramp step
+    ramp.assert_tighten_only(RiskCaps(), ramp.step_daily(RiskCaps()))  # must not raise
+
+
+def test_step_daily_is_idempotent_by_hash():
+    # Kills: a subtractive step (per_trade - 3 style) that keeps tightening on re-application
+    # (run_cycle re-applies steps every cycle while the trigger holds -- must be a no-op)
+    once = ramp.step_daily(RiskCaps())
+    assert ramp.step_daily(once).content_hash() == once.content_hash()

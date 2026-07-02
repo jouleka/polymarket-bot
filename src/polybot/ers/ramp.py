@@ -10,6 +10,7 @@ This module is PURE over caps values: it never touches op-state, the store, or a
 """
 
 import dataclasses
+from decimal import Decimal
 
 TIGHTEN_DIRECTION = {
     # Capital band.
@@ -76,3 +77,20 @@ def assert_tighten_only(old, new):
             raise ValueError(
                 f"tighten-only violation on {field.name} ({direction}): "
                 f"{old_value} -> {new_value}")
+
+
+def step_daily(caps):
+    """The daily-halt ramp step (fork 1, operator-signed 2026-07-02): per_trade -> min(., $9),
+    total_open_risk -> min(., $45), with reserve_floor/gtd_bracket_aggregate re-derived to keep
+    _verify's exact equalities (reserve == nav - total; gtd == total). min() makes the step
+    idempotent AND composable with the deeper weekly step (weekly(daily(c)) == weekly(c));
+    dataclasses.replace re-runs __post_init__/_verify on the frozen dataclass, so the result
+    is a re-verified RiskCaps or a raise -- never a silently inconsistent envelope."""
+    tightened_total = min(caps.total_open_risk, Decimal("45"))
+    return dataclasses.replace(
+        caps,
+        per_trade=min(caps.per_trade, Decimal("9")),
+        total_open_risk=tightened_total,
+        reserve_floor=caps.nav - tightened_total,
+        gtd_bracket_aggregate=tightened_total,
+    )
