@@ -125,7 +125,7 @@ def test_a_raising_flow_log_fails_closed_to_halt_with_flow_data_error(tmp_path):
 
 
 def test_weekly_losses_summing_to_exactly_36_do_not_halt(tmp_path):
-    # Boundary pair, at-the-cap side: DESIGN row 71 is a STRICT > on weekly_loss_halt ().
+    # Boundary pair, at-the-cap side: DESIGN row 71 is a STRICT > on weekly_loss_halt ($36).
     # Kills: >= instead of > on the weekly sum.
     with _store(tmp_path) as store:
         _realized(store, "-18", age=100000.0)
@@ -232,8 +232,26 @@ def test_the_streak_has_no_time_window_so_ancient_losses_still_count(tmp_path):
         assert state.triggers == ("consecutive_loss",)
 
 
+def test_streak_is_trailing_not_leading_an_asymmetric_run_does_not_fire(tmp_path):
+    # ASYMMETRIC run pinning the iteration DIRECTION: flow order [-1, -1, -1, +1, -1, -1] has
+    # a leading run of 3 and a trailing run of 2 < 3 -> NONE. Every other streak fixture is
+    # symmetric around its reset point, so this is the only test that tells forward from
+    # reverse. MUTATION KILLED: iterating forward counts the LEADING run (3) and fires on a
+    # streak the operator's row-72 semantics (most recent consecutive losses) says is broken.
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+        assert state.triggers == ()
+
+
 def test_pending_of_exactly_24_does_not_pause(tmp_path):
-    # Pending-arm boundary pair, at side: pending_in_window == daily_pending_ceiling () is
+    # Pending-arm boundary pair, at side: pending_in_window == daily_pending_ceiling ($24) is
     # a STRICT >, so at-the-ceiling does not fire. Kills: >= on the pending comparison.
     with _store(tmp_path) as store:
         _accept_row(store, "12", age=100.0)
@@ -244,7 +262,7 @@ def test_pending_of_exactly_24_does_not_pause(tmp_path):
 
 def test_pending_of_24_01_pauses_with_daily_pending_pause_and_the_daily_ramp_step(tmp_path):
     # Pending-arm boundary pair, over side (rows 70-vs-72 interplay: only a REALIZED LOSS can
-    # push pending past the gate-guarded ceiling -- here a /usr/bin/zsh.01 loss joins  of accepts).
+    # push pending past the gate-guarded ceiling -- here a $0.01 loss joins $24 of accepts).
     # 24.01 > 24 -> PAUSE(daily_pending_pause) + ramp step A ("daily"). Kills: dropping the
     # pending arm, wrong reason, or forgetting the "daily" step.
     with _store(tmp_path) as store:
@@ -279,7 +297,7 @@ def test_frozen_token_losses_are_excluded_from_the_streak(tmp_path):
 
 
 def test_frozen_token_losses_are_excluded_from_the_pending_loss_component(tmp_path):
-    #  accepts + a  frozen loss = pending 20 (not 30) -> under the  ceiling.
+    # $20 accepts + a $10 frozen loss = pending 20 (not 30) -> under the $24 ceiling.
     # Kills: passing the UNfiltered realized list to pending_in_window.
     with _store(tmp_path) as store:
         _accept_row(store, "20", age=100.0, token_id="t1")
@@ -290,7 +308,7 @@ def test_frozen_token_losses_are_excluded_from_the_pending_loss_component(tmp_pa
 
 def test_accept_rows_on_a_frozen_token_still_count_toward_pending(tmp_path):
     # Row 74's exclusion is for REALIZED counters only -- frozen positions still count toward
-    # open/pending flow.  frozen-token accept +  live loss = pending 30 > 24 -> PAUSE.
+    # open/pending flow. $20 frozen-token accept + $10 live loss = pending 30 > 24 -> PAUSE.
     # Kills: over-widening the frozen filter to the accept rows.
     with _store(tmp_path) as store:
         _accept_row(store, "20", age=100.0, token_id="tf")
@@ -668,7 +686,7 @@ def test_s4_7_whole_slice_e2e_rate_gate_slide_weekly_halt_ramp_and_sticky_reject
                                       wall_clock=lambda: wall[0]),
             clock=lambda: 0)
 
-        # Phase 1: two accepts flow; the recorder journals each ( worst-case at ask 0.50).
+        # Phase 1: two accepts flow; the recorder journals each ($12 worst-case at ask 0.50).
         store.propose_trade("i1", **_P)
         rc.run_cycle()
         store.propose_trade("i2", **dict(_P, token_id="t2", condition_id="m2", event_id="e2"))
@@ -686,15 +704,15 @@ def test_s4_7_whole_slice_e2e_rate_gate_slide_weekly_halt_ramp_and_sticky_reject
         assert ctl.state() == _safety.RUNNING
 
         # Phase 3: the wall clock slides past BOTH windows and flow resumes with an ACCEPT.
-        # (24h+, not just 1h+: the two  accepts hold pending AT the  ceiling, so the
+        # (24h+, not just 1h+: the two $12 accepts hold pending AT the $24 ceiling, so the
         # conservative daily gate would keep blocking until they age out of the 24h window.)
         wall[0] = 1000.0 + 86401.0
         store.propose_trade("i4", **dict(_P, token_id="t4", condition_id="m4", event_id="e4"))
         rc.run_cycle()
         assert store.get("i4").status == "ACCEPTED"
 
-        # Phase 4: realized losses cross the  weekly halt (streak 2 < 3: the weekly arm,
-        # not the streak arm; they also push pending over , so step A rides along and
+        # Phase 4: realized losses cross the $36 weekly halt (streak 2 < 3: the weekly arm,
+        # not the streak arm; they also push pending over $24, so step A rides along and
         # composes into step B -> exactly ONE caps_swap row).
         store.record_flow_event(kind="realized", token_id="t1", amount=Decimal("-18"),
                                 wall_at=wall[0])

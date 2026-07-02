@@ -47,6 +47,9 @@ class LossBreakers:
         self._wall_clock = wall_clock         # 0-arg -> float epoch seconds (windowing domain)
 
     def evaluate(self, *, frozen_tokens=frozenset()):
+        # INVARIANT: the try MUST remain the first statement -- the controller consults
+        # evaluate() unguarded (the S4.4 anomaly precedent), so any logic hoisted above
+        # this try can crash run_cycle into the L6 SIGKILL path.
         try:
             return self._evaluate(frozen_tokens)
         except Exception:
@@ -61,6 +64,13 @@ class LossBreakers:
         # Frozen exclusion (DECISIONS row 74): disputed/frozen tokens leave the realized
         # counters entirely (weekly, streak, AND the pending loss component); accept rows are
         # NOT filtered -- frozen positions still count toward pending/open flow.
+        # BOUNDARY: this is a token-level exclusion driven by a position-level flag -- a
+        # frozen position masks ALL realized flow on its token_id, including a live
+        # position's losses on the same token. The journal carries only token_id, so
+        # per-position attribution would need a fill/position linkage (deferred to the
+        # dispute-flagger wiring, POL-4/S9). That is the LESS-conservative direction for
+        # mixed frozen/live tokens -- acceptable while frozen_tokens is always empty (no
+        # dispute source exists yet); documented here for the future wirer.
         realized = [r for r in rows
                     if r["kind"] == "realized" and r["token_id"] not in frozen_tokens]
         triggers = []
