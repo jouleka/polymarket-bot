@@ -10,6 +10,7 @@ nothing here touches the op-state machine.
 
 from collections import deque
 from dataclasses import dataclass
+from decimal import Decimal
 
 from polybot.ers.safety import (
     REASON_L5_ABNORMAL_BOOK,
@@ -90,6 +91,7 @@ class AnomalyMonitor:
         self._dispute_flagger = dispute_flagger
         self._canary_last_run = None               # float | None: the canary scheduler's memory
         self._prev_mid = {}   # token_id -> last VALID (non-stale) midpoint observed (S4.4c)
+        self._prev_depth = {}  # token_id -> top-of-book depth at that same valid observation
 
     def evaluate(self, positions, book_for):
         now = self._clock()
@@ -119,11 +121,12 @@ class AnomalyMonitor:
         return AnomalyState(HALT, tuple(triggers))
 
     def _check_abnormal_book(self, positions, book_for, triggers):
-        """L5 trigger 1 (DESIGN-S4.4 §3): structural (crossed/locked/empty side) +
-        midpoint-jump legs. Per-token prev-mid memory: FIRST observation never fires the
-        jump; prev updates ONLY after comparisons and ONLY on a valid non-stale mid, so a
-        stale interlude preserves the last VALID baseline. Jump fires at
-        |mid - prev_mid| >= caps.midpoint_jump_halt (the exact-0.15 boundary test pins >=)."""
+        """L5 trigger 1 (DESIGN-S4.4 §3): structural + depth-collapse + midpoint-jump legs.
+        Depth = top-of-book bid_size + ask_size; collapse fires when prev_depth >=
+        caps.depth_collapse_min_prev_shares (the >= floor is pinned by the exactly-1000 test)
+        AND depth <= prev_depth * (1 - caps.depth_collapse_fraction) (the <= compare is
+        pinned by the exactly-200 test). Prev memory updates AFTER comparisons and ONLY on
+        a valid non-stale mid -- a stale interlude preserves the last VALID baseline."""
         for pos in positions:
             token = pos.token_id
             book = book_for(token)
@@ -135,7 +138,16 @@ class AnomalyMonitor:
             if mid is None:
                 triggers.append(REASON_L5_ABNORMAL_BOOK)  # crossed/locked/empty side
                 continue
+            _bid, bid_size, _ask, ask_size = book.top_of_book()
+            depth = ((bid_size if bid_size is not None else Decimal("0"))
+                     + (ask_size if ask_size is not None else Decimal("0")))
+            prev_depth = self._prev_depth.get(token)
+            if (prev_depth is not None
+                    and prev_depth >= self._caps.depth_collapse_min_prev_shares
+                    and depth <= prev_depth * (Decimal(1) - self._caps.depth_collapse_fraction)):
+                triggers.append(REASON_L5_ABNORMAL_BOOK)
             prev_mid = self._prev_mid.get(token)
             if prev_mid is not None and abs(mid - prev_mid) >= self._caps.midpoint_jump_halt:
                 triggers.append(REASON_L5_ABNORMAL_BOOK)
-            self._prev_mid[token] = mid  # AFTER comparisons; valid non-stale mids only
+            self._prev_mid[token] = mid      # AFTER comparisons; valid non-stale mids only
+            self._prev_depth[token] = depth
