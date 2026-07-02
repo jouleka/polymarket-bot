@@ -48,3 +48,16 @@ def test_anomaly_state_is_a_frozen_dataclass_with_action_and_triggers():
     assert state.triggers == ("l5_clock_skew",)
     with pytest.raises(dataclasses.FrozenInstanceError):
         state.action = "NONE"
+
+
+def test_monitor_with_all_seams_none_is_inert_and_returns_action_none():
+    # Dormant-by-default (design §6.5): a bare AnomalyMonitor(caps, clock=...) with every
+    # seam left None must NEVER fire, whatever positions/books look like -- the data-gated
+    # pattern. MUTATION KILLED: any seam consult that fires when its seam is None (e.g.
+    # dropping an `is not None` guard).
+    from polybot.ers.anomaly import NONE as A_NONE, AnomalyMonitor
+    from polybot.ers.caps import RiskCaps
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == A_NONE
+    assert state.triggers == ()
