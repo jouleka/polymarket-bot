@@ -9,6 +9,8 @@ wall-clock seconds over wall_at -- the monotonic `at` column is never used for w
 
 from dataclasses import dataclass
 
+from polybot.ers.safety import REASON_FLOW_DATA_ERROR
+
 NONE = "NONE"
 PAUSE = "PAUSE"
 HALT = "HALT"
@@ -26,3 +28,26 @@ class LossState:
         if self.action in (PAUSE, HALT) and not self.triggers:
             raise ValueError(
                 "PAUSE/HALT requires at least one trigger (the consumer indexes triggers[0])")
+
+
+class LossBreakers:
+    """evaluate(frozen_tokens=...) -> LossState, once per controller cycle (consumed by
+    ERSController AFTER the L5 anomaly consult). The fail-closed wrapper is the load-bearing
+    frame: ANY raise inside the journal read + window math becomes the data-error halt."""
+
+    def __init__(self, *, store, caps_provider, wall_clock):
+        self._store = store
+        self._caps_provider = caps_provider   # 0-arg -> RiskCaps (follows the ramp ratchet)
+        self._wall_clock = wall_clock         # 0-arg -> float epoch seconds (windowing domain)
+
+    def evaluate(self, *, frozen_tokens=frozenset()):
+        try:
+            return self._evaluate(frozen_tokens)
+        except Exception:
+            # FAIL CLOSED (DESIGN §6.4): corruption in our own safety ledger is never skipped
+            # and never propagates -- it IS a halt. No ramp step off unreadable data.
+            return LossState(HALT, (REASON_FLOW_DATA_ERROR,), ())
+
+    def _evaluate(self, frozen_tokens):
+        self._store.flow_log()   # the arms land in D3-D7; the read must happen (fail-closed)
+        return LossState(NONE, (), ())

@@ -91,3 +91,34 @@ def test_lossbreaker_module_source_never_references_the_resume_state_or_set_stat
     src = Path(_lb.__file__).read_text(encoding="utf-8")
     assert "set_state" not in src
     assert "RUNNING" not in src
+
+
+def test_evaluate_over_an_empty_journal_returns_none_the_shadow_data_gated_state(tmp_path):
+    # DESIGN §7: realized rows don't exist until POL-4/S9, so in shadow the breakers evaluate
+    # an empty set and stay NONE forever. Kills: any arm firing over zero rows.
+    with _store(tmp_path) as store:
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+        assert state.triggers == ()
+        assert state.ramp_steps == ()
+
+
+class _RaisingFlowLogStore:
+    """A store whose flow_log raises -- corruption in OUR OWN safety ledger."""
+
+    def flow_log(self):
+        raise RuntimeError("journal corrupted")
+
+
+def test_a_raising_flow_log_fails_closed_to_halt_with_flow_data_error(tmp_path):
+    # DESIGN §6.4: a raising/malformed flow_journal read makes the breakers HALT with
+    # flow_data_error -- never silent, never propagating. ramp_steps stays () (no blind
+    # tightening off unreadable data). Kills: letting the raise escape evaluate, or
+    # except-ing to NONE (which would let the loop keep trading on corrupt safety data).
+    from polybot.ers.lossbreaker import LossBreakers
+    breakers = LossBreakers(store=_RaisingFlowLogStore(), caps_provider=lambda: RiskCaps(),
+                            wall_clock=lambda: _NOW)
+    state = breakers.evaluate()   # must NOT raise
+    assert state.action == "HALT"
+    assert state.triggers == ("flow_data_error",)
+    assert state.ramp_steps == ()
