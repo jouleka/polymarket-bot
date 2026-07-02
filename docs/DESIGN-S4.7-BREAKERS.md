@@ -156,7 +156,8 @@ def make_flow_recorder(store, *, wall_clock): ...
 def compose_sinks(*sinks): ...            # one fill_sink fanning out to many (fills + flow)
 def accepts_in_window(rows, *, wall_now, window_seconds) -> int: ...        # kind=="accept" count
 def pending_in_window(rows, *, wall_now, window_seconds=86400) -> Decimal: ...
-#   Σ accept.amount + Σ abs(realized.amount) where amount < 0, wall_at in (wall_now-window, wall_now];
+#   Σ accept.amount + Σ abs(realized.amount) where amount < 0; in-window iff wall_now - wall_at <=
+#   window_seconds (INCLUSIVE old edge — the breaker/ApiStorm convention; keeping the boundary row is tighter);
 #   wins NEVER offset (conservative). A malformed row in OUR OWN journal is corruption, never skipped:
 #   the helpers RAISE, and each consumer converts the raise into its fail-closed action (the gate BLOCKS
 #   with REASON_FLOW_GATE_ERROR; the breakers HALT with REASON_FLOW_DATA_ERROR).
