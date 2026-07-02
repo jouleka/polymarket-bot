@@ -224,3 +224,35 @@ def test_anomaly_none_default_leaves_the_cycle_exactly_as_today(tmp_path):
         assert store.get("i1").status == "ACCEPTED"
         assert signer.cancelled_all == []
         assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
+
+
+def test_already_halted_loop_never_refires_cancel_all_or_state_change(tmp_path):
+    # Edge-triggered (design §2): the monitor evaluates every cycle, but an ALREADY-HALTED
+    # loop is never re-de-risked and never re-audited -- no audit spam, no cancel_all churn
+    # against the standing GTD exits. Start = boot HALTED (unclean_restart), anomaly firing.
+    # MUTATION KILLED: dropping the op-state edge guard entirely.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)   # boot: HALTED
+        signer = PaperSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert signer.cancelled_all == []      # no de-risk fired from HALTED
+        assert store.op_audit_log() == []      # no state_change row, no cancel_all row
+
+
+def test_anomaly_still_firing_on_the_next_cycle_does_not_refire_the_one_shot(tmp_path):
+    # Edge-triggered, cycle 2: after the halt, a STILL-firing anomaly must not re-fire
+    # cancel_all or append further audit rows -- exactly one halt + one de-risk, ever.
+    # MUTATION KILLED: level-triggered re-firing on every cycle the sentinel stays skewed.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+        rc.run_cycle()     # fires: halt + ONE cancel_all
+        rc.run_cycle()     # still skewed -- must be a no-op on the kill path
+        assert len(signer.cancelled_all) == 1
+        kinds = [r["kind"] for r in store.op_audit_log()]
+        assert kinds.count("cancel_all") == 1
+        assert kinds.count("state_change") == 2    # clean_reconcile + the ONE l5 halt

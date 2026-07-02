@@ -60,7 +60,9 @@ class ERSController:
             # prev-state warm every cycle). On HALT: the gate closes FIRST (set_state audits
             # the transition), THEN the one-shot de-risk + its own audit row.
             state = self._anomaly.evaluate(self._portfolio.positions, self._book_for)
-            if state.action == HALT:
+            # EDGE-triggered: never re-fire on an existing HALTED (no audit spam, no
+            # cancel_all churn against the standing GTD exits).
+            if state.action == HALT and self._controller.state() != HALTED:
                 self._controller.set_state(HALTED, reason=state.triggers[0])
                 self._signer.cancel_all()
                 self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
