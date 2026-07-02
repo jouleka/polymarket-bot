@@ -193,9 +193,9 @@ class IntentStore:
 
     def record_op_event(self, *, kind, reason, detail=""):
         """Append an IMMUTABLE op/kill/heartbeat audit row (S4.1). ``kind`` in
-        {state_change, kill, pause, flatten, heartbeat}; ``reason`` is a REASON_* code or a
-        free-form string. Append-only + the shared monotonic stamp, mirroring intent_audit, so
-        the restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
+        {state_change, kill, pause, flatten, heartbeat, cancel_all}; ``reason`` is a REASON_* code
+        or a free-form string. Append-only + the shared monotonic stamp, mirroring intent_audit,
+        so the restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
         self._conn.execute(
             "INSERT INTO op_audit (at, kind, reason, detail) VALUES (?, ?, ?, ?)",
             (self._stamper.stamp(), kind, reason, detail),
