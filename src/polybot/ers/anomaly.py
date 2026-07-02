@@ -106,8 +106,19 @@ class AnomalyMonitor:
                 # FAIL-CLOSED SEAM RULE: a raising sentinel IS the anomaly -- fire this
                 # seam's trigger and continue to the next seam; never mask, never propagate.
                 triggers.append(REASON_L5_CLOCK_SKEW)
-        # Severity slot 4: abnormal book -- internal check over positions + book_for, no seam.
-        self._check_abnormal_book(positions, book_for, triggers)
+        # Severity slot 4: abnormal book -- internal check over positions + book_for, no
+        # seam kwarg, but fail-closed wrapped all the same: a raising book/book_for IS an
+        # abnormal-book anomaly, and an unwrapped raise here would VOID the triggers already
+        # collected this cycle (e.g. a skew halt lost to a run_cycle crash -> L6 SIGKILL
+        # instead of a clean audited halt). Never mask, never propagate.
+        try:
+            self._check_abnormal_book(positions, book_for, triggers)
+        except Exception:
+            # _check_abnormal_book appends its trigger as its FINAL statement, so a raise
+            # means it has not fired this cycle; the not-in guard keeps the once-per-cycle
+            # invariant robust regardless of how the method evolves.
+            if REASON_L5_ABNORMAL_BOOK not in triggers:
+                triggers.append(REASON_L5_ABNORMAL_BOOK)
         # Severity slot 5 of the pinned order: API 5xx/auth storm.
         # FAIL-CLOSED: a raising seam IS the anomaly -- fire and move to the next seam.
         if self._api_sentinel is not None:
