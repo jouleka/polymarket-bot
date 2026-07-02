@@ -271,3 +271,52 @@ def test_collector_forwards_detector_and_synthetic_sink():
 
     assert [o.event_type for o in synth] == ["liquidity_evaporation"]
     assert synth[0].message["asset_id"] == "A" and synth[0].message["price"] == "0.60"
+
+
+# --- S4.4d: collector-level WS health = the LAGGING shard's health -------------
+
+
+def test_collector_last_frame_at_is_none_before_any_frame():
+    """Kills: initializing to 0/now -- an unstarted collector must read as
+    never-saw-a-frame so the L5 wired-but-silent path fires."""
+    stamper = MonotonicStamper(clock=lambda: 1)
+    collector = ShardedMarketCollector(_connect_from([]), stamper, ["A", "B"],
+                                       max_assets_per_shard=1)
+
+    assert collector.last_frame_at() is None
+
+
+def test_collector_last_frame_at_is_the_min_across_shards():
+    """Collector health is the OLDEST shard stamp: one lagging shard defines the
+    whole collector (fail-closed). Kills: min()->max() (the freshest shard would
+    mask a lagging sibling) and any single-shard read."""
+    observed = []
+    t0 = FakeTransport([_book_frame("A", "0.60", "0.62")])
+    t1 = FakeTransport([_book_frame("B", "0.40", "0.45")])
+    stamper = MonotonicStamper(clock=lambda: 1)
+    collector = ShardedMarketCollector(
+        _connect_from([t0, t1]), stamper, ["A", "B"],
+        sink=lambda obs: observed.append(obs.observed_at), max_assets_per_shard=1,
+    )
+
+    asyncio.run(collector.run(max_connections=1))
+
+    assert len(observed) == 2 and len(set(observed)) == 2
+    assert collector.last_frame_at() == min(observed)  # the OLDER shard stamp, not the newer
+
+
+def test_collector_last_frame_at_is_none_when_any_shard_has_no_frame_yet():
+    """Fail-closed: a shard that never received a frame = +inf staleness for the
+    WHOLE collector, not 'min of the shards that did'. Kills: skipping None shards
+    in the aggregation."""
+    t0 = FakeTransport([_book_frame("A", "0.60", "0.62")])
+    t1 = FakeTransport([])  # shard B connects+subscribes but never receives a frame
+    stamper = MonotonicStamper(clock=lambda: 1)
+    collector = ShardedMarketCollector(
+        _connect_from([t0, t1]), stamper, ["A", "B"], max_assets_per_shard=1,
+    )
+
+    asyncio.run(collector.run(max_connections=1))
+
+    assert collector.book_for("A") is not None   # shard A DID stream
+    assert collector.last_frame_at() is None     # but shard B's silence wins (fail-closed)
