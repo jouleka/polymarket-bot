@@ -19,6 +19,8 @@ This matches the design's distinct §6 reason codes + the audit trail.
 
 from dataclasses import dataclass
 
+from polybot.ers.ramp import assert_tighten_only
+
 # --- op-state vocabulary (NET-NEW; FLATTENING != breaker.py FLATTEN) -------------------------
 RUNNING = "RUNNING"
 PAUSED = "PAUSED"
@@ -42,6 +44,16 @@ REASON_L5_ABNORMAL_BOOK = "l5_abnormal_book"  # crossed/locked mid, depth collap
 REASON_L5_API_STORM = "l5_api_storm"          # 5xx / auth-failure storm within the window
 REASON_L5_WS_DOWN = "l5_ws_down"              # WS silent beyond staleness (None frame = +inf age)
 REASON_L5_CANARY_FAIL = "l5_canary_fail"      # signing canary failed/raised -- NEVER blind-retried
+# --- S4.7 reason codes (NET-NEW; the flow gate / loss breakers / ramp-ratchet vocabulary) ------
+REASON_RATE_HOURLY = "rate_cap_hourly"              # accepts in rolling 3600s >= new_positions_per_hour
+REASON_RATE_DAILY = "rate_cap_daily"                # accepts in rolling 86400s >= new_positions_per_day
+REASON_DAILY_CEILING = "daily_ceiling"              # conservative per_trade-headroom pre-crossing block
+REASON_DAILY_PENDING_PAUSE = "daily_pending_pause"  # realized losses pushed pending over -> sticky PAUSE
+REASON_WEEKLY_LOSS = "weekly_loss_halt"             # rolling-7d realized losses > cap -> sticky HALT
+REASON_CONSECUTIVE_LOSS = "consecutive_loss"        # trailing realized-loss streak >= cap -> sticky PAUSE
+REASON_RAMP_DOWN = "ramp_down"                      # swap_caps audit reason for a ratchet step
+REASON_FLOW_GATE_ERROR = "flow_gate_error"          # the flow gate raised -> fail-closed verdict block
+REASON_FLOW_DATA_ERROR = "flow_data_error"          # flow_journal corruption -> loss breakers HALT
 
 
 @dataclass(frozen=True)
@@ -69,6 +81,10 @@ class SafetyController:
         # Reconciled deviation: track the specific reason so verdict() returns it, not a generic
         # state name. Initial reason is unclean_restart (boot default; never explicitly set).
         self._reason = REASON_UNCLEAN_RESTART
+        # S4.7: the flow gate is a ONE-SHOT late binder (wire_flow_gate) because it needs
+        # caps_provider=self.active_caps -- it cannot exist before the controller does.
+        # Unwired (None) == today's verdict byte-for-byte.
+        self._flow_gate = None
 
     def state(self):
         return self._state
@@ -76,6 +92,41 @@ class SafetyController:
     def active_caps(self):
         # The swappable RiskCaps reference (the S4.7 ramp-DOWN ratchet replaces it atomically).
         return self._caps
+
+    def wire_flow_gate(self, gate):
+        """One-shot late binder for the S4.7 flow gate (rate caps + daily pending ceiling).
+
+        ``gate`` is a 0-arg callable -> None | a REASON_* string, consulted ONLY in verdict()'s
+        RUNNING branch. One-shot: a re-wire is a mis-assembly, not a supported operation -- the
+        second call fails LOUD rather than silently swapping the safety gate."""
+        if self._flow_gate is not None:
+            raise RuntimeError("flow gate already wired")
+        self._flow_gate = gate
+
+    def swap_caps(self, new_caps, *, reason):
+        """The S4.7 ramp-DOWN ratchet: atomically install a NEW re-verified RiskCaps.
+
+        Tighten-only (assert_tighten_only over every field per ramp.TIGHTEN_DIRECTION -- a
+        loosening swap raises ValueError and changes NOTHING); idempotent (a hash-identical
+        new_caps returns False and writes NO audit row); audited (kind=caps_swap,
+        detail=old->new 16-char content-hash prefixes) BEFORE the in-memory mutate, so a
+        crash mid-swap leaves the explanation ahead of the effect (the set_state doctrine).
+        Applies in ANY op-state -- tightening while halted is harmless and desirable.
+        Returns True iff the caps actually changed.
+
+        CONCURRENCY: single-threaded runloop assumption. swap_caps and active_caps() are
+        NOT synchronized, and the guard -> audit -> mutate sequence is not atomic -- do NOT
+        call from another thread (S4.6's operator-triggered LOWER_CAPS must route through
+        the same serial runloop)."""
+        assert_tighten_only(self._caps, new_caps)
+        old_hash = self._caps.content_hash()
+        new_hash = new_caps.content_hash()
+        if new_hash == old_hash:
+            return False
+        self._store.record_op_event(
+            kind="caps_swap", reason=reason, detail=f"{old_hash[:16]}->{new_hash[:16]}")
+        self._caps = new_caps
+        return True
 
     def set_state(self, op_state, *, reason):
         """Operator/L8-driven transition. Appends an immutable op-audit row, then swaps the
@@ -114,6 +165,18 @@ class SafetyController:
         the stored reason is l8_kill, and verdict() blocks with l8_kill -- distinct from the
         startup HALTED which has reason=unclean_restart."""
         if self._state == RUNNING:
+            # S4.7: consult the flow gate (rate caps + daily pending ceiling). The gate BLOCKS
+            # without touching op-state -- when the window slides the block evaporates (no new
+            # auto-resume path; sticky transitions stay the S4.4 edge-triggered doctrine).
+            if self._flow_gate is not None:
+                try:
+                    reason = self._flow_gate()
+                except Exception:
+                    # A raising gate is corruption in our OWN safety ledger: fail CLOSED with
+                    # its own reason -- never propagate, never silently pass (design SS6.4).
+                    reason = REASON_FLOW_GATE_ERROR
+                if reason is not None:
+                    return OpVerdict(RUNNING, reason, None, (reason,))
             # RUNNING -> no op-block; the loop proceeds to the L7 breaker unchanged.
             return OpVerdict(RUNNING, None, None, ())
         if self._state == PAUSED:
