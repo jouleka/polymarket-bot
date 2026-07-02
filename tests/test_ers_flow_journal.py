@@ -57,3 +57,23 @@ def test_flow_journal_survives_close_and_reopen(tmp_path):
         assert len(rows) == 1
         assert rows[0]["kind"] == "accept" and rows[0]["token_id"] == "t1"
         assert rows[0]["amount"] == Decimal("12") and rows[0]["wall_at"] == 500.0
+
+
+# --- S4.7a: make_flow_recorder (ers/flow.py -- the fill_sink-shaped accept recorder) ----------
+from polybot.ers.flow import make_flow_recorder
+from polybot.ers.validator import OpenPosition
+
+
+def test_make_flow_recorder_records_accept_with_worst_case_risk_and_injected_wall_clock(tmp_path):
+    # Kills: recording the wrong kind / sourcing amount from anything but position.worst_case_risk;
+    # Kills: calling time.time() instead of the injected 0-arg wall_clock (wall_at must be 777.5).
+    with _store(str(tmp_path / "i.db")) as store:
+        recorder = make_flow_recorder(store, wall_clock=lambda: 777.5)
+        position = OpenPosition(condition_id="m1", event_id="e1", resolution_source="s1",
+                                cluster_id="c1", worst_case_risk=Decimal("8"), matrix_cold=False,
+                                token_id="t9", entry_price=Decimal("0.50"), frozen=False)
+        recorder(None, None, position)  # intent/decision unused: the recorder reads ONLY the position
+        rows = store.flow_log()
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "accept" and rows[0]["token_id"] == "t9"
+        assert rows[0]["amount"] == Decimal("8") and rows[0]["wall_at"] == 777.5
