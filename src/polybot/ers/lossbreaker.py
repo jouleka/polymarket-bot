@@ -8,12 +8,15 @@ wall-clock seconds over wall_at -- the monotonic `at` column is never used for w
 """
 
 from dataclasses import dataclass
+from decimal import Decimal
 
-from polybot.ers.safety import REASON_FLOW_DATA_ERROR
+from polybot.ers.safety import REASON_FLOW_DATA_ERROR, REASON_WEEKLY_LOSS
 
 NONE = "NONE"
 PAUSE = "PAUSE"
 HALT = "HALT"
+
+_WEEKLY_WINDOW_SECONDS = 604800
 
 
 @dataclass(frozen=True)
@@ -49,5 +52,16 @@ class LossBreakers:
             return LossState(HALT, (REASON_FLOW_DATA_ERROR,), ())
 
     def _evaluate(self, frozen_tokens):
-        self._store.flow_log()   # the arms land in D3-D7; the read must happen (fail-closed)
+        rows = self._store.flow_log()
+        caps = self._caps_provider()
+        now = self._wall_clock()
+        realized = [r for r in rows if r["kind"] == "realized"]
+        # Weekly arm (DECISIONS row 71): sum of |realized losses| in the rolling 7d wall
+        # window, STRICT > (at-the-cap does not fire). INCLUSIVE old edge (<=).
+        weekly_loss_total = sum(
+            (abs(r["amount"]) for r in realized
+             if r["amount"] < 0 and now - r["wall_at"] <= _WEEKLY_WINDOW_SECONDS),
+            Decimal(0))
+        if weekly_loss_total > caps.weekly_loss_halt:
+            return LossState(HALT, (REASON_WEEKLY_LOSS,), ("weekly",))
         return LossState(NONE, (), ())
