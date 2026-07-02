@@ -502,3 +502,46 @@ def test_last_frame_at_not_refreshed_by_benign_ignored_event_types():
 
     assert result is None
     assert stream.last_frame_at() is None
+
+
+def test_last_frame_at_advances_to_the_applied_price_change_stamp():
+    """Kills: recording only in the book-snapshot path (leaving the applied
+    price_change dispatch site on the raw stamper)."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    snapshot_stamp = stream.last_frame_at()
+
+    stamps = stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))
+
+    assert stream.last_frame_at() == stamps[-1]
+    assert stream.last_frame_at() > snapshot_stamp
+
+
+def test_last_frame_at_advances_on_a_pre_snapshot_archived_delta():
+    """A SUBSCRIBED asset's delta landing before its snapshot is stamped+archived but
+    never APPLIED -- it is still a real venue frame, so it proves the socket is alive
+    and must refresh health. Kills: recording only in the applied-delta branch."""
+    seen = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=seen.append, asset_ids=["A"])
+
+    stamps = stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))
+
+    assert stream.book_for("A") is None           # not applied (no baseline)...
+    assert stream.last_frame_at() == stamps[-1]   # ...but health still refreshed
+
+
+def test_last_frame_at_records_the_venue_frame_stamp_not_the_synthetic_stamp():
+    """Kills: recording inside _emit_synthetic -- a DERIVED event would masquerade
+    as venue liveness. Health must equal the triggering venue frame's observed_at,
+    never the synthetic event's own (later) stamp."""
+    market, synth = [], []
+    det = _detector(large_print_size="5000", min_evaporation_size="1000000")
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=market.append,
+                          detector=det, synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "8000")], [("0.62", "100")]))
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "500", "0.60", "0.62")))  # -> large_print
+
+    assert [o.event_type for o in synth] == ["large_print"]   # a synthetic DID fire
+    assert stream.last_frame_at() == market[-1].observed_at   # health == the venue frame's stamp
+    assert stream.last_frame_at() < synth[0].observed_at      # NOT the later synthetic stamp

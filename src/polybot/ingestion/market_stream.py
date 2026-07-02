@@ -159,14 +159,14 @@ class MarketStream:
                 # untracked sibling leg is skipped: no phantom book, and no duplicate
                 # row racing the shard that actually subscribed to it.
                 if self._tracked is not None and asset_id in self._tracked and self._sink is not None:
-                    observed_at = self._stamper.stamp()
+                    observed_at = self._stamp_frame()
                     self._sink(Observation(
                         asset_id, "price_change", observed_at,
                         self._per_asset_message(message, asset_id, entries),
                     ))
                     stamps.append(observed_at)
                 continue
-            observed_at = self._stamper.stamp()  # stamp before mutation, per tracked asset
+            observed_at = self._stamp_frame()  # stamp before mutation, per tracked asset
             if self._detector is not None:
                 before_top = book.top_of_book()
                 level_changes = [
