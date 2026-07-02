@@ -152,3 +152,69 @@ def test_stale_interlude_preserves_prev_mid_so_drift_across_the_gap_still_fires(
     state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.64", ask="0.66"))  # mid 0.65
     assert state.action == HALT
     assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_first_observation_of_token_never_fires_depth_collapse():
+    # Pins: cycle 1 on a huge book is memory-building only (no prev-depth to compare).
+    # Kills: seeding prev-depth with a comparable default.
+    mon = _monitor()
+    state = mon.evaluate([_pos("t1")],
+                         lambda token: _book(bid="0.49", ask="0.51",
+                                             bid_size="5000", ask_size="5000"))
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_depth_collapse_to_exactly_the_80_percent_threshold_fires():
+    # Boundary pair, AT threshold: depth <= prev * (1 - depth_collapse_fraction) with
+    # prev >= depth_collapse_min_prev_shares. 1000 -> 200 shares = exactly 80% gone, and
+    # prev sits EXACTLY on the 1000-share floor. Kills: '<=' -> '<' on the collapse
+    # compare AND '>=' -> '>' on the noise floor. Prices unchanged -> no jump interference.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="500", ask_size="500"))   # depth 1000
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                           bid_size="100", ask_size="100"))  # depth 200
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_depth_drop_to_just_over_the_80_percent_threshold_does_not_fire():
+    # Boundary pair, JUST OVER: 1000 -> 201 shares survives (200 is the line).
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="500", ask_size="500"))   # depth 1000
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                           bid_size="100", ask_size="101"))  # depth 201
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_prev_depth_below_the_noise_floor_full_evaporation_does_not_fire():
+    # Noise floor (Fork 2): prev depth 999 < depth_collapse_min_prev_shares 1000, so even a
+    # near-total evaporation (999 -> 2, book still validly two-sided) is NOISE, not L5.
+    # Kills: dropping the min_prev_shares guard.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="499.5", ask_size="499.5"))  # depth 999
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                           bid_size="1", ask_size="1"))  # depth 2
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_stale_interlude_preserves_prev_depth_so_collapse_across_the_gap_still_fires():
+    # Kills: updating prev-depth on a stale cycle. top_of_book() is NOT stale-gated
+    # (orderbook.py), so a naive impl could book the stale depth (500) and then see
+    # 200 > 500 * 0.2 = 100 -> silent. The preserved baseline 1000 gives 200 <= 200 -> HALT.
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="500", ask_size="500"))   # depth 1000
+    stale = _book(bid="0.49", ask="0.51", bid_size="250", ask_size="250")             # depth 500
+    stale.mark_stale()
+    gap = mon.evaluate([_pos("t1")], lambda token: stale)
+    assert gap.action == NONE
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                           bid_size="100", ask_size="100"))  # depth 200
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
