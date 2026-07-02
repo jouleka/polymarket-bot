@@ -14,7 +14,7 @@ Clocks are injected for deterministic TDD.
 """
 
 from polybot.ers.anomaly import HALT
-from polybot.ers.safety import HALTED
+from polybot.ers.safety import HALTED, PAUSED, RUNNING
 from polybot.ers.service import process_pending
 
 
@@ -60,9 +60,11 @@ class ERSController:
             # prev-state warm every cycle). On HALT: the gate closes FIRST (set_state audits
             # the transition), THEN the one-shot de-risk + its own audit row.
             state = self._anomaly.evaluate(self._portfolio.positions, self._book_for)
-            # EDGE-triggered: never re-fire on an existing HALTED (no audit spam, no
-            # cancel_all churn against the standing GTD exits).
-            if state.action == HALT and self._controller.state() != HALTED:
+            # EDGE-triggered: act only from a LIVE loop (RUNNING/PAUSED) -- never re-fire on
+            # an existing HALTED (no audit spam, no cancel_all churn against the standing GTD
+            # exits) and never preempt FLATTENING (a stronger de-risk already in flight; it
+            # settles HALTED on its own).
+            if state.action == HALT and self._controller.state() in (RUNNING, PAUSED):
                 self._controller.set_state(HALTED, reason=state.triggers[0])
                 self._signer.cancel_all()
                 self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
