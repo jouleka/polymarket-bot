@@ -272,6 +272,65 @@ def test_dispute_flagger_seam_is_stored_but_never_consulted_by_evaluate():
     assert state.triggers == ()
 
 
+# --- Task E8: the DESIGN-S4.4 §8.3 acceptance e2e ----------------------------------------------
+
+def test_e2e_recon_diverged_mid_run_halts_cancels_once_and_stays_sticky_after_clear(tmp_path):
+    """The full assembly (real IntentStore + SafetyController + ERSController + PaperSigner +
+    wired AnomalyMonitor): cycle 1 trades while the reconcile is OK; a DIVERGED reconcile on
+    cycle 2 halts FIRST (HALTED, reason l5_recon_mismatch), fires cancel_all exactly once,
+    keeps the placed record AND the staged protective GTD exit intact, and writes the exact
+    op-audit rows; cycle 3 -- the reconcile now OK again -- proves the STICKY invariant: a
+    fresh intent is REJECTed under l5_recon_mismatch, the state is still HALTED, and the
+    de-risk did NOT re-fire. Kills (integration level): dropping the edge guard (cycle-3
+    re-fire), swapping the halt/cancel order (audit rows out of order), letting a raising
+    path unwind the halt, and ANY auto-resume (a cycle-3 ACCEPT)."""
+    store = _store(tmp_path)
+    ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+    ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+    try:
+        results = [_recon(OK), _recon(DIVERGED), _recon(OK)]   # scripted per-cycle reconcile
+        clock, _ = _clock_box()
+        monitor = AnomalyMonitor(RiskCaps(), clock=clock,
+                                 recon_provider=lambda: results.pop(0))
+        signer = PaperSigner()
+        book_for = {"t1": _book("0.50"), "t2": _book("0.50")}.get
+        rc = ERSController(store=store, book_for=book_for, caps=RiskCaps(), signer=signer,
+                           controller=ctl, anomaly=monitor, clock=lambda: 0)
+
+        # Cycle 1 (recon OK): healthy -- the proposed intent trades.
+        store.propose_trade("i1", **_P)
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert [o["intent_id"] for o in signer.placed] == ["i1"]
+        # Stage a protective GTD exit by hand (the S4.2 primitive) so the kill can prove
+        # cancel_all keeps it standing.
+        signer.place_gtd_bracket(_pos("t1"), exit_price=Decimal("0.30"), expiry=999)
+
+        # Cycle 2 (recon DIVERGED): halt FIRST, then exactly one best-effort cancel_all.
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert signer.cancelled_all == [{"cancelled": "working_entries"}]   # fired ONCE
+        assert [o["intent_id"] for o in signer.placed] == ["i1"]            # record intact
+        assert [g["token_id"] for g in signer.gtd_exits] == ["t1"]          # GTD exit SURVIVES
+        rows = [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()]
+        assert rows == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l5_recon_mismatch", "HALTED"),          # set_state audits FIRST
+            ("cancel_all", "l5_recon_mismatch", "l5_recon_mismatch"),  # detail = ",".join(triggers)
+        ]
+
+        # Cycle 3 (recon OK again): STICKY -- no auto-resume; the fresh intent is rejected
+        # under the specific l5 reason and the de-risk is NOT re-fired.
+        store.propose_trade("i2", **dict(_P, token_id="t2", condition_id="m2", event_id="e2"))
+        rc.run_cycle()
+        assert store.get("i2").status == "REJECTED"
+        assert store.get("i2").decision_reason == "l5_recon_mismatch"
+        assert ctl.state() == _safety.HALTED
+        assert len(signer.cancelled_all) == 1
+    finally:
+        store.close()
+
+
 def test_recon_seam_provider_returning_none_result_is_skipped():
     """A wired provider yielding None (no result this cycle) is a SKIP -- not a fire, not a
     crash. Kills: unconditional r.status attribute access on a None result."""
