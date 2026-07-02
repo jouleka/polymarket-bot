@@ -114,3 +114,17 @@ def test_raising_skew_sentinel_fires_its_own_trigger_instead_of_propagating():
     state = monitor.evaluate((), {}.get)   # must NOT raise
     assert state.action == A_HALT
     assert state.triggers == ("l5_clock_skew",)
+
+
+def test_anomaly_module_source_never_references_running_or_set_state():
+    # STICKY pin (design §6.1, Fork 1; the detectors FOLLOW-off structural style): nothing in
+    # ers/anomaly.py may ever transition op-state or even NAME the resume state -- the ONLY
+    # automatic HALTED->resume in the system stays RestartReconciler's clean boot-reconcile.
+    # MUTATION KILLED: any auto-resume (or any op-state mutation at all) creeping into the
+    # monitor module.
+    from pathlib import Path
+
+    from polybot.ers import anomaly as _a
+    src = Path(_a.__file__).read_text(encoding="utf-8")
+    assert "set_state" not in src
+    assert "RUNNING" not in src
