@@ -11,7 +11,11 @@ nothing here touches the op-state machine.
 from collections import deque
 from dataclasses import dataclass
 
-from polybot.ers.safety import REASON_L5_API_STORM, REASON_L5_CLOCK_SKEW
+from polybot.ers.safety import (
+    REASON_L5_ABNORMAL_BOOK,
+    REASON_L5_API_STORM,
+    REASON_L5_CLOCK_SKEW,
+)
 
 NONE = "NONE"
 HALT = "HALT"
@@ -99,6 +103,8 @@ class AnomalyMonitor:
                 # FAIL-CLOSED SEAM RULE: a raising sentinel IS the anomaly -- fire this
                 # seam's trigger and continue to the next seam; never mask, never propagate.
                 triggers.append(REASON_L5_CLOCK_SKEW)
+        # Severity slot 4: abnormal book -- internal check over positions + book_for, no seam.
+        self._check_abnormal_book(positions, book_for, triggers)
         # Severity slot 5 of the pinned order: API 5xx/auth storm.
         # FAIL-CLOSED: a raising seam IS the anomaly -- fire and move to the next seam.
         if self._api_sentinel is not None:
@@ -110,3 +116,18 @@ class AnomalyMonitor:
         if not triggers:
             return AnomalyState(NONE, ())
         return AnomalyState(HALT, tuple(triggers))
+
+    def _check_abnormal_book(self, positions, book_for, triggers):
+        """L5 trigger 1, structural leg (DESIGN-S4.4 §3): a HELD token whose NON-stale book
+        has no usable midpoint (crossed/locked/empty side) is an integrity anomaly.
+        Stale books are SKIPPED (validator book_stale / breaker stale_mark own those);
+        absent books are SKIPPED (validator no_book domain). Frozen positions are NOT
+        skipped -- this checks book structure, not P&L."""
+        for pos in positions:
+            book = book_for(pos.token_id)
+            if book is None:
+                continue
+            if book.is_stale():
+                continue
+            if book.midpoint() is None:
+                triggers.append(REASON_L5_ABNORMAL_BOOK)
