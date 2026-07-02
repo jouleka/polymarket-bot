@@ -166,3 +166,67 @@ def test_a_loss_just_older_than_the_7d_window_is_excluded(tmp_path):
         state = _breakers(store).evaluate()
         assert state.action == "NONE"
         assert state.triggers == ()
+
+
+def test_two_trailing_losses_do_not_pause(tmp_path):
+    # Streak boundary pair, under side: caps.consecutive_loss == 3. Kills: > vs >= confusion
+    # lowering the threshold to 2.
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+
+
+def test_three_trailing_losses_pause_with_the_consecutive_trigger_and_no_ramp_step(tmp_path):
+    # Streak boundary pair, at side: 3 >= 3 -> PAUSE(consecutive_loss). The streak arm carries
+    # NO ramp step (only the weekly and pending arms tighten caps). Kills: dropping the streak
+    # arm, wrong reason string, or attaching a ramp step to it.
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "PAUSE"
+        assert state.triggers == ("consecutive_loss",)
+        assert state.ramp_steps == ()
+
+
+def test_a_positive_win_mid_sequence_resets_the_streak(tmp_path):
+    # The streak is the TRAILING run at the END of the realized sequence: 4 losses total but a
+    # +1 win splits them into a trailing run of 2. Kills: counting ALL losses instead of the
+    # trailing run (4 >= 3 would wrongly pause).
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+
+
+def test_a_zero_amount_realized_row_counts_as_a_win_and_resets_the_streak(tmp_path):
+    # amount >= 0 breaks the trail -- zero is the boundary value of "win". Kills: treating
+    # amount <= 0 as a loss (a scratch exit would wrongly extend the streak).
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "0", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        _realized(store, "-1", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+
+
+def test_the_streak_has_no_time_window_so_ancient_losses_still_count(tmp_path):
+    # DESIGN row 72: the streak is windowless (only a WIN resets it). Losses far older than 7d
+    # contribute nothing to the weekly sum yet still form the trailing streak. Kills: adding a
+    # wall-clock window filter to the streak arm.
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=10000000.0)
+        _realized(store, "-1", age=10000000.0)
+        _realized(store, "-1", age=10000000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "PAUSE"
+        assert state.triggers == ("consecutive_loss",)
