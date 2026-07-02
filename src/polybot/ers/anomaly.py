@@ -57,6 +57,9 @@ class ApiStormSentinel:
         self._events.append((now, int(status)))
 
     def storming(self, now):
+        window = self._caps.api_storm_window_seconds
+        while self._events and now - self._events[0][0] > window:
+            self._events.popleft()
         fivexx = sum(1 for _, s in self._events if s >= 500)
         auth = sum(1 for _, s in self._events if s in (401, 403))
         return (fivexx >= self._caps.api_5xx_storm_count
