@@ -66,9 +66,15 @@ class ERSController:
             # settles HALTED on its own).
             if state.action == HALT and self._controller.state() in (RUNNING, PAUSED):
                 self._controller.set_state(HALTED, reason=state.triggers[0])
-                self._signer.cancel_all()
-                self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
-                                            detail=",".join(state.triggers))
+                try:
+                    self._signer.cancel_all()
+                    self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
+                                                detail=",".join(state.triggers))
+                except Exception as exc:
+                    # A raising signer must NOT unwind the halt or kill the cycle -- audit the
+                    # failure; the pre-staged GTD exits are the backstop.
+                    self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
+                                                detail=f"FAILED: {exc}")
         self._portfolio = process_pending(
             self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,

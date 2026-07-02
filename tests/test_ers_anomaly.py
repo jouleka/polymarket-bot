@@ -320,3 +320,37 @@ def test_halt_is_sticky_after_the_anomaly_clears_and_next_intent_rejects_with_th
         assert store.get("i1").status == "REJECTED"
         assert store.get("i1").decision_reason == "l5_clock_skew"
         assert len(signer.cancelled_all) == 1            # and the one-shot stayed one-shot
+
+
+class _RaisingCancelSigner(PaperSigner):
+    """cancel_all raises (venue/RPC down at the worst moment): the halt must already be in
+    place and must SURVIVE; the failure is audited; the cycle continues."""
+
+    def cancel_all(self):
+        raise RuntimeError("venue rejected cancelAll")
+
+
+def test_raising_cancel_all_is_audited_as_failed_and_never_unwinds_the_halt_or_the_cycle(tmp_path):
+    # Design §2 / invariant 2: a raising signer must NOT unwind the halt or kill the cycle --
+    # the gate closed FIRST, the failure lands in op_audit as detail="FAILED: ...", and
+    # process_pending still runs (the pending intent is REJECTED under the l5 reason; the
+    # standing GTD exits are the backstop). MUTATION KILLED: letting the exception propagate
+    # out of run_cycle (the S4.3 supervisor would SIGKILL a healthy-but-unlucky loop), and
+    # auditing an unconditional success detail.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = _RaisingCancelSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+
+        rc.run_cycle()                                   # must NOT raise
+
+        assert ctl.state() == _safety.HALTED             # the halt held
+        cancel_rows = [r for r in store.op_audit_log() if r["kind"] == "cancel_all"]
+        assert len(cancel_rows) == 1
+        assert cancel_rows[0]["reason"] == "l5_clock_skew"
+        assert cancel_rows[0]["detail"] == "FAILED: venue rejected cancelAll"
+        # The cycle SURVIVED to process_pending: the intent is blocked under the l5 reason.
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "l5_clock_skew"
