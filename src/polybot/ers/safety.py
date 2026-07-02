@@ -88,7 +88,12 @@ class SafetyController:
         detail=old->new 16-char content-hash prefixes) BEFORE the in-memory mutate, so a
         crash mid-swap leaves the explanation ahead of the effect (the set_state doctrine).
         Applies in ANY op-state -- tightening while halted is harmless and desirable.
-        Returns True iff the caps actually changed."""
+        Returns True iff the caps actually changed.
+
+        CONCURRENCY: single-threaded runloop assumption. swap_caps and active_caps() are
+        NOT synchronized, and the guard -> audit -> mutate sequence is not atomic -- do NOT
+        call from another thread (S4.6's operator-triggered LOWER_CAPS must route through
+        the same serial runloop)."""
         assert_tighten_only(self._caps, new_caps)
         old_hash = self._caps.content_hash()
         new_hash = new_caps.content_hash()

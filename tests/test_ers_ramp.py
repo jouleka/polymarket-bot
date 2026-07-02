@@ -104,6 +104,27 @@ def test_assert_tighten_only_rejects_a_lowered_fixed_field_min_position_floor():
         ramp.assert_tighten_only(RiskCaps(), _fake_caps(min_position_floor=Decimal("4.99")))
 
 
+def test_assert_tighten_only_rejects_a_lowered_fixed_field_nav():
+    # MUTATION KILLED: classifying nav as "down" lets a LOWERED-nav envelope (a shrunk
+    # denominator that silently re-bases every percentage) through the guard. Built as a
+    # REAL verified RiskCaps -- a lowered nav alone breaks _verify's reserve identity, so the
+    # whole band is re-derived (50 <= 0.20*250, per_trade 12 < 24 < 50, 4*12=48 <= 50,
+    # l7 18 < 30 <= 50, daily 24 <= weekly 36 all hold): this tests the GUARD, not _verify.
+    # nav is field 1 in declaration order, so it is named ahead of the also-shrunk reserve.
+    lowered_nav = RiskCaps(nav=Decimal("250"), total_open_risk=Decimal("50"),
+                           reserve_floor=Decimal("200"), gtd_bracket_aggregate=Decimal("50"))
+    with pytest.raises(ValueError, match="nav"):
+        ramp.assert_tighten_only(RiskCaps(), lowered_nav)
+
+
+def test_assert_tighten_only_rejects_a_lowered_fixed_window_field():
+    # MUTATION KILLED: fixed->down on the ambiguous-direction window fields (a SHORTER
+    # velocity window makes the L7 velocity trigger LESS sensitive -- lowering is NOT
+    # tightening there; that ambiguity is exactly why the counting windows are "fixed" in v1).
+    with pytest.raises(ValueError, match="l7_velocity_window_seconds"):
+        ramp.assert_tighten_only(RiskCaps(), RiskCaps(l7_velocity_window_seconds=600))
+
+
 # --- B3: step_daily ---------------------------------------------------------------------------
 
 
