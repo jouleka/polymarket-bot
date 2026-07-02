@@ -233,3 +233,60 @@ def test_recon_seam_raising_provider_fires_the_trigger_instead_of_propagating():
     state = monitor.evaluate((), {}.get)
     assert state.action == HALT
     assert "l5_recon_mismatch" in state.triggers
+
+
+# --- Task E5: the signing-canary scheduler ------------------------------------------------------
+
+def _counting_canary(result=True):
+    """0-arg canary spy: counts invocations, returns `result` (True == healthy signing path)."""
+    calls = {"n": 0}
+
+    def canary():
+        calls["n"] += 1
+        return result
+    return canary, calls
+
+
+def test_canary_first_evaluate_is_due_and_calls_the_canary_exactly_once():
+    """_canary_last_run starts None -> the FIRST evaluate is due and calls the canary ONCE
+    (never twice within a cycle); a healthy True keeps action NONE. Kills: initializing
+    last_run to clock() so the first canary silently never runs."""
+    canary, calls = _counting_canary(result=True)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert calls["n"] == 1
+    assert state.action == NONE
+
+
+def test_canary_just_under_the_interval_is_not_redue():
+    """Boundary pair, low side: elapsed 299s < signing_canary_interval_seconds (300) -> the
+    second evaluate must NOT re-call the canary. Kills: dropping the interval gate and
+    re-running the canary every cycle."""
+    canary, calls = _counting_canary(result=True)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due -> 1 call, last_run=0
+    box["now"] = 299.0                # just under the 300s interval
+    monitor.evaluate((), {}.get)
+    assert calls["n"] == 1
+
+
+def test_canary_at_exactly_the_interval_boundary_is_redue():
+    """Boundary pair, at-threshold side: elapsed == interval IS due (the pinned `>=`).
+    Kills: a `>` off-by-one that skips the exact-cadence tick."""
+    canary, calls = _counting_canary(result=True)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due -> 1 call, last_run=0
+    box["now"] = 300.0                # exactly the interval
+    monitor.evaluate((), {}.get)
+    assert calls["n"] == 2
+
+
+def test_canary_absent_seam_is_dormant():
+    """canary=None (the default): no scheduling, no call, no fire -- the data-gated seam
+    pattern. Kills: unconditionally invoking a None canary (TypeError)."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock)
+    assert monitor.evaluate((), {}.get).action == NONE

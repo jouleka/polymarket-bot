@@ -122,6 +122,17 @@ class AnomalyMonitor:
                     triggers.append(REASON_L5_RECON_MISMATCH)
             except Exception:
                 triggers.append(REASON_L5_RECON_MISMATCH)
+        # --- l5_canary_fail (S4.4e): the signing-canary scheduler ----------------------------
+        # Severity slot 3: after l5_recon_mismatch, before l5_abnormal_book (the pinned order).
+        # Due when never run or >= caps.signing_canary_interval_seconds since the last run;
+        # at most ONE call per evaluate.
+        if self._canary is not None:
+            now_s = self._clock()
+            if (self._canary_last_run is None
+                    or (now_s - self._canary_last_run)
+                    >= self._caps.signing_canary_interval_seconds):
+                self._canary_last_run = now_s
+                self._canary()
         # Severity slot 4: abnormal book -- internal check over positions + book_for, no
         # seam kwarg, but fail-closed wrapped all the same: a raising book/book_for IS an
         # abnormal-book anomaly, and an unwrapped raise here would VOID the triggers already
