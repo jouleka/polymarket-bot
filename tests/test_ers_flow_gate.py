@@ -285,3 +285,43 @@ def test_flow_gate_pending_just_over_headroom_blocks_daily_ceiling(tmp_path):
         store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("12.01"), wall_at=100.0)
         gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
         assert gate() == "daily_ceiling"
+
+
+def test_gate_through_verdict_e2e_rate_cap_rejects_then_the_window_slides_open(tmp_path):
+    # The whole S4.7c chain over REAL parts: a RUNNING SafetyController wired with a real
+    # make_flow_gate over a real IntentStore journal (caps_provider = ctl.active_caps, exactly
+    # the assembly binding). Two accepts already flowed this hour -> process_pending REJECTs
+    # the next intent with rate_cap_hourly while op-state STAYS RUNNING and nothing is placed;
+    # the wall clock advances past the window -> the next intent ACCEPTs with no operator
+    # action. Kills: any wiring break in record_flow_event -> flow_log -> make_flow_gate ->
+    # wire_flow_gate -> verdict -> process_pending's block_reason domination.
+    from polybot.ers.flow import make_flow_gate
+    wall = [1000.0]
+    ctl_store = IntentStore(str(tmp_path / "ctl.db"), MonotonicStamper())
+    try:
+        ctl = SafetyController(caps=RiskCaps(), store=ctl_store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        with _store(str(tmp_path / "i.db")) as store:
+            store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=500.0)
+            store.record_flow_event(kind="accept", token_id="a2", amount=Decimal("1"), wall_at=600.0)
+            ctl.wire_flow_gate(make_flow_gate(store, ctl.active_caps, wall_clock=lambda: wall[0]))
+            signer = PaperSigner()
+
+            store.propose_trade("i1", **_P)
+            process_pending(store, book_for={"t1": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, controller=ctl)
+            assert store.get("i1").status == "REJECTED"
+            assert store.get("i1").decision_reason == "rate_cap_hourly"
+            assert ctl.state() == _safety.RUNNING      # blocked WITHOUT touching op-state
+            assert signer.placed == []
+
+            wall[0] = 4201.0   # newest accept age 3601 > 3600 -> the hourly window slid open
+            store.propose_trade("i2", **dict(_P, token_id="t2", condition_id="m2", event_id="e2"))
+            process_pending(store, book_for={"t2": _book("0.50")}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, controller=ctl)
+            assert store.get("i2").status == "ACCEPTED"
+            assert [o["token_id"] for o in signer.placed] == ["t2"]
+    finally:
+        ctl_store.close()
