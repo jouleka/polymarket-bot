@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
-from polybot.ers.reconcile import DIVERGED
+from polybot.ers.reconcile import DORMANT, OK, SETTLING
 from polybot.ers.safety import (
     REASON_L5_ABNORMAL_BOOK,
     REASON_L5_API_STORM,
@@ -113,9 +113,14 @@ class AnomalyMonitor:
                 triggers.append(REASON_L5_CLOCK_SKEW)
         # --- l5_recon_mismatch (S4.4e): per-cycle three-way reconcile cadence ----------------
         # Severity slot 2: after l5_clock_skew, before l5_canary_fail (the pinned order).
+        # Fail-closed BOTH ways: an unknown status is a mismatch; a raising provider fires
+        # its own trigger (append + continue -- never mask, never propagate).
         if self._recon_provider is not None:
-            r = self._recon_provider()
-            if r is not None and r.status == DIVERGED:
+            try:
+                r = self._recon_provider()
+                if r is not None and r.status not in (OK, DORMANT, SETTLING):
+                    triggers.append(REASON_L5_RECON_MISMATCH)
+            except Exception:
                 triggers.append(REASON_L5_RECON_MISMATCH)
         # Severity slot 4: abnormal book -- internal check over positions + book_for, no
         # seam kwarg, but fail-closed wrapped all the same: a raising book/book_for IS an

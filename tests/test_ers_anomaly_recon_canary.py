@@ -206,3 +206,30 @@ def test_recon_seam_provider_returning_none_result_is_skipped():
     clock, _ = _clock_box()
     monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: None)
     assert monitor.evaluate((), {}.get).action == NONE
+
+
+# --- Task E4: recon consult fail-closed (unknown status + raising seam) -----------------------
+
+def test_recon_seam_unknown_status_string_fails_closed_and_fires():
+    """An UNRECOGNIZED ReconResult.status must be treated as a mismatch (design invariant 4:
+    unknown status -> DIVERGED). Kills: the E3 `status == DIVERGED` equality surviving
+    instead of the not-in-{OK, DORMANT, SETTLING} allowlist."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon("GARBLED"))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert "l5_recon_mismatch" in state.triggers
+
+
+def test_recon_seam_raising_provider_fires_the_trigger_instead_of_propagating():
+    """The fail-closed seam rule: a RAISING recon provider IS an anomaly -- evaluate fires
+    l5_recon_mismatch and the exception never escapes. Kills: dropping the per-seam
+    try/except so a wedged reconcile backend kills the cycle UNhalted."""
+    def _boom():
+        raise RuntimeError("recon backend wedged")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=_boom)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert "l5_recon_mismatch" in state.triggers
