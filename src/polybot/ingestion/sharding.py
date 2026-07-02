@@ -80,6 +80,20 @@ class ShardedMarketCollector:
         stream = self._stream_by_asset.get(asset_id)
         return stream.book_for(asset_id) if stream is not None else None
 
+    def last_frame_at(self):
+        """MIN of the shard streams' ``last_frame_at`` (stamper-ns): collector
+        health is the LAGGING shard's health. ``None`` if there are no shards or
+        if ANY shard has not seen a frame yet -- one dead/silent shard means the
+        collector cannot vouch for the whole universe (fail-closed; the L5 WS
+        sentinel reads None as +inf age = down). Non-consuming.
+        """
+        if not self._shards:
+            return None
+        stamps = [stream.last_frame_at() for stream, _socket in self._shards]
+        if any(stamp is None for stamp in stamps):
+            return None
+        return min(stamps)
+
     async def run(self, max_connections=1):
         async with asyncio.TaskGroup() as tg:
             for _stream, socket in self._shards:

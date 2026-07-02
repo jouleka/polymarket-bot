@@ -1,0 +1,447 @@
+"""S4.4e (POL-6): per-cycle reconcile cadence + signing-canary scheduler + dispute stub + the e2e.
+
+Pins make_recon_provider (the 0-arg recon_provider seam factory; the shadow short-circuit is
+proven with a RAISING event store), the AnomalyMonitor recon consult (DIVERGED and any UNKNOWN
+status fire l5_recon_mismatch; OK/DORMANT/SETTLING do not; a raising provider fires -- the
+fail-closed seam rule), the canary scheduler (first evaluate due, `>=` interval re-due, at most
+one call per cycle, falsy/raise -> l5_canary_fail, NEVER blind-retried), the inert
+dispute_flagger stub seam, and the DESIGN-S4.4 §8.3 e2e on the real assembly. Helpers are
+module-level copies (no conftest); clocks are injected 0-arg callables; money is Decimal from
+string literals.
+"""
+
+import json
+from decimal import Decimal
+
+from polybot.core.clock import MonotonicStamper
+from polybot.core.models import Envelope
+from polybot.ers import safety as _safety
+from polybot.ers.anomaly import HALT, NONE, AnomalyMonitor
+from polybot.ers.caps import RiskCaps
+from polybot.ers.controller import ERSController
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.reconcile import (
+    DIVERGED,
+    DORMANT,
+    OK,
+    SETTLING,
+    ReconResult,
+    ThreeWayReconciler,
+    make_recon_provider,
+)
+from polybot.ers.safety import SafetyController
+from polybot.ers.service import PaperSigner
+from polybot.ers.validator import OpenPosition
+from polybot.ingestion.orderbook import LocalBook
+
+WALLET = "0xcafe000000000000000000000000000000000001"
+
+
+# --- module-level helpers (per-file copies by convention; no conftest) ------------------------
+
+def _store(tmp_path):
+    return IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+
+
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+
+def _pos(token="t1"):
+    return OpenPosition(condition_id="m", event_id="e", resolution_source="s", cluster_id="c",
+                        worst_case_risk=Decimal("8"), matrix_cold=False, token_id=token,
+                        entry_price=Decimal("0.50"), frozen=False)
+
+
+def _recon(status):
+    return ReconResult(status=status, divergences=(), onchain_confirmed_exposure=Decimal("0"),
+                       settling_tokens=(), triggers=())
+
+
+def _clock_box(start=0.0):
+    """Injected 0-arg monitor clock (float monotonic SECONDS) + the mutable box that advances it."""
+    box = {"now": float(start)}
+    return (lambda: box["now"]), box
+
+
+def _fill(token, side, shares, at, *, intent="i1"):
+    # Mirrors IntentStore.fills_log() row shape (S4.5a): Decimals already converted.
+    return {"at": at, "intent_id": intent, "token_id": token, "condition_id": "0xcond",
+            "event_id": "evt", "side": side, "shares": Decimal(shares),
+            "price_exec": Decimal("0.50"), "worst_case_risk": Decimal(shares) * Decimal("0.50")}
+
+
+class _FillsStore:
+    """Stub of the ONE IntentStore method make_recon_provider reads: fills_log()."""
+
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+
+    def fills_log(self):
+        return list(self._rows)
+
+
+class _EventStore:
+    """Stub of the ONE event-store method make_recon_provider reads: all() -> Envelopes."""
+
+    def __init__(self, envelopes=()):
+        self._envelopes = list(envelopes)
+
+    def all(self):
+        return list(self._envelopes)
+
+
+class _RaisingEventStore:
+    """Proves the wallet=None short-circuit: ANY scan of the event store blows the test up."""
+
+    def all(self):
+        raise AssertionError("event_store.all() must not be scanned when wallet is None")
+
+
+def _positions_env(asset, size, *, eid_suffix="0xwallet"):
+    # Mirrors data_api.py: content is json.dumps(item); event_id is "/positions:<id>".
+    item = {"asset": asset, "size": size, "conditionId": "0xcond"}
+    return Envelope(source="data-api", source_tier="DATA",
+                    event_id=f"/positions:{eid_suffix}", observed_at=1,
+                    content=json.dumps(item, sort_keys=True, default=str))
+
+
+def _chain_env(event, *, eid="0xtx:0"):
+    # Mirrors polygon.py: content is json.dumps({"log": log, "event": event}).
+    return Envelope(source="polygon-chain", source_tier="CHAIN", event_id=eid,
+                    observed_at=1, content=json.dumps({"log": {}, "event": event},
+                                                      sort_keys=True, default=str))
+
+
+def _single(frm, to, token, value):
+    return {"kind": "transfer_single", "operator": "0xop", "from": frm, "to": to,
+            "token_id": token, "value": value}
+
+
+# --- Task E1: make_recon_provider shadow short-circuit ----------------------------------------
+
+def test_make_recon_provider_wallet_none_short_circuits_to_dormant_without_scanning_event_store():
+    """Shadow path (wallet=None): the provider must call reconciler.reconcile({}, {}, None,
+    wallet=None, now=clock_ns()) WITHOUT touching the event store -- the RAISING event store
+    kills the mutation that drops the short-circuit and always builds the three legs."""
+    provider = make_recon_provider(_FillsStore(), _RaisingEventStore(),
+                                   ThreeWayReconciler(caps=RiskCaps()),
+                                   wallet=None, clock_ns=lambda: 0)
+    result = provider()
+    assert result.status == DORMANT
+
+
+# --- Task E2: make_recon_provider with a real wallet builds the three legs ---------------------
+
+def test_make_recon_provider_with_wallet_agreement_across_three_legs_is_ok():
+    """wallet set: the provider folds internal_balances(store.fills_log(), in_session=True) +
+    clob_balances(event_store.all()) + onchain_balances(event_store.all(), wallet=wallet) and
+    hands them to the reconciler. 5 internal shares vs 5 on-chain shares (raw 5_000_000 /
+    10**6) agree -> OK. Kills the mutation that keeps the E1 shadow short-circuit for a real
+    wallet (that would report DORMANT, not OK)."""
+    store = _FillsStore([_fill("42", "BUY", "5", at=0)])
+    events = _EventStore([_positions_env("42", "5"),
+                          _chain_env(_single("0xseller", WALLET, "42", "5000000"))])
+    provider = make_recon_provider(store, events, ThreeWayReconciler(caps=RiskCaps()),
+                                   wallet=WALLET, clock_ns=lambda: 200_000_000_000)
+    assert provider().status == OK
+
+
+def test_make_recon_provider_with_wallet_unexplained_internal_excess_is_diverged():
+    """wallet set: 5 internal shares with NO on-chain transfer is a $5 delta over the $0.50
+    tolerance, and now (200s in ns) is far past the fill's settle window (fill at=0, window
+    90s) -> DIVERGED with the token named. Kills the mutation that drops/swaps the internal
+    leg (an empty internal fold would read OK)."""
+    store = _FillsStore([_fill("42", "BUY", "5", at=0)])
+    events = _EventStore([_positions_env("42", "0", eid_suffix="0xother")])
+    provider = make_recon_provider(store, events, ThreeWayReconciler(caps=RiskCaps()),
+                                   wallet=WALLET, clock_ns=lambda: 200_000_000_000)
+    result = provider()
+    assert result.status == DIVERGED
+    assert [d.token_id for d in result.divergences] == ["42"]
+
+
+# --- Task E3: the recon_provider seam in AnomalyMonitor.evaluate ------------------------------
+
+def test_recon_seam_diverged_status_fires_l5_recon_mismatch_halt():
+    """A recon_provider returning DIVERGED must HALT with l5_recon_mismatch as triggers[0]
+    (the set_state reason). Kills: dropping the recon consult from evaluate entirely."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon(DIVERGED))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers[0] == "l5_recon_mismatch"
+
+
+def test_recon_seam_ok_dormant_and_settling_statuses_do_not_fire():
+    """OK / DORMANT / SETTLING are the three benign reconcile outcomes (the settle window
+    exists precisely so in-flight fills don't false-halt); none may fire. Kills: inverting
+    the status check so a healthy reconcile halts the loop."""
+    for status in (OK, DORMANT, SETTLING):
+        clock, _ = _clock_box()
+        monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon(status))
+        state = monitor.evaluate((), {}.get)
+        assert state.action == NONE, f"{status} must not fire"
+        assert state.triggers == ()
+
+
+def test_recon_seam_absent_provider_is_dormant():
+    """recon_provider=None (the default) keeps the trigger dormant -- the data-gated seam
+    pattern. Kills: consulting a None seam (TypeError on the call)."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock)
+    assert monitor.evaluate((), {}.get).action == NONE
+
+
+# --- Task E6: canary failure semantics (falsy / raise / no blind retry / severity order) -------
+
+def test_canary_falsy_return_fires_l5_canary_fail():
+    """A due canary returning falsy is a signing failure -> HALT with exactly the
+    l5_canary_fail trigger. Kills: discarding the canary's return value."""
+    canary, _calls = _counting_canary(result=False)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+
+
+def test_canary_raising_fires_l5_canary_fail_and_never_propagates():
+    """The fail-closed seam rule for the canary: a RAISING canary fires the trigger and the
+    exception never escapes evaluate. Kills: dropping the try/except around the call."""
+    def _boom():
+        raise RuntimeError("signer wedged mid-canary")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=_boom)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+
+
+def test_canary_failure_is_never_blind_retried_before_the_next_interval():
+    """DESIGN §3 #6: NEVER blind-retry. After a failing canary at t=0, an immediate evaluate
+    at t=1 must NOT re-call it -- last_run was stamped even though it FAILED; re-due only at
+    t >= 300. Kills: stamping last_run only on success, which loops a failing canary every
+    cycle."""
+    canary, calls = _counting_canary(result=False)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due, FAILS -> trigger fired, 1 call
+    box["now"] = 1.0
+    monitor.evaluate((), {}.get)      # not re-due: no blind retry of the failed canary
+    assert calls["n"] == 1
+
+
+def test_raising_canary_is_never_blind_retried_before_the_next_interval():
+    """DESIGN §3 #6, the RAISING flavor: a canary that RAISES at t=0 fires l5_canary_fail and
+    must NOT be re-invoked at t=1 (well inside the 300s interval) -- last_run was stamped
+    BEFORE the call, so even a wedged signer is left alone until the next due tick.
+    MUTATION KILLED: stamping _canary_last_run AFTER the call (inside the try) leaves a
+    raising canary unstamped -> blind re-invocation of a wedged signer every cycle (the falsy
+    no-retry test alone misses this: a falsy RETURN still reaches a post-call stamp)."""
+    calls = {"n": 0}
+
+    def _boom():
+        calls["n"] += 1
+        raise RuntimeError("signer wedged mid-canary")
+
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=_boom)
+    state = monitor.evaluate((), {}.get)      # t=0: due, RAISES -> fired, 1 call
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+    assert calls["n"] == 1
+    box["now"] = 1.0
+    monitor.evaluate((), {}.get)              # not re-due: never re-poke the wedged signer
+    assert calls["n"] == 1
+
+
+def test_recon_mismatch_outranks_canary_fail_in_the_triggers_order():
+    """evaluate collects ALL firing triggers in the pinned severity order, so a cycle where
+    BOTH recon and canary fail reports ("l5_recon_mismatch", "l5_canary_fail") -- triggers[0]
+    becomes the set_state reason. Kills: a consult-order swap or a first-trigger
+    early-return."""
+    canary, _calls = _counting_canary(result=False)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock,
+                             recon_provider=lambda: _recon(DIVERGED), canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_recon_mismatch", "l5_canary_fail")
+
+
+# --- Task E7: the inert dispute_flagger stub seam ----------------------------------------------
+
+def test_dispute_flagger_seam_is_stored_but_never_consulted_by_evaluate():
+    """S4.4 ships the dispute_flagger SEAM only (no dispute-ingestion source exists): the
+    monitor stores it and evaluate NEVER calls it. A flagger that raises on ANY call, with a
+    held position and a healthy non-stale book (so every wired check path actually runs),
+    still yields NONE. Kills the mutation that activates the dead branch: any S4.4 evaluate
+    path consulting the stub would raise the AssertionError."""
+    def _never(token_id):
+        raise AssertionError("dispute_flagger must not be consulted in S4.4")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, dispute_flagger=_never)
+    state = monitor.evaluate((_pos("t1"),), {"t1": _book("0.50")}.get)
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+# --- Task E8: the DESIGN-S4.4 §8.3 acceptance e2e ----------------------------------------------
+
+def test_e2e_recon_diverged_mid_run_halts_cancels_once_and_stays_sticky_after_clear(tmp_path):
+    """The full assembly (real IntentStore + SafetyController + ERSController + PaperSigner +
+    wired AnomalyMonitor): cycle 1 trades while the reconcile is OK; a DIVERGED reconcile on
+    cycle 2 halts FIRST (HALTED, reason l5_recon_mismatch), fires cancel_all exactly once,
+    keeps the placed record AND the staged protective GTD exit intact, and writes the exact
+    op-audit rows; cycle 3 -- the reconcile now OK again -- proves the STICKY invariant: a
+    fresh intent is REJECTed under l5_recon_mismatch, the state is still HALTED, and the
+    de-risk did NOT re-fire. Kills (integration level): dropping the edge guard (cycle-3
+    re-fire), swapping the halt/cancel order (audit rows out of order), letting a raising
+    path unwind the halt, and ANY auto-resume (a cycle-3 ACCEPT)."""
+    store = _store(tmp_path)
+    ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+    ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+    try:
+        results = [_recon(OK), _recon(DIVERGED), _recon(OK)]   # scripted per-cycle reconcile
+        clock, _ = _clock_box()
+        monitor = AnomalyMonitor(RiskCaps(), clock=clock,
+                                 recon_provider=lambda: results.pop(0))
+        signer = PaperSigner()
+        book_for = {"t1": _book("0.50"), "t2": _book("0.50")}.get
+        rc = ERSController(store=store, book_for=book_for, caps=RiskCaps(), signer=signer,
+                           controller=ctl, anomaly=monitor, clock=lambda: 0)
+
+        # Cycle 1 (recon OK): healthy -- the proposed intent trades.
+        store.propose_trade("i1", **_P)
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert [o["intent_id"] for o in signer.placed] == ["i1"]
+        # Stage a protective GTD exit by hand (the S4.2 primitive) so the kill can prove
+        # cancel_all keeps it standing.
+        signer.place_gtd_bracket(_pos("t1"), exit_price=Decimal("0.30"), expiry=999)
+
+        # Cycle 2 (recon DIVERGED): halt FIRST, then exactly one best-effort cancel_all.
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert signer.cancelled_all == [{"cancelled": "working_entries"}]   # fired ONCE
+        assert [o["intent_id"] for o in signer.placed] == ["i1"]            # record intact
+        assert [g["token_id"] for g in signer.gtd_exits] == ["t1"]          # GTD exit SURVIVES
+        rows = [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()]
+        assert rows == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l5_recon_mismatch", "HALTED"),          # set_state audits FIRST
+            ("cancel_all", "l5_recon_mismatch", "l5_recon_mismatch"),  # detail = ",".join(triggers)
+        ]
+
+        # Cycle 3 (recon OK again): STICKY -- no auto-resume; the fresh intent is rejected
+        # under the specific l5 reason and the de-risk is NOT re-fired.
+        store.propose_trade("i2", **dict(_P, token_id="t2", condition_id="m2", event_id="e2"))
+        rc.run_cycle()
+        assert store.get("i2").status == "REJECTED"
+        assert store.get("i2").decision_reason == "l5_recon_mismatch"
+        assert ctl.state() == _safety.HALTED
+        assert len(signer.cancelled_all) == 1
+    finally:
+        store.close()
+
+
+def test_recon_seam_provider_returning_none_result_is_skipped():
+    """A wired provider yielding None (no result this cycle) is a SKIP -- not a fire, not a
+    crash. Kills: unconditional r.status attribute access on a None result."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: None)
+    assert monitor.evaluate((), {}.get).action == NONE
+
+
+# --- Task E4: recon consult fail-closed (unknown status + raising seam) -----------------------
+
+def test_recon_seam_unknown_status_string_fails_closed_and_fires():
+    """An UNRECOGNIZED ReconResult.status must be treated as a mismatch (design invariant 4:
+    unknown status -> DIVERGED). Kills: the E3 `status == DIVERGED` equality surviving
+    instead of the not-in-{OK, DORMANT, SETTLING} allowlist."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon("GARBLED"))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert "l5_recon_mismatch" in state.triggers
+
+
+def test_recon_seam_raising_provider_fires_the_trigger_instead_of_propagating():
+    """The fail-closed seam rule: a RAISING recon provider IS an anomaly -- evaluate fires
+    l5_recon_mismatch and the exception never escapes. Kills: dropping the per-seam
+    try/except so a wedged reconcile backend kills the cycle UNhalted."""
+    def _boom():
+        raise RuntimeError("recon backend wedged")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=_boom)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert "l5_recon_mismatch" in state.triggers
+
+
+# --- Task E5: the signing-canary scheduler ------------------------------------------------------
+
+def _counting_canary(result=True):
+    """0-arg canary spy: counts invocations, returns `result` (True == healthy signing path)."""
+    calls = {"n": 0}
+
+    def canary():
+        calls["n"] += 1
+        return result
+    return canary, calls
+
+
+def test_canary_first_evaluate_is_due_and_calls_the_canary_exactly_once():
+    """_canary_last_run starts None -> the FIRST evaluate is due and calls the canary ONCE
+    (never twice within a cycle); a healthy True keeps action NONE. Kills: initializing
+    last_run to clock() so the first canary silently never runs."""
+    canary, calls = _counting_canary(result=True)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert calls["n"] == 1
+    assert state.action == NONE
+
+
+def test_canary_just_under_the_interval_is_not_redue():
+    """Boundary pair, low side: elapsed 299s < signing_canary_interval_seconds (300) -> the
+    second evaluate must NOT re-call the canary. Kills: dropping the interval gate and
+    re-running the canary every cycle."""
+    canary, calls = _counting_canary(result=True)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due -> 1 call, last_run=0
+    box["now"] = 299.0                # just under the 300s interval
+    monitor.evaluate((), {}.get)
+    assert calls["n"] == 1
+
+
+def test_canary_at_exactly_the_interval_boundary_is_redue():
+    """Boundary pair, at-threshold side: elapsed == interval IS due (the pinned `>=`).
+    Kills: a `>` off-by-one that skips the exact-cadence tick."""
+    canary, calls = _counting_canary(result=True)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due -> 1 call, last_run=0
+    box["now"] = 300.0                # exactly the interval
+    monitor.evaluate((), {}.get)
+    assert calls["n"] == 2
+
+
+def test_canary_absent_seam_is_dormant():
+    """canary=None (the default): no scheduling, no call, no fire -- the data-gated seam
+    pattern. Kills: unconditionally invoking a None canary (TypeError)."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock)
+    assert monitor.evaluate((), {}.get).action == NONE
