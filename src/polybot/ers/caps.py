@@ -158,6 +158,21 @@ class RiskCaps:
                      "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be > 0, got {getattr(self, name)}")
+        # --- S4.4 L5 anomaly book thresholds (DESIGN-S4.4-ANOMALY §5) ---
+        if not (Decimal(0) < self.midpoint_jump_halt < Decimal(1)):
+            raise ValueError(
+                f"midpoint_jump_halt must be in (0, 1) -- a mid is a probability, "
+                f"got {self.midpoint_jump_halt}"
+            )
+        if not (Decimal(0) < self.depth_collapse_fraction <= Decimal(1)):
+            raise ValueError(
+                f"depth_collapse_fraction must be in (0, 1], got {self.depth_collapse_fraction}"
+            )
+        if self.depth_collapse_min_prev_shares <= 0:
+            raise ValueError(
+                f"depth_collapse_min_prev_shares must be > 0, "
+                f"got {self.depth_collapse_min_prev_shares}"
+            )
 
     def cluster_cap(self, rho):
         """Aggregate worst-case-risk cap for a WARM co-move cluster with representative

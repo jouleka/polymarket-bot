@@ -31,3 +31,33 @@ def test_anomaly_caps_changes_are_content_hash_tamper_evident():
     base = RiskCaps().content_hash()
     assert RiskCaps(ws_staleness_halt_seconds=15).content_hash() != base
     assert RiskCaps(midpoint_jump_halt=Decimal("0.10")).content_hash() != base
+
+
+def test_midpoint_jump_halt_of_zero_is_rejected_and_the_default_accepted():
+    # Boundary pair, lower edge of (0, 1): x == 0 must FAIL construction; 0.15 is in-range.
+    # Kills: dropping the lower bound from the midpoint_jump_halt range check.
+    with pytest.raises(ValueError, match="midpoint_jump_halt"):
+        RiskCaps(midpoint_jump_halt=Decimal("0"))
+    RiskCaps(midpoint_jump_halt=Decimal("0.15"))  # must not raise
+
+
+def test_midpoint_jump_halt_of_one_is_rejected_because_a_mid_is_a_probability():
+    # Boundary pair, upper edge of (0, 1): x == 1 must FAIL (a probability mid can never
+    # jump a full 1.0 -> the trigger would be vacuous). Kills: writing <= 1 instead of < 1.
+    with pytest.raises(ValueError, match="midpoint_jump_halt"):
+        RiskCaps(midpoint_jump_halt=Decimal("1"))
+
+
+def test_depth_collapse_fraction_of_zero_is_rejected_but_one_is_accepted():
+    # Boundary pair for (0, 1]: 0 rejected; 1 ("all prev depth gone") is the legal tightest
+    # setting and MUST construct. Kills: writing < 1 instead of <= 1, or dropping the lower bound.
+    with pytest.raises(ValueError, match="depth_collapse_fraction"):
+        RiskCaps(depth_collapse_fraction=Decimal("0"))
+    RiskCaps(depth_collapse_fraction=Decimal("1"))  # must not raise
+
+
+def test_depth_collapse_min_prev_shares_of_zero_is_rejected():
+    # (> 0): a zero noise floor would arm the collapse check on dust-depth books.
+    # Kills: dropping the strictly-positive check on the noise floor.
+    with pytest.raises(ValueError, match="depth_collapse_min_prev_shares"):
+        RiskCaps(depth_collapse_min_prev_shares=Decimal("0"))
