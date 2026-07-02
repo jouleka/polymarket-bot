@@ -69,3 +69,47 @@ def test_ws_down_is_collected_after_clock_skew_in_severity_order():
 
     assert state.action == HALT
     assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_WS_DOWN)
+
+
+def test_ws_age_exactly_at_the_staleness_cap_does_not_fire():
+    """Boundary pair, at-threshold half: the compare is STRICT `age_s > cap`.
+    Clock domains: monitor clock = 100.0 monotonic SECONDS; frame stamp =
+    70_000_000_000 ns = 70.0 s -> age exactly 30.0 s == ws_staleness_halt_seconds
+    (30, the S4.4b default). Kills: mutating `>` to `>=`. (100.0 - 70.0 == 30.0 is
+    exact in binary floats -- no epsilon flake.)"""
+    state = _monitor(ws_last_frame_at=lambda: 70_000_000_000).evaluate((), _no_books)
+
+    assert state.action == NONE
+    assert state.triggers == ()
+
+
+def test_ws_age_just_over_the_staleness_cap_fires_ws_down():
+    """Boundary pair, just-over half: stamp 69_000_000_000 ns = 69.0 s ->
+    age 31.0 s > 30. Kills: mutating `>` to `<`, deleting the age compare, or
+    dropping the /1e9 (age would be 100.0 - 6.9e10, hugely negative -> no fire)."""
+    state = _monitor(ws_last_frame_at=lambda: 69_000_000_000).evaluate((), _no_books)
+
+    assert state.action == HALT
+    assert REASON_L5_WS_DOWN in state.triggers
+
+
+def test_ws_stamp_is_nanoseconds_and_must_be_divided_to_seconds():
+    """Pins the ns->s conversion (age_s = now_s - last_ns / 1e9): stamp
+    60_000_000_000 ns = 60.0 s against clock 100.0 s -> 40 s age -> fires.
+    Monitor clock (monotonic seconds) and stamper ns are the SAME monotonic
+    family; both are injected explicitly here. Kills: any mutant that compares
+    in the wrong unit (raw-ns age is negative and never fires)."""
+    state = _monitor(ws_last_frame_at=lambda: 60_000_000_000).evaluate((), _no_books)
+
+    assert state.action == HALT
+    assert REASON_L5_WS_DOWN in state.triggers
+
+
+def test_ws_fresh_frame_within_the_cap_does_not_fire():
+    """Stamp 99_000_000_000 ns = 99.0 s -> age 1.0 s -> quiet. Kills: comparing the
+    converted STAMP itself against the cap (99.0 > 30 would fire) instead of the
+    AGE, and inverting the compare."""
+    state = _monitor(ws_last_frame_at=lambda: 99_000_000_000).evaluate((), _no_books)
+
+    assert state.action == NONE
+    assert state.triggers == ()

@@ -133,11 +133,17 @@ class AnomalyMonitor:
         # --- l5_ws_down (LAST in severity order) --------------------------------
         # Clock domains: self._clock is float monotonic SECONDS (time.monotonic);
         # the seam returns MonotonicStamper-domain NANOSECONDS (time.monotonic_ns)
-        # -- the same monotonic family (DESIGN-S4.4 §2). Age compare lands in D5.
+        # -- the same monotonic family (DESIGN-S4.4 §2), so
+        # age_s = now_s - last_ns / 1e9 is exact (the stamper's +1ns uniqueness
+        # nudges are noise at a 30s tolerance).
         if self._ws_last_frame_at is not None:
             try:
-                if self._ws_last_frame_at() is None:
+                last = self._ws_last_frame_at()
+                if last is None:
                     # Wired but never saw a frame: +inf age -> down (fail-closed).
+                    triggers.append(REASON_L5_WS_DOWN)
+                elif self._clock() - (last / 1e9) > self._caps.ws_staleness_halt_seconds:
+                    # STRICT >: age exactly AT the cap does not fire (boundary pair).
                     triggers.append(REASON_L5_WS_DOWN)
             except Exception:
                 # FAIL-CLOSED SEAM RULE: a raising seam fires its own trigger.
