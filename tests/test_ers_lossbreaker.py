@@ -255,3 +255,46 @@ def test_pending_of_24_01_pauses_with_daily_pending_pause_and_the_daily_ramp_ste
         assert state.action == "PAUSE"
         assert state.triggers == ("daily_pending_pause",)
         assert state.ramp_steps == ("daily",)
+
+
+def test_frozen_token_losses_are_excluded_from_the_weekly_sum(tmp_path):
+    # DECISIONS row 74: disputed/frozen tokens leave the realized counters (their PnL is not
+    # yet real). The same -36.01 that halts in D3 is inert when its token is frozen.
+    # Kills: dropping the frozen filter from the weekly sum.
+    with _store(tmp_path) as store:
+        _realized(store, "-36.01", age=100000.0, token_id="tf")
+        state = _breakers(store).evaluate(frozen_tokens=frozenset({"tf"}))
+        assert state.action == "NONE"
+
+
+def test_frozen_token_losses_are_excluded_from_the_streak(tmp_path):
+    # Three trailing losses, the middle one frozen -> a filtered trailing run of 2 < 3.
+    # Kills: filtering the weekly sum but streak-counting the unfiltered sequence.
+    with _store(tmp_path) as store:
+        _realized(store, "-1", age=100000.0, token_id="t1")
+        _realized(store, "-1", age=100000.0, token_id="tf")
+        _realized(store, "-1", age=100000.0, token_id="t1")
+        state = _breakers(store).evaluate(frozen_tokens=frozenset({"tf"}))
+        assert state.action == "NONE"
+
+
+def test_frozen_token_losses_are_excluded_from_the_pending_loss_component(tmp_path):
+    #  accepts + a  frozen loss = pending 20 (not 30) -> under the  ceiling.
+    # Kills: passing the UNfiltered realized list to pending_in_window.
+    with _store(tmp_path) as store:
+        _accept_row(store, "20", age=100.0, token_id="t1")
+        _realized(store, "-10", age=100.0, token_id="tf")
+        state = _breakers(store).evaluate(frozen_tokens=frozenset({"tf"}))
+        assert state.action == "NONE"
+
+
+def test_accept_rows_on_a_frozen_token_still_count_toward_pending(tmp_path):
+    # Row 74's exclusion is for REALIZED counters only -- frozen positions still count toward
+    # open/pending flow.  frozen-token accept +  live loss = pending 30 > 24 -> PAUSE.
+    # Kills: over-widening the frozen filter to the accept rows.
+    with _store(tmp_path) as store:
+        _accept_row(store, "20", age=100.0, token_id="tf")
+        _realized(store, "-10", age=100.0, token_id="t1")
+        state = _breakers(store).evaluate(frozen_tokens=frozenset({"tf"}))
+        assert state.action == "PAUSE"
+        assert state.triggers == ("daily_pending_pause",)

@@ -58,7 +58,11 @@ class LossBreakers:
         rows = self._store.flow_log()
         caps = self._caps_provider()
         now = self._wall_clock()
-        realized = [r for r in rows if r["kind"] == "realized"]
+        # Frozen exclusion (DECISIONS row 74): disputed/frozen tokens leave the realized
+        # counters entirely (weekly, streak, AND the pending loss component); accept rows are
+        # NOT filtered -- frozen positions still count toward pending/open flow.
+        realized = [r for r in rows
+                    if r["kind"] == "realized" and r["token_id"] not in frozen_tokens]
         # Weekly arm (DECISIONS row 71): sum of |realized losses| in the rolling 7d wall
         # window, STRICT > (at-the-cap does not fire). INCLUSIVE old edge (<=).
         weekly_loss_total = sum(
