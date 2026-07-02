@@ -81,6 +81,10 @@ class SafetyController:
         # Reconciled deviation: track the specific reason so verdict() returns it, not a generic
         # state name. Initial reason is unclean_restart (boot default; never explicitly set).
         self._reason = REASON_UNCLEAN_RESTART
+        # S4.7: the flow gate is a ONE-SHOT late binder (wire_flow_gate) because it needs
+        # caps_provider=self.active_caps -- it cannot exist before the controller does.
+        # Unwired (None) == today's verdict byte-for-byte.
+        self._flow_gate = None
 
     def state(self):
         return self._state
@@ -88,6 +92,16 @@ class SafetyController:
     def active_caps(self):
         # The swappable RiskCaps reference (the S4.7 ramp-DOWN ratchet replaces it atomically).
         return self._caps
+
+    def wire_flow_gate(self, gate):
+        """One-shot late binder for the S4.7 flow gate (rate caps + daily pending ceiling).
+
+        ``gate`` is a 0-arg callable -> None | a REASON_* string, consulted ONLY in verdict()'s
+        RUNNING branch. One-shot: a re-wire is a mis-assembly, not a supported operation -- the
+        second call fails LOUD rather than silently swapping the safety gate."""
+        if self._flow_gate is not None:
+            raise RuntimeError("flow gate already wired")
+        self._flow_gate = gate
 
     def swap_caps(self, new_caps, *, reason):
         """The S4.7 ramp-DOWN ratchet: atomically install a NEW re-verified RiskCaps.

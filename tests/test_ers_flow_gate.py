@@ -58,3 +58,28 @@ def test_s4_7_flow_loss_ramp_reason_constants_exist_with_exact_strings():
     assert _s.REASON_RAMP_DOWN == "ramp_down"
     assert _s.REASON_FLOW_GATE_ERROR == "flow_gate_error"
     assert _s.REASON_FLOW_DATA_ERROR == "flow_data_error"
+
+
+def test_wire_flow_gate_second_call_raises_runtime_error(tmp_path):
+    # One-shot late binder (design SS4: the gate needs caps_provider=controller.active_caps,
+    # so it cannot be a ctor kwarg). Kills: dropping the already-wired guard (a silent re-wire
+    # could swap the safety gate out from under a running loop).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        ctl.wire_flow_gate(lambda: None)
+        with pytest.raises(RuntimeError):
+            ctl.wire_flow_gate(lambda: None)
+    finally:
+        ctl_store.close()
+
+
+def test_unwired_running_verdict_is_byte_identical_to_today(tmp_path):
+    # Unwired == today byte-for-byte: the RUNNING branch returns the no-block verdict
+    # (the existing 660-baseline suite pins the other branches). Kills: __init__ pre-wiring
+    # _flow_gate to anything non-None (a phantom gate would block a clean RUNNING loop).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v == OpVerdict(_safety.RUNNING, None, None, ())
+    finally:
+        ctl_store.close()
