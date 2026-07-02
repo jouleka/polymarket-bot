@@ -223,3 +223,46 @@ def test_clock_skew_fires_ahead_of_api_storm_in_the_triggers_tuple():
     assert state.action == HALT
     assert state.triggers[0] == REASON_L5_CLOCK_SKEW
     assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_API_STORM)
+
+
+class _RaisingSkewStub:
+    """Duck-typed skew seam whose consult raises (e.g. the NTP ref is unreachable)."""
+
+    def skewed(self):
+        raise RuntimeError("ntp ref unreachable")
+
+
+class _RaisingApiStub:
+    """Duck-typed api seam whose consult raises (e.g. the health feed wedged)."""
+
+    def storming(self, now):
+        raise RuntimeError("api health feed wedged")
+
+
+def test_a_raising_skew_sentinel_fails_closed_and_fires_l5_clock_skew():
+    # FAIL-CLOSED SEAM RULE: a wired seam that RAISES fires its own trigger -- it never
+    # masks and never propagates. Kills: removing the try/except around the skew consult
+    # (this test would then ERROR with RuntimeError instead of asserting HALT).
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=_RaisingSkewStub())
+    state = monitor.evaluate((), _no_books)
+    assert state.action == HALT
+    assert REASON_L5_CLOCK_SKEW in state.triggers
+
+
+def test_a_raising_api_sentinel_fails_closed_and_fires_l5_api_storm():
+    # Kills: removing the try/except around the api consult.
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, api_sentinel=_RaisingApiStub())
+    state = monitor.evaluate((), _no_books)
+    assert state.action == HALT
+    assert REASON_L5_API_STORM in state.triggers
+
+
+def test_a_raising_skew_seam_does_not_mask_a_later_api_storm():
+    # append + CONTINUE: the raising skew consult must not short-circuit the api consult;
+    # BOTH triggers land, still severity-ordered. Kills: an early return (or re-raise)
+    # inside the skew except branch.
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 10.0,
+                             skew_sentinel=_RaisingSkewStub(),
+                             api_sentinel=_burst_5xx_sentinel())
+    state = monitor.evaluate((), _no_books)
+    assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_API_STORM)
