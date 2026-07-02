@@ -564,3 +564,53 @@ def test_raising_cancel_all_is_audited_failed_and_never_unwinds_the_loss_halt_or
         assert cancel_rows[0]["detail"] == "FAILED: venue rejected cancelAll"
         assert store.get("i1").status == "REJECTED"
         assert store.get("i1").decision_reason == "weekly_loss_halt"
+
+
+def test_loss_pause_from_running_sets_paused_with_no_cancel_all(tmp_path):
+    # DESIGN row 72/Fork 4: consecutive-loss PAUSE is sticky but NOT a de-risk -- set_state
+    # only, no cancel_all, and the streak arm carries no ramp step. Kills: dropping the PAUSE
+    # branch, or wiring a de-risk onto it.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("PAUSE", ("consecutive_loss",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert ctl.state() == _safety.PAUSED
+        assert signer.cancelled_all == []
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", _safety.RUNNING),
+            ("state_change", "consecutive_loss", _safety.PAUSED),
+        ]
+
+
+def test_a_paused_loop_hit_by_a_pause_verdict_again_does_not_re_audit(tmp_path):
+    # EDGE-triggered: the breakers evaluate every cycle, but a still-firing PAUSE on an
+    # already-PAUSED loop appends nothing (no audit spam). Kills: level-triggered set_state
+    # re-firing every cycle.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("PAUSE", ("consecutive_loss",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        rc.run_cycle()
+        assert ctl.state() == _safety.PAUSED
+        assert [r["kind"] for r in store.op_audit_log()].count("state_change") == 2
+
+
+def test_a_halted_loop_is_never_downgraded_by_a_pause_verdict(tmp_path):
+    # Severity/precedence (DESIGN §3): the loss consult never downgrades -- PAUSE fires from
+    # the live state only, so a boot-HALTED loop stays HALTED with an untouched audit log.
+    # Kills: widening the PAUSE edge guard to HALTED (a silent halt->pause downgrade would
+    # REOPEN a killed loop to a weaker block).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot: HALTED
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("PAUSE", ("consecutive_loss",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert store.op_audit_log() == []
