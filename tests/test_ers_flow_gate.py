@@ -234,3 +234,28 @@ def test_flow_gate_consults_the_caps_provider_on_every_call(tmp_path):
         assert gate() is None                                # 1 accept < hour cap 2
         caps_cell[0] = RiskCaps(new_positions_per_hour=1)    # tighten (1 <= day 6: constructible)
         assert gate() == "rate_cap_hourly"                   # same rows, tighter caps -> blocked
+
+
+def test_flow_gate_six_accepts_spread_over_the_day_blocks_daily_rate(tmp_path):
+    # 6 accepts all OLDER than the hour (hourly arm sees 0) but inside 24h == the daily cap(6)
+    # -> rate_cap_daily. Ages run 45000..50000s: every row is > 3600 old and <= 86400 old.
+    # Kills: dropping the daily arm, or windowing it over 3600s instead of 86400s.
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        for i, at in enumerate((0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0)):
+            store.record_flow_event(kind="accept", token_id=f"a{i}", amount=Decimal("1"), wall_at=at)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 50000.0)
+        assert gate() == "rate_cap_daily"
+
+
+def test_flow_gate_hourly_wins_when_both_rate_arms_are_breached(tmp_path):
+    # 6 accepts inside ONE hour breach both arms (6 >= 2 hourly AND 6 >= 6 daily); the reason
+    # must be the hourly one -- checked FIRST (design SS3 row 1, the SS4 pinned order).
+    # Kills: re-ordering the arms (daily-first would misreport the block reason the operator
+    # and the intent audit see).
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        for i, at in enumerate((100.0, 200.0, 300.0, 400.0, 500.0, 600.0)):
+            store.record_flow_event(kind="accept", token_id=f"a{i}", amount=Decimal("1"), wall_at=at)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 700.0)
+        assert gate() == "rate_cap_hourly"
