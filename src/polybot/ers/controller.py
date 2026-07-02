@@ -14,6 +14,7 @@ Clocks are injected for deterministic TDD.
 """
 
 from polybot.ers.anomaly import HALT
+from polybot.ers.lossbreaker import HALT as LOSS_HALT
 from polybot.ers.ramp import step_daily, step_weekly
 from polybot.ers.safety import HALTED, PAUSED, REASON_RAMP_DOWN, RUNNING
 from polybot.ers.service import process_pending
@@ -92,6 +93,18 @@ class ERSController:
                 step_fn = step_weekly if step == "weekly" else step_daily
                 self._controller.swap_caps(step_fn(self._controller.active_caps()),
                                            reason=REASON_RAMP_DOWN)
+            if ls.action == LOSS_HALT and self._controller.state() in (RUNNING, PAUSED):
+                # EDGE-triggered halt-first one-shot (the S4.4 pattern verbatim): close the
+                # gate, THEN one best-effort cancel_all; a raising signer never unwinds the
+                # halt or kills the cycle -- the pre-staged GTD exits are the backstop.
+                self._controller.set_state(HALTED, reason=ls.triggers[0])
+                try:
+                    self._signer.cancel_all()
+                    self._store.record_op_event(kind="cancel_all", reason=ls.triggers[0],
+                                                detail=",".join(ls.triggers))
+                except Exception as exc:
+                    self._store.record_op_event(kind="cancel_all", reason=ls.triggers[0],
+                                                detail=f"FAILED: {exc}")
         # THE S4.7 re-plumb: read the SWAPPABLE caps from the SafetyController EVERY cycle so
         # a ramp-DOWN swap_caps lands on the very next cycle's validator/GTD derivation.
         # self._caps remains only the construction-time NAV source for the scaffold portfolio.
