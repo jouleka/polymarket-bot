@@ -145,3 +145,22 @@ def test_non_auth_4xx_statuses_never_count_toward_either_storm():
     for t, status in enumerate((404, 429, 400, 404, 429, 400, 404, 429)):
         sentinel.record(status, now=float(t))
     assert sentinel.storming(8.0) is False
+
+
+def test_event_at_exactly_now_minus_window_is_kept_inclusive_boundary():
+    # Inclusive-boundary pin, mirroring the DrawdownBreaker deque: an event with
+    # now - t == window (60s) is still IN the window, so 5 old 5xx at t=0 still storm
+    # at now=60. Kills: pruning with >= (now - t >= window would drop the boundary entry).
+    sentinel = ApiStormSentinel(RiskCaps())
+    for _ in range(5):
+        sentinel.record(500, now=0.0)
+    assert sentinel.storming(60.0) is True
+
+
+def test_event_just_older_than_the_window_is_pruned_and_the_storm_clears():
+    # Boundary pair partner: at now=61 the t=0 events are (61 - 0) > 60 -> pruned -> no
+    # storm. Kills: deleting the prune entirely (an API storm would then NEVER clear).
+    sentinel = ApiStormSentinel(RiskCaps())
+    for _ in range(5):
+        sentinel.record(500, now=0.0)
+    assert sentinel.storming(61.0) is False
