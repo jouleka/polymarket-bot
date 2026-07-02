@@ -11,7 +11,7 @@ nothing here touches the op-state machine.
 from collections import deque
 from dataclasses import dataclass
 
-from polybot.ers.safety import REASON_L5_CLOCK_SKEW
+from polybot.ers.safety import REASON_L5_API_STORM, REASON_L5_CLOCK_SKEW
 
 NONE = "NONE"
 HALT = "HALT"
@@ -86,9 +86,10 @@ class AnomalyMonitor:
         self._canary_last_run = None               # float | None: the canary scheduler's memory
 
     def evaluate(self, positions, book_for):
+        now = self._clock()
         triggers = []
         # Severity slot 1 of the pinned order (skew, recon, canary, book, api, ws): clock
-        # skew. Slots 2-6 land in S4.4b-e.
+        # skew. Slots 2-4 land in S4.4c-e.
         if self._skew_sentinel is not None:
             try:
                 if self._skew_sentinel.skewed():
@@ -97,6 +98,10 @@ class AnomalyMonitor:
                 # FAIL-CLOSED SEAM RULE: a raising sentinel IS the anomaly -- fire this
                 # seam's trigger and continue to the next seam; never mask, never propagate.
                 triggers.append(REASON_L5_CLOCK_SKEW)
+        # Severity slot 5 of the pinned order: API 5xx/auth storm.
+        if self._api_sentinel is not None:
+            if self._api_sentinel.storming(now):
+                triggers.append(REASON_L5_API_STORM)
         if not triggers:
             return AnomalyState(NONE, ())
         return AnomalyState(HALT, tuple(triggers))

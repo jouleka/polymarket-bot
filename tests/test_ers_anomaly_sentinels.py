@@ -10,8 +10,9 @@ from decimal import Decimal
 
 import pytest
 
-from polybot.ers.anomaly import ApiStormSentinel, ClockSkewSentinel
+from polybot.ers.anomaly import HALT, NONE, AnomalyMonitor, ApiStormSentinel, ClockSkewSentinel
 from polybot.ers.caps import RiskCaps
+from polybot.ers.safety import REASON_L5_API_STORM, REASON_L5_CLOCK_SKEW
 
 
 def test_anomaly_caps_defaults_construct_and_carry_the_design_values():
@@ -164,3 +165,61 @@ def test_event_just_older_than_the_window_is_pruned_and_the_storm_clears():
     for _ in range(5):
         sentinel.record(500, now=0.0)
     assert sentinel.storming(61.0) is False
+
+
+def _no_books(token_id):
+    """book_for stub: no book for any token (the abnormal-book check skips absent books)."""
+    return None
+
+
+def _burst_5xx_sentinel():
+    """An ApiStormSentinel pre-loaded with a storming burst: 5x 500 at t=0..4 seconds."""
+    sentinel = ApiStormSentinel(RiskCaps())
+    for t in range(5):
+        sentinel.record(500, now=float(t))
+    return sentinel
+
+
+def test_monitor_with_a_skewed_clock_sentinel_halts_with_l5_clock_skew():
+    # The REAL ClockSkewSentinel wired through the skew_sentinel= seam fires the trigger.
+    # Kills: dropping the skew consult from evaluate (state would be NONE).
+    skew = ClockSkewSentinel(wall_clock=lambda: 100.0, ntp_ref=lambda: 0.0, caps=RiskCaps())
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=skew)
+    state = monitor.evaluate((), _no_books)
+    assert state.action == HALT
+    assert REASON_L5_CLOCK_SKEW in state.triggers
+
+
+def test_monitor_with_a_storming_api_sentinel_halts_with_l5_api_storm():
+    # The REAL ApiStormSentinel wired through the api_sentinel= seam fires the trigger.
+    # Kills: dropping the api consult from evaluate.
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 10.0, api_sentinel=_burst_5xx_sentinel())
+    state = monitor.evaluate((), _no_books)
+    assert state.action == HALT
+    assert REASON_L5_API_STORM in state.triggers
+
+
+def test_monitor_api_consult_passes_its_own_clock_now_into_the_storm_window():
+    # Same burst (t=0..4), two monitor clocks: at now=30 the burst is in-window -> HALT;
+    # at now=100 it has aged out (100-4 > 60) -> NONE with empty triggers.
+    # Kills: consulting storming() with anything other than the monitor clock's now
+    # (a hardcoded 0 would keep the aged burst "in-window" forever).
+    fresh = AnomalyMonitor(RiskCaps(), clock=lambda: 30.0, api_sentinel=_burst_5xx_sentinel())
+    assert fresh.evaluate((), _no_books).action == HALT
+    aged = AnomalyMonitor(RiskCaps(), clock=lambda: 100.0, api_sentinel=_burst_5xx_sentinel())
+    aged_state = aged.evaluate((), _no_books)
+    assert aged_state.action == NONE
+    assert aged_state.triggers == ()
+
+
+def test_clock_skew_fires_ahead_of_api_storm_in_the_triggers_tuple():
+    # SEVERITY ORDER (pinned): when BOTH fire, triggers is most-severe-first and
+    # triggers[0] -- the set_state reason -- is l5_clock_skew.
+    # Kills: swapping the skew/api consult order in evaluate.
+    skew = ClockSkewSentinel(wall_clock=lambda: 100.0, ntp_ref=lambda: 0.0, caps=RiskCaps())
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 10.0,
+                             skew_sentinel=skew, api_sentinel=_burst_5xx_sentinel())
+    state = monitor.evaluate((), _no_books)
+    assert state.action == HALT
+    assert state.triggers[0] == REASON_L5_CLOCK_SKEW
+    assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_API_STORM)
