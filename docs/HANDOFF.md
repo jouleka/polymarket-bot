@@ -29,7 +29,7 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   `\\wsl.localhost\Ubuntu\home\jurgenubuntu\projects\polymarket-bot\...`.
 - **Venv** (gitignored; system python3.12 lacks ensurepip): `uv venv --python 3.13 .venv && uv pip install
   --python .venv/bin/python pytest "httpx>=0.28" "websockets>=16"`. Tests: `./.venv/bin/pytest` →
-  **660 passing** (pyproject sets `pythonpath=["src"]`, no install needed; `addopts="-q"` suppresses
+  **763 passing** (pyproject sets `pythonpath=["src"]`, no install needed; `addopts="-q"` suppresses
   the summary line under a second `-q` — force counts with `-o addopts=""` or `--tb=no -rN`).
 - **FIRST: `git pull`** — origin is usually ahead of a fresh local clone and unfetched (it looks docs-only
   until fetched).
@@ -65,7 +65,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-12** | C2 — off-loop EventStore writes (unblock WS shards > 2) | **DONE + pushed** |
 | **POL-4** | S2 — signing + order-construction spike (BUILD-GATING) | **BLOCKED** on the operator funding a Polymarket deposit wallet on a CLEAN non-Windows box |
 | **POL-5** | S3 — ERS skeleton + pending_intents + propose_trade | **slices 1+2+3 DONE + pushed** (slice 3 = co-move matrix + per-cluster cap + L7 breaker, `origin/main` @ `d17224e`) |
-| **POL-6** | S4 — Safety envelope + supervisor + reconciliation + Telegram | **KILL PATH (S4.1–S4.3) + S4.5 3-way reconcile + S4.4 L5 AnomalyMonitor ALL DONE + pushed**. Kill path: SafetyController op-state gate + signer de-risk/GTD/startup-self-test + out-of-band supervisor & the WEDGED-PROCESS acceptance gate. S4.5: durable `fills` ledger + pure `ThreeWayReconciler` + `RestartReconciler` (crash=HOLD). S4.4: the running-cadence anomaly kill-switch — `ers/anomaly.py` AnomalyMonitor (6 sentinel seams, severity order skew→recon→canary→book→api→ws) + `ERSController(anomaly=)` edge-triggered halt-first one-shot cancel_all + the per-cycle reconcile cadence (`make_recon_provider`, DIVERGED→`l5_recon_mismatch`) + canary scheduler (never-blind-retry) + 7 tighten-only hashed caps + `last_frame_at` WS-health accessors; STICKY halts (operator fork: only the clean boot-reconcile ever auto-resumes); shadow-only on PaperSigner; **660 tests**; 5 sub-slices each spec+pinned-opus reviewed with FULL mutation batteries + a final whole-slice review (APPROVED FOR MERGE — its own cross-cutting mutation surfaced + closed a co-fire coverage edge). **Remaining S4.7 (realized-loss breakers + ramp-DOWN), S4.6 (Telegram) are contract-level in `DESIGN-S4-SAFETY.md`; next build order = S4.7 → S4.6** |
+| **POL-6** | S4 — Safety envelope + supervisor + reconciliation + Telegram | **KILL PATH (S4.1–S4.3) + S4.5 3-way reconcile + S4.4 L5 AnomalyMonitor ALL DONE + pushed**. Kill path: SafetyController op-state gate + signer de-risk/GTD/startup-self-test + out-of-band supervisor & the WEDGED-PROCESS acceptance gate. S4.5: durable `fills` ledger + pure `ThreeWayReconciler` + `RestartReconciler` (crash=HOLD). S4.4: the running-cadence anomaly kill-switch — `ers/anomaly.py` AnomalyMonitor (6 sentinel seams, severity order skew→recon→canary→book→api→ws) + `ERSController(anomaly=)` edge-triggered halt-first one-shot cancel_all + the per-cycle reconcile cadence (`make_recon_provider`, DIVERGED→`l5_recon_mismatch`) + canary scheduler (never-blind-retry) + 7 tighten-only hashed caps + `last_frame_at` WS-health accessors; STICKY halts (operator fork: only the clean boot-reconcile ever auto-resumes); shadow-only on PaperSigner; **660 tests**; 5 sub-slices each spec+pinned-opus reviewed with FULL mutation batteries + a final whole-slice review (APPROVED FOR MERGE — its own cross-cutting mutation surfaced + closed a co-fire coverage edge). **S4.7 realized-loss breakers + flow gate + tighten-only ramp ratchet ALSO DONE** — durable dual-stamped `flow_journal` (monotonic `at` + wall-clock `wall_at`; windows are wall-clock rolling 1h/24h/7d, restart-surviving) + the per-cycle flow gate in `verdict`'s RUNNING branch (`wire_flow_gate` one-shot; rate caps 2/hr 6/day + the $24 daily ceiling via the dormant predicate w/ `new_worst_case=per_trade` — blocks WITHOUT touching op-state, auto-slides) + `ers/lossbreaker.py` (weekly >$36 frozen-excluded → sticky HALTED + one best-effort cancel_all + ramp step; trailing streak ≥3 → sticky PAUSED; pending >$24 → sticky PAUSED + ramp step; fail-closed HALT(flow_data_error) on journal corruption; NONE on the empty shadow journal) + `ers/ramp.py` (TIGHTEN_DIRECTION over ALL 38 fields structurally pinned; `assert_tighten_only` fail-loud; `step_daily` 9/45/255/45, `step_weekly` 6/30/270/30, min()-composed idempotent) + `SafetyController.swap_caps` (guard→hash→no-op→audit(kind=caps_swap)→mutate) + **the `active_caps()` re-plumb** (run_cycle now sizes off the controller's swappable reference — swaps provably bite next cycle). **763 tests**; 4 sub-slices × (spec review + pinned-opus mutation battery, ~40 mutations, every survivor closed with a mutation-verified pin) + final whole-slice review APPROVED (two cross-cutting mutations caught). **Remaining: S4.6 (Telegram) — contract-level in `DESIGN-S4-SAFETY.md`; its RESUME clears the sticky L5/loss halts and its LOWER_CAPS routes through swap_caps on the serial runloop** |
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
@@ -249,6 +249,13 @@ edge.
 - `docs/DESIGN-S4.4-ANOMALY.md` + `docs/PLAN-S4.4-ANOMALY.md` — the S4.4 L5 AnomalyMonitor design (resolved forks:
   ALL-sticky halts, the default thresholds; the pinned severity order; §7 built-vs-deferred) + the executed 37-task
   TDD plan (5 sub-slices).
+- `docs/DESIGN-S4.7-BREAKERS.md` + `docs/PLAN-S4.7-BREAKERS.md` — the S4.7 design (resolved forks: step sizes
+  25%/50%, rolling windows, weekly cancel_all, sticky streak-pause; the rows-70-vs-72 interplay; the caps-swap
+  re-plumb rationale) + the executed 34-task TDD plan (4 sub-slices). NB for S9/live wiring: the rate arm is
+  BATCH-granular (one over-full pending batch can exceed 2/hr within a single cycle — bound the batch or
+  re-consult per-intent when live); a frozen position masks ALL realized flow on its token_id (per-position
+  attribution needs a fill/position journal linkage); optional defense-in-depth: a composition test co-wiring
+  anomaly= AND lossbreakers= on one controller.
 - `docs/VERIFICATION-2026-06-24.md` — Phase-0 signing-path verification (rs-clob-client-v2).
 - The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-12 YouTrack comments** — the detailed per-slice record.
 
@@ -264,13 +271,12 @@ malware vector). You CANNOT do POL-4 from this machine. So:
 
 - **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, AND the
   S4/POL-6 KILL PATH (S4.1–S4.3) are now DONE + pushed** (see §5). Recommended next, in order:
-  1. **Finish the S4 safety envelope (POL-6) — S4.5 3-way reconcile AND S4.4 L5 AnomalyMonitor are now DONE +
-     pushed** (see the §5 build-log + `DESIGN-S4.5-RECONCILE.md` / `DESIGN-S4.4-ANOMALY.md`). Remaining
-     (contract-level in `DESIGN-S4-SAFETY.md`, all shadow-buildable), in order **S4.7 → S4.6**:
-     S4.7 realized-loss breakers (daily/weekly/consecutive — wires the dormant `would_cross_daily_pending_ceiling`;
-     reads S4.5's reconciled ledger) + auto ramp-DOWN (trigger-specific tighten steps; the tighten-only caps-swap
-     ratchet that governs every hashed field incl. S4.4's new seven) · S4.6 Telegram (auth/nonce/safety-increasing-
-     only, fake transport; RESUME is the operator path that clears S4.4's sticky L5 halts).
+  1. **Finish the S4 safety envelope (POL-6) — S4.5, S4.4 AND S4.7 are now DONE** (see the §5 build-log +
+     `DESIGN-S4.5-RECONCILE.md` / `DESIGN-S4.4-ANOMALY.md` / `DESIGN-S4.7-BREAKERS.md`). Remaining
+     (contract-level in `DESIGN-S4-SAFETY.md`, shadow-buildable): **S4.6 Telegram** (auth/nonce/safety-increasing-
+     only command set over a fake transport; RESUME is the operator path that clears the sticky L5/loss halts;
+     LOWER_CAPS drives `SafetyController.swap_caps` and MUST route through the serial runloop — see the
+     swap_caps concurrency docstring).
   2. **S8 / POL-10 — maker-rewards module** (shadow, honest net-of-adverse-selection; consumes the D1
      `pull_quotes` seam).
   3. **S9 / POL-11 — shadow harness → ramp controller** (the capstone: paper-trade net of
