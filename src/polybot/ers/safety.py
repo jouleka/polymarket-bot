@@ -44,6 +44,16 @@ REASON_L5_ABNORMAL_BOOK = "l5_abnormal_book"  # crossed/locked mid, depth collap
 REASON_L5_API_STORM = "l5_api_storm"          # 5xx / auth-failure storm within the window
 REASON_L5_WS_DOWN = "l5_ws_down"              # WS silent beyond staleness (None frame = +inf age)
 REASON_L5_CANARY_FAIL = "l5_canary_fail"      # signing canary failed/raised -- NEVER blind-retried
+# --- S4.7 reason codes (NET-NEW; the flow gate / loss breakers / ramp-ratchet vocabulary) ------
+REASON_RATE_HOURLY = "rate_cap_hourly"              # accepts in rolling 3600s >= new_positions_per_hour
+REASON_RATE_DAILY = "rate_cap_daily"                # accepts in rolling 86400s >= new_positions_per_day
+REASON_DAILY_CEILING = "daily_ceiling"              # conservative per_trade-headroom pre-crossing block
+REASON_DAILY_PENDING_PAUSE = "daily_pending_pause"  # realized losses pushed pending over -> sticky PAUSE
+REASON_WEEKLY_LOSS = "weekly_loss_halt"             # rolling-7d realized losses > cap -> sticky HALT
+REASON_CONSECUTIVE_LOSS = "consecutive_loss"        # trailing realized-loss streak >= cap -> sticky PAUSE
+REASON_RAMP_DOWN = "ramp_down"                      # swap_caps audit reason for a ratchet step
+REASON_FLOW_GATE_ERROR = "flow_gate_error"          # the flow gate raised -> fail-closed verdict block
+REASON_FLOW_DATA_ERROR = "flow_data_error"          # flow_journal corruption -> loss breakers HALT
 
 
 @dataclass(frozen=True)
