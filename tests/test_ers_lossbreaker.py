@@ -614,3 +614,29 @@ def test_a_halted_loop_is_never_downgraded_by_a_pause_verdict(tmp_path):
         rc.run_cycle()
         assert ctl.state() == _safety.HALTED
         assert store.op_audit_log() == []
+
+
+def test_loss_halt_is_sticky_after_the_losses_clear_and_the_next_intent_rejects_with_it(tmp_path):
+    # Fork 4 / DESIGN §6.2 STICKY: the loss state CLEARING (next cycle evaluates NONE) does
+    # not resume the loop -- op-state stays HALTED with the stored weekly_loss_halt reason, a
+    # fresh intent REJECTs with it verbatim, and the one-shot stayed one-shot. Recovery is
+    # operator-owned. Kills: ANY auto-resume branch in the run_cycle consult (the Step-2
+    # mutation probe proves this test catches exactly that).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("HALT", ("weekly_loss_halt",), ()))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()                                   # cycle 1: halt + one-shot de-risk
+        assert ctl.state() == _safety.HALTED
+
+        double.state = _loss_state("NONE")               # the losses CLEAR...
+        store.propose_trade("i1", **_P)                  # ...and a fresh intent arrives
+        rc.run_cycle()                                   # cycle 2
+
+        assert ctl.state() == _safety.HALTED             # ...but the halt is STICKY
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "weekly_loss_halt"
+        assert len(signer.cancelled_all) == 1            # the one-shot stayed one-shot
+        assert [r["kind"] for r in store.op_audit_log()].count("state_change") == 2
