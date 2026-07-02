@@ -122,3 +122,47 @@ def test_a_raising_flow_log_fails_closed_to_halt_with_flow_data_error(tmp_path):
     assert state.action == "HALT"
     assert state.triggers == ("flow_data_error",)
     assert state.ramp_steps == ()
+
+
+def test_weekly_losses_summing_to_exactly_36_do_not_halt(tmp_path):
+    # Boundary pair, at-the-cap side: DESIGN row 71 is a STRICT > on weekly_loss_halt ().
+    # Kills: >= instead of > on the weekly sum.
+    with _store(tmp_path) as store:
+        _realized(store, "-18", age=100000.0)
+        _realized(store, "-18", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+        assert state.triggers == ()
+
+
+def test_weekly_losses_summing_to_36_01_halt_with_the_weekly_trigger_and_ramp_step(tmp_path):
+    # Boundary pair, just-over side: 36.01 > 36 -> HALT(weekly_loss_halt) + ramp step B.
+    # Kills: dropping the weekly arm, wrong reason string, or forgetting the "weekly" step.
+    with _store(tmp_path) as store:
+        _realized(store, "-18", age=100000.0)
+        _realized(store, "-18.01", age=100000.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "HALT"
+        assert state.triggers == ("weekly_loss_halt",)
+        assert state.ramp_steps == ("weekly",)
+
+
+def test_a_loss_exactly_at_the_7d_window_edge_is_included(tmp_path):
+    # Window boundary pair, in side: now - wall_at == 604800 is INCLUSIVE (the breaker/ApiStorm
+    # convention -- keeping the boundary row is tighter). Kills: < instead of <= on the edge.
+    with _store(tmp_path) as store:
+        _realized(store, "-36.01", age=604800.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "HALT"
+        assert state.triggers == ("weekly_loss_halt",)
+
+
+def test_a_loss_just_older_than_the_7d_window_is_excluded(tmp_path):
+    # Window boundary pair, out side: age 604801 falls out of the weekly sum (and the single
+    # trailing loss is a streak of 1 < 3, so nothing else fires). Kills: a windowless weekly
+    # sum, or an off-by-one widening of the window.
+    with _store(tmp_path) as store:
+        _realized(store, "-36.01", age=604801.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+        assert state.triggers == ()
