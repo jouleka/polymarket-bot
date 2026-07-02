@@ -83,3 +83,33 @@ def test_unwired_running_verdict_is_byte_identical_to_today(tmp_path):
         assert v == OpVerdict(_safety.RUNNING, None, None, ())
     finally:
         ctl_store.close()
+
+
+def test_running_verdict_with_gate_returning_none_does_not_block(tmp_path):
+    # No-block side of the consult pair. Kills: inverting the `reason is not None` check
+    # (blocking on None would wedge every clean RUNNING cycle).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        ctl.wire_flow_gate(lambda: None)
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v == OpVerdict(_safety.RUNNING, None, None, ())
+    finally:
+        ctl_store.close()
+
+
+def test_running_verdict_with_gate_reason_blocks_but_op_state_and_audit_are_untouched(tmp_path):
+    # A gate reason blocks THIS cycle's intents while action stays RUNNING, state() stays
+    # RUNNING, and NO op-audit row is written -- the block must auto-slide with the window
+    # (design SS2 "the gate blocks, states stick"; no new auto-resume path exists to undo a
+    # sticky transition). Kills: the consult calling set_state or record_op_event (a sticky
+    # gate block would then need an operator RESUME every hour).
+    ctl, ctl_store = _running_controller(tmp_path)
+    try:
+        ctl.wire_flow_gate(lambda: _safety.REASON_RATE_HOURLY)
+        audit_before = ctl_store.op_audit_log()
+        v = ctl.verdict(Portfolio(nav=Decimal("300")), PaperSigner())
+        assert v == OpVerdict(_safety.RUNNING, "rate_cap_hourly", None, ("rate_cap_hourly",))
+        assert ctl.state() == _safety.RUNNING
+        assert ctl_store.op_audit_log() == audit_before
+    finally:
+        ctl_store.close()

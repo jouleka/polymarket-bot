@@ -165,6 +165,13 @@ class SafetyController:
         the stored reason is l8_kill, and verdict() blocks with l8_kill -- distinct from the
         startup HALTED which has reason=unclean_restart."""
         if self._state == RUNNING:
+            # S4.7: consult the flow gate (rate caps + daily pending ceiling). The gate BLOCKS
+            # without touching op-state -- when the window slides the block evaporates (no new
+            # auto-resume path; sticky transitions stay the S4.4 edge-triggered doctrine).
+            if self._flow_gate is not None:
+                reason = self._flow_gate()
+                if reason is not None:
+                    return OpVerdict(RUNNING, reason, None, (reason,))
             # RUNNING -> no op-block; the loop proceeds to the L7 breaker unchanged.
             return OpVerdict(RUNNING, None, None, ())
         if self._state == PAUSED:
