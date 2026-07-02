@@ -128,3 +128,99 @@ def test_anomaly_module_source_never_references_running_or_set_state():
     src = Path(_a.__file__).read_text(encoding="utf-8")
     assert "set_state" not in src
     assert "RUNNING" not in src
+
+
+# --- ERSController anomaly= seam (the run_cycle kill-path wiring) -----------------------------
+from polybot.core.clock import MonotonicStamper
+from polybot.ers import safety as _safety
+from polybot.ers.caps import RiskCaps
+from polybot.ers.controller import ERSController
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.safety import SafetyController
+from polybot.ers.service import PaperSigner
+from polybot.ingestion.orderbook import LocalBook
+
+
+def _store(tmp_path):
+    return IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+
+
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+
+def _monitor(skew):
+    from polybot.ers.anomaly import AnomalyMonitor
+    return AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=skew)
+
+
+def _rc(store, ctl, signer, *, anomaly):
+    return ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=RiskCaps(),
+                         signer=signer, controller=ctl, anomaly=anomaly, clock=lambda: 0)
+
+
+class _StateSnoopingSigner(PaperSigner):
+    """PaperSigner that records the op-state AT THE MOMENT cancel_all is called -- proves the
+    gate closed (HALTED) BEFORE the de-risk fired."""
+
+    def __init__(self, ctl):
+        super().__init__()
+        self._ctl = ctl
+        self.state_at_cancel = []
+
+    def cancel_all(self):
+        self.state_at_cancel.append(self._ctl.state())
+        super().cancel_all()
+
+
+def test_new_anomaly_from_running_halts_first_then_cancels_once_with_exact_audit_rows(tmp_path):
+    # Design §2 / invariant 2: on a NEW anomaly while RUNNING the controller (1) closes the
+    # gate FIRST -- set_state(HALTED, reason=state.triggers[0]), audited by set_state -- THEN
+    # (2) fires exactly ONE cancel_all and (3) writes exactly one kind="cancel_all" op-audit
+    # row with reason=triggers[0], detail=",".join(triggers).
+    # MUTATIONS KILLED: swapping the halt/cancel order (state_at_cancel would read RUNNING);
+    # double-firing cancel_all; wrong reason/detail strings on either audit row.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = _StateSnoopingSigner(ctl)
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+
+        rc.run_cycle()
+
+        assert ctl.state() == _safety.HALTED               # the gate is closed...
+        assert signer.state_at_cancel == [_safety.HALTED]  # ...and was ALREADY closed at cancel time
+        assert len(signer.cancelled_all) == 1              # one-shot de-risk
+        rows = store.op_audit_log()
+        # EXACT op-audit sequence: setup transition, then halt-first, then the de-risk row.
+        assert [(r["kind"], r["reason"], r["detail"]) for r in rows] == [
+            ("state_change", "clean_reconcile", _safety.RUNNING),
+            ("state_change", "l5_clock_skew", _safety.HALTED),
+            ("cancel_all", "l5_clock_skew", "l5_clock_skew"),
+        ]
+
+
+def test_anomaly_none_default_leaves_the_cycle_exactly_as_today(tmp_path):
+    # Design §6.5 dormant-by-default: an ERSController WITHOUT the anomaly kwarg (the None
+    # default) trades exactly as before S4.4 -- ACCEPT, no cancel_all, no anomaly audit rows.
+    # Expected GREEN from birth: it pins the seam's None default (the 556-test baseline is
+    # the wider proof). MUTATION KILLED: making the seam mandatory, or consulting/de-risking
+    # when the monitor is None.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        rc = ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=RiskCaps(),
+                           signer=signer, controller=ctl, clock=lambda: 0)   # anomaly unset
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.cancelled_all == []
+        assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
