@@ -95,3 +95,22 @@ def test_falsy_skew_sentinel_keeps_action_none_with_no_triggers():
     state = monitor.evaluate((), {}.get)
     assert state.action == A_NONE
     assert state.triggers == ()
+
+
+class _RaisingSkew:
+    """A wired sentinel that explodes -- per the FAIL-CLOSED SEAM RULE this IS the anomaly."""
+
+    def skewed(self):
+        raise RuntimeError("skew sentinel exploded")
+
+
+def test_raising_skew_sentinel_fires_its_own_trigger_instead_of_propagating():
+    # FAIL-CLOSED SEAM RULE (design §6.4): a wired sentinel that RAISES inside evaluate fires
+    # its own trigger -- append + continue; never mask, never propagate. MUTATION KILLED:
+    # letting the exception escape evaluate, or except-ing to a silent `pass`.
+    from polybot.ers.anomaly import HALT as A_HALT, AnomalyMonitor
+    from polybot.ers.caps import RiskCaps
+    monitor = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=_RaisingSkew())
+    state = monitor.evaluate((), {}.get)   # must NOT raise
+    assert state.action == A_HALT
+    assert state.triggers == ("l5_clock_skew",)
