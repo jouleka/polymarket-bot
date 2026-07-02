@@ -11,7 +11,7 @@ and each consumer converts the raise into its fail-closed action.
 
 from decimal import Decimal
 
-from polybot.ers.safety import REASON_RATE_HOURLY
+from polybot.ers.safety import REASON_RATE_DAILY, REASON_RATE_HOURLY
 
 _KINDS = ("accept", "realized")
 
@@ -83,5 +83,7 @@ def make_flow_gate(store, caps_provider, *, wall_clock):
         now = wall_clock()
         if accepts_in_window(rows, wall_now=now, window_seconds=3600) >= caps.new_positions_per_hour:
             return REASON_RATE_HOURLY
+        if accepts_in_window(rows, wall_now=now, window_seconds=86400) >= caps.new_positions_per_day:
+            return REASON_RATE_DAILY
         return None
     return _gate
