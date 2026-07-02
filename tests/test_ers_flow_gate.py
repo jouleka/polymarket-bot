@@ -259,3 +259,29 @@ def test_flow_gate_hourly_wins_when_both_rate_arms_are_breached(tmp_path):
             store.record_flow_event(kind="accept", token_id=f"a{i}", amount=Decimal("1"), wall_at=at)
         gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 700.0)
         assert gate() == "rate_cap_hourly"
+
+
+def test_flow_gate_pending_exactly_at_per_trade_headroom_returns_none(tmp_path):
+    # At-boundary partner: pending 12 + new_worst_case per_trade(12) == ceiling(24) -- NOT
+    # crossed (would_cross_daily_pending_ceiling is strict >, pinned in
+    # test_ers_safety_daily_ceiling) -> no block. Kills: > mutated to >= at the consumption
+    # site, or double-adding the headroom.
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("12"), wall_at=100.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
+        assert gate() is None
+
+
+def test_flow_gate_pending_just_over_headroom_blocks_daily_ceiling(tmp_path):
+    # Just-over partner: pending 12.01 + per_trade(12) = 24.01 > 24 -> daily_ceiling. This is
+    # the CONSERVATIVE pre-crossing block (new_worst_case = caps.per_trade, design SS6.6): no
+    # intent can ever cross the ceiling; smaller intents may block early -- the fail-closed
+    # direction (rows-70-vs-72 interplay: pure trade flow can then NEVER trip the sticky
+    # daily_pending_pause; only realized losses can). Kills: dropping the ceiling arm, or
+    # passing new_worst_case=0/the intent's stake instead of caps.per_trade.
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("12.01"), wall_at=100.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
+        assert gate() == "daily_ceiling"
