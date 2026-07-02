@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from polybot.ers.anomaly import ClockSkewSentinel
+from polybot.ers.anomaly import ApiStormSentinel, ClockSkewSentinel
 from polybot.ers.caps import RiskCaps
 
 
@@ -99,3 +99,22 @@ def test_clock_skew_is_symmetric_when_the_wall_clock_runs_behind_ntp():
     behind_at_edge = ClockSkewSentinel(wall_clock=lambda: 1_000_000.0,
                                        ntp_ref=lambda: 1_000_002.0, caps=RiskCaps())
     assert behind_at_edge.skewed() is False
+
+
+def test_four_5xx_responses_in_the_window_do_not_storm():
+    # Boundary pair (fivexx >= api_5xx_storm_count == 5): FOUR is under the threshold.
+    # Kills: loosening the count compare or hardcoding storming True.
+    sentinel = ApiStormSentinel(RiskCaps())
+    for t in (0.0, 1.0, 2.0, 3.0):
+        sentinel.record(500, now=t)
+    assert sentinel.storming(10.0) is False
+
+
+def test_five_mixed_5xx_responses_in_the_window_storm():
+    # Boundary pair partner: exactly FIVE statuses >= 500 (mixed 500/502/503/504) at the
+    # threshold storms. Kills: mutating >= to > on the count, and any 5xx filter that
+    # matches only the literal 500 instead of status >= 500.
+    sentinel = ApiStormSentinel(RiskCaps())
+    for t, status in ((0.0, 500), (1.0, 502), (2.0, 503), (3.0, 504), (4.0, 500)):
+        sentinel.record(status, now=t)
+    assert sentinel.storming(10.0) is True
