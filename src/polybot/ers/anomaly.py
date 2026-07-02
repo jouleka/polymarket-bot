@@ -92,6 +92,8 @@ class AnomalyMonitor:
         self._canary_last_run = None               # float | None: the canary scheduler's memory
         self._prev_mid = {}   # token_id -> last VALID (non-stale) midpoint observed (S4.4c)
         self._prev_depth = {}  # token_id -> top-of-book depth at that same valid observation
+        # NOTE: these per-token maps grow unboundedly over the controller's lifetime;
+        # eviction-on-close is deferred S9/live housekeeping.
 
     def evaluate(self, positions, book_for):
         now = self._clock()
