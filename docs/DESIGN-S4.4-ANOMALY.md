@@ -81,6 +81,10 @@ ERSController.run_cycle (extended additively; anomaly=None == today byte-for-byt
   (prev-mid/prev-depth, like the breaker's velocity `deque`). Every seam defaults `None` = that trigger
   dormant (the data-gated pattern) — so a bare `AnomalyMonitor(caps, clock=...)` never fires.
 - **Fail closed:** a sentinel that raises inside `evaluate` → that trigger fires (`HALT`), it never masks.
+  This includes the monitor-internal abnormal-book block (no seam kwarg, but wrapped as a whole at its
+  `evaluate` call site): a raising `book_for`/book object IS an abnormal-book anomaly and fires
+  `l5_abnormal_book` — an unwrapped block could otherwise void triggers already collected earlier in the
+  same evaluate (e.g. a skew halt lost because a broken book crashed the cycle into the L6 SIGKILL path).
 - **Clock domains (the S4.5 lesson — pinned):** the monitor's `clock=` is **float monotonic SECONDS**
   (`time.monotonic` in prod), used by the canary scheduler, API-storm window, and WS-staleness compare.
   The reconcile provider takes its own `clock_ns=` in the **`MonotonicStamper` monotonic-ns domain**
