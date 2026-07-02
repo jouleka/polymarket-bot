@@ -99,8 +99,12 @@ class AnomalyMonitor:
                 # seam's trigger and continue to the next seam; never mask, never propagate.
                 triggers.append(REASON_L5_CLOCK_SKEW)
         # Severity slot 5 of the pinned order: API 5xx/auth storm.
+        # FAIL-CLOSED: a raising seam IS the anomaly -- fire and move to the next seam.
         if self._api_sentinel is not None:
-            if self._api_sentinel.storming(now):
+            try:
+                if self._api_sentinel.storming(now):
+                    triggers.append(REASON_L5_API_STORM)
+            except Exception:
                 triggers.append(REASON_L5_API_STORM)
         if not triggers:
             return AnomalyState(NONE, ())
