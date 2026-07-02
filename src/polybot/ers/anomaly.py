@@ -46,14 +46,15 @@ class ClockSkewSentinel:
 class ApiStormSentinel:
     """L5 API error-storm seam (design §3 #3): the (deploy-time) API caller records every
     response status via ``record``; the monitor polls ``storming(now)``. Windowed deque of
-    ``(now_s, int(status))`` in the monitor's monotonic-seconds clock domain.
-    Auth counting + window pruning arrive in the next two TDD steps."""
+    ``(now_s, int(status))`` in the monitor's monotonic-seconds clock domain."""
 
     def __init__(self, caps):
         self._caps = caps
         self._events = deque()  # (now_s, int(status))
 
     def record(self, status, *, now):
+        """``status`` must be int-coercible (real HTTP status codes); a non-numeric status
+        fails loud HERE at the injection seam, by design."""
         self._events.append((now, int(status)))
 
     def storming(self, now):
@@ -89,7 +90,7 @@ class AnomalyMonitor:
         now = self._clock()
         triggers = []
         # Severity slot 1 of the pinned order (skew, recon, canary, book, api, ws): clock
-        # skew. Slots 2-4 land in S4.4c-e.
+        # skew. Slots 2-4 land in S4.4c/S4.4e; slot 6 (ws) lands in S4.4d.
         if self._skew_sentinel is not None:
             try:
                 if self._skew_sentinel.skewed():
