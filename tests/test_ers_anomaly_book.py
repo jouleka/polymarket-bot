@@ -287,3 +287,61 @@ def test_raising_book_block_does_not_void_an_already_collected_skew_trigger():
     state = mon.evaluate([_pos("t1")], lambda token: _ExplodingBook())  # must NOT raise
     assert state.action == HALT
     assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_ABNORMAL_BOOK)
+
+
+def test_crossed_interlude_preserves_prev_mid_so_a_jump_across_the_gap_still_fires():
+    """A crossed (None-mid) cycle fires l5_abnormal_book but must NOT touch the per-token
+    baselines: the last VALID mid (0.50) stays the jump baseline across the gap, so the
+    healthy-again book at 0.70 fires (0.20 >= 0.15). The crossed book carries a tiny
+    depth (10) so a poisoned baseline is discriminable from the preserved one.
+    MUTATION KILLED: updating prev-state on the None-mid branch clobbers prev_mid to None
+    -> cycle 3 is first-observation-inert -> a real post-crossed dislocation is missed."""
+    mon = _monitor()
+    first = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51"))  # mid 0.50
+    assert first.action == NONE                                                     # baseline only
+    crossed = _book(bid="0.60", ask="0.55", bid_size="5", ask_size="5")             # depth 10
+    gap = mon.evaluate([_pos("t1")], lambda token: crossed)
+    assert gap.action == HALT                                                       # crossed fires
+    assert REASON_L5_ABNORMAL_BOOK in gap.triggers
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.69", ask="0.71"))  # mid 0.70
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_crossed_interlude_preserves_prev_depth_so_a_collapse_across_the_gap_still_fires():
+    """Same gap shape for the collapse leg: the last VALID depth (1000) stays the baseline
+    across the crossed cycle (depth 10), so the healthy-again book at the SAME mid 0.50
+    with depth 150 fires (prev 1000 >= the 1000-share floor; 150 <= 1000 * 0.2 = 200).
+    MUTATION KILLED: updating prev-state on the None-mid branch books the crossed depth 10
+    -> 10 < the noise floor -> cycle 3 cannot fire the collapse -> a real post-crossed
+    evaporation is missed."""
+    mon = _monitor()
+    mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                   bid_size="500", ask_size="500"))  # mid 0.50 depth 1000
+    crossed = _book(bid="0.60", ask="0.55", bid_size="5", ask_size="5")              # depth 10
+    gap = mon.evaluate([_pos("t1")], lambda token: crossed)
+    assert gap.action == HALT                                                        # crossed fires
+    assert REASON_L5_ABNORMAL_BOOK in gap.triggers
+    state = mon.evaluate([_pos("t1")], lambda token: _book(bid="0.49", ask="0.51",
+                                                           bid_size="75", ask_size="75"))  # mid 0.50 depth 150
+    assert state.action == HALT
+    assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+def test_two_positions_on_the_same_token_hit_book_for_exactly_once():
+    """The dedupe seen-set is load-bearing on the LOOKUP, not just the trigger count: one
+    book_for call per token per cycle.
+    MUTATION KILLED: removing the seen set makes evaluate hit book_for per-position
+    (redundant I/O + intra-cycle self-comparison against the just-recorded baseline)."""
+    mon = _monitor()
+    calls = {"t1": 0}
+    book = _book(bid="0.60", ask="0.55")  # crossed
+
+    def _counting_book_for(token):
+        calls[token] += 1
+        return book
+
+    state = mon.evaluate([_pos("t1"), _pos("t1")], _counting_book_for)
+    assert state.action == HALT
+    assert state.triggers.count(REASON_L5_ABNORMAL_BOOK) == 1
+    assert calls == {"t1": 1}
