@@ -60,6 +60,15 @@ class RiskCaps:
     reconcile_settle_window_seconds: int = 90          # internal-fill age under which a not-yet-on-chain
     # token is SETTLING (exempt from the divergence halt), NOT DIVERGED. Tighten-only: a future S4.7
     # ratchet may only DECREASE it. Added + hashed + _verify'd here (the guard enforcement is S4.7).
+    # S4.4 / POL-6 L5 anomaly thresholds (DESIGN-S4.4-ANOMALY §5). Tighten-only + hashed;
+    # _verify range checks join below. Book thresholds are Decimal (exact prob/share math).
+    midpoint_jump_halt: Decimal = Decimal("0.15")             # |mid - prev_mid| >= x -> l5_abnormal_book
+    depth_collapse_fraction: Decimal = Decimal("0.8")         # top-of-book depth drop >= frac vs prev
+    depth_collapse_min_prev_shares: Decimal = Decimal("1000") # noise floor for the collapse check
+    ws_staleness_halt_seconds: int = 30                       # last-WS-frame age -> l5_ws_down
+    api_5xx_storm_count: int = 5                              # >= N statuses >=500 in window -> l5_api_storm
+    api_auth_storm_count: int = 2                             # >= N of {401,403} in window -> l5_api_storm
+    api_storm_window_seconds: int = 60                        # the storm counting window
 
     def __post_init__(self):
         self._verify()
