@@ -9,6 +9,8 @@ field without classifying it here fails loudly.
 This module is PURE over caps values: it never touches op-state, the store, or a clock.
 """
 
+import dataclasses
+
 TIGHTEN_DIRECTION = {
     # Capital band.
     "nav": "fixed",
@@ -56,3 +58,21 @@ TIGHTEN_DIRECTION = {
     "api_auth_storm_count": "down",
     "api_storm_window_seconds": "fixed",
 }
+
+
+def assert_tighten_only(old, new):
+    """Raise ValueError naming the first field (declaration order) whose old->new change
+    violates its TIGHTEN_DIRECTION class: "down" requires new <= old, "up" requires
+    new >= old, "fixed" requires new == old. Equal is always acceptable. Pure comparison
+    over getattr -- the caller (swap_caps) owns construction/_verify of the new caps."""
+    for field in dataclasses.fields(old):
+        direction = TIGHTEN_DIRECTION[field.name]
+        old_value = getattr(old, field.name)
+        new_value = getattr(new, field.name)
+        if new_value == old_value:
+            continue
+        if direction == "fixed" or (direction == "down" and new_value > old_value) \
+                or (direction == "up" and new_value < old_value):
+            raise ValueError(
+                f"tighten-only violation on {field.name} ({direction}): "
+                f"{old_value} -> {new_value}")
