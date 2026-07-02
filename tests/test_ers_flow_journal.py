@@ -194,3 +194,21 @@ def test_pending_in_window_default_window_boundary_pair_exact_edge_in_just_older
         {"at": 2, "wall_at": 13599.0, "kind": "accept", "token_id": "t2", "amount": Decimal("9")},
     ]
     assert pending_in_window(rows, wall_now=100000.0) == Decimal("7")
+
+
+def test_pending_in_window_raises_value_error_on_an_unknown_kind():
+    # Corruption in OUR OWN journal is never skipped (DESIGN §6.4): the helper RAISES and
+    # each consumer converts the raise into its fail-closed action (gate block / breaker HALT).
+    # Kills: silently ignoring unknown-kind rows (the `else: continue` mutation).
+    rows = [{"at": 1, "wall_at": 100.0, "kind": "flattened", "token_id": "t1",
+             "amount": Decimal("1")}]
+    with pytest.raises(ValueError):
+        pending_in_window(rows, wall_now=100.0)
+
+
+def test_pending_in_window_propagates_key_error_on_a_missing_amount_key():
+    # Kills: r.get("amount", <default>) tolerance -- a missing key in our own journal must
+    # propagate KeyError (dict indexing), never default to zero.
+    rows = [{"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1"}]
+    with pytest.raises(KeyError):
+        pending_in_window(rows, wall_now=100.0)
