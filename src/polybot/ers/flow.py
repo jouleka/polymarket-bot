@@ -20,3 +20,13 @@ def make_flow_recorder(store, *, wall_clock):
         store.record_flow_event(kind="accept", token_id=position.token_id,
                                 amount=position.worst_case_risk, wall_at=wall_clock())
     return _rec
+
+
+def compose_sinks(*sinks):
+    """Return ONE fill_sink fanning out to many: each sink is called exactly once per ACCEPT,
+    in the given order, with the same ``(intent, decision, position)``. No service.py change --
+    the composite plugs into process_pending's existing ``fill_sink=`` seam (fills + flow)."""
+    def _sink(intent, decision, position):
+        for sink in sinks:
+            sink(intent, decision, position)
+    return _sink

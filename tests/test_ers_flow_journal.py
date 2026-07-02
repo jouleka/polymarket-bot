@@ -77,3 +77,58 @@ def test_make_flow_recorder_records_accept_with_worst_case_risk_and_injected_wal
         assert len(rows) == 1
         assert rows[0]["kind"] == "accept" and rows[0]["token_id"] == "t9"
         assert rows[0]["amount"] == Decimal("8") and rows[0]["wall_at"] == 777.5
+
+
+# --- S4.7a: compose_sinks (one fill_sink fanning out to many; NO service.py change) -----------
+from polybot.ers.caps import RiskCaps
+from polybot.ers.flow import compose_sinks
+from polybot.ers.service import PaperSigner, make_fill_sink, process_pending
+from polybot.ers.validator import Portfolio
+from polybot.ingestion.orderbook import LocalBook
+
+
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+
+def test_compose_sinks_calls_each_sink_exactly_once_in_order_with_the_same_args():
+    # Kills: reversed fan-out order; a sink invoked twice or skipped; args not threaded through.
+    calls = []
+
+    def _first_sink(intent, decision, position):
+        calls.append(("first", intent, decision, position))
+
+    def _second_sink(intent, decision, position):
+        calls.append(("second", intent, decision, position))
+
+    composed = compose_sinks(_first_sink, _second_sink)
+    composed("I", "D", "P")
+    assert calls == [("first", "I", "D", "P"), ("second", "I", "D", "P")]
+
+
+def test_composed_sink_writes_both_a_fills_row_and_a_flow_row_on_an_accept(tmp_path):
+    # Kills: the composite not being fill_sink-shaped end-to-end -- one ACCEPT through the
+    # UNCHANGED process_pending fill_sink seam must land BOTH durable legs: the S4.5 fill
+    # AND the S4.7 accept-flow row (amount == the folded worst_case_risk == stake $12).
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        sink = compose_sinks(make_fill_sink(store),
+                             make_flow_recorder(store, wall_clock=lambda: 1000.0))
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, fill_sink=sink)
+        assert store.get("i1").status == "ACCEPTED"
+        fills = store.fills_log()
+        assert len(fills) == 1 and fills[0]["worst_case_risk"] == Decimal("12")
+        flow = store.flow_log()
+        assert len(flow) == 1
+        assert flow[0]["kind"] == "accept" and flow[0]["token_id"] == "t1"
+        assert flow[0]["amount"] == Decimal("12") and flow[0]["wall_at"] == 1000.0
