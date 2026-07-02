@@ -14,7 +14,7 @@ Clocks are injected for deterministic TDD.
 """
 
 from polybot.ers.anomaly import HALT
-from polybot.ers.lossbreaker import HALT as LOSS_HALT
+from polybot.ers.lossbreaker import HALT as LOSS_HALT, PAUSE as LOSS_PAUSE
 from polybot.ers.ramp import step_daily, step_weekly
 from polybot.ers.safety import HALTED, PAUSED, REASON_RAMP_DOWN, RUNNING
 from polybot.ers.service import process_pending
@@ -105,6 +105,11 @@ class ERSController:
                 except Exception as exc:
                     self._store.record_op_event(kind="cancel_all", reason=ls.triggers[0],
                                                 detail=f"FAILED: {exc}")
+            elif ls.action == LOSS_PAUSE and self._controller.state() == RUNNING:
+                # Sticky pause (Fork 4): the streak counter resets on a win; the PAUSED
+                # op-state does NOT -- recovery is operator RESUME. Fires from the live
+                # trading state only (never downgrades a halt; never re-audits a pause).
+                self._controller.set_state(PAUSED, reason=ls.triggers[0])
         # THE S4.7 re-plumb: read the SWAPPABLE caps from the SafetyController EVERY cycle so
         # a ramp-DOWN swap_caps lands on the very next cycle's validator/GTD derivation.
         # self._caps remains only the construction-time NAV source for the scaffold portfolio.
