@@ -16,6 +16,7 @@ from polybot.ers.safety import (
     REASON_L5_ABNORMAL_BOOK,
     REASON_L5_API_STORM,
     REASON_L5_CLOCK_SKEW,
+    REASON_L5_WS_DOWN,
 )
 
 NONE = "NONE"
@@ -129,6 +130,18 @@ class AnomalyMonitor:
                     triggers.append(REASON_L5_API_STORM)
             except Exception:
                 triggers.append(REASON_L5_API_STORM)
+        # --- l5_ws_down (LAST in severity order) --------------------------------
+        # Clock domains: self._clock is float monotonic SECONDS (time.monotonic);
+        # the seam returns MonotonicStamper-domain NANOSECONDS (time.monotonic_ns)
+        # -- the same monotonic family (DESIGN-S4.4 §2). Age compare lands in D5.
+        if self._ws_last_frame_at is not None:
+            try:
+                if self._ws_last_frame_at() is None:
+                    # Wired but never saw a frame: +inf age -> down (fail-closed).
+                    triggers.append(REASON_L5_WS_DOWN)
+            except Exception:
+                # FAIL-CLOSED SEAM RULE: a raising seam fires its own trigger.
+                triggers.append(REASON_L5_WS_DOWN)
         if not triggers:
             return AnomalyState(NONE, ())
         return AnomalyState(HALT, tuple(triggers))
