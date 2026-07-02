@@ -256,3 +256,41 @@ def test_anomaly_still_firing_on_the_next_cycle_does_not_refire_the_one_shot(tmp
         kinds = [r["kind"] for r in store.op_audit_log()]
         assert kinds.count("cancel_all") == 1
         assert kinds.count("state_change") == 2    # clean_reconcile + the ONE l5 halt
+
+
+def test_flattening_in_flight_is_not_preempted_by_an_anomaly(tmp_path):
+    # Design §2: FLATTENING is a STRONGER de-risk already in flight -- the anomaly path must
+    # not preempt it. The cycle proceeds to process_pending where the op-FLATTEN verdict
+    # de-risks (flatten + cancel working entries) and settles HALTED on its own (I1); the
+    # anomaly path contributes NO l5 state_change and NO kind="cancel_all" row.
+    # MUTATION KILLED: widening the edge guard to preempt FLATTENING -- which would SKIP the
+    # flatten de-risk entirely (strictly riskier).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.FLATTENING, reason=_safety.REASON_OP_FLATTEN)
+        signer = PaperSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+        rc.run_cycle()
+        assert len(signer.flattened) == 1          # the op-FLATTEN de-risk ran (empty book OK)
+        assert len(signer.cancelled_all) == 1      # from the FLATTEN path ONLY
+        rows = store.op_audit_log()
+        assert [r["kind"] for r in rows].count("cancel_all") == 0   # anomaly one-shot did NOT fire
+        assert not any(r["reason"] == "l5_clock_skew" for r in rows)
+        assert ctl.state() == _safety.HALTED       # settled by FLATTENING itself (I1)
+
+
+def test_paused_loop_escalates_to_halted_on_an_anomaly(tmp_path):
+    # Design §2: PAUSED is a LIVE loop (blocks new trades only) -- an anomaly must still
+    # escalate it to the sticky HALTED + the one-shot de-risk. Expected GREEN once the guard
+    # is (RUNNING, PAUSED); it exists to KILL the over-tightened (RUNNING,)-only guard
+    # mutation -- verified by the Step-4 mutation check.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.PAUSED, reason=_safety.REASON_L8_PAUSED)
+        signer = PaperSigner()
+        rc = _rc(store, ctl, signer, anomaly=_monitor(_SkewDouble(True)))
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert len(signer.cancelled_all) == 1
+        rows = store.op_audit_log()
+        assert ("cancel_all", "l5_clock_skew") in [(r["kind"], r["reason"]) for r in rows]
