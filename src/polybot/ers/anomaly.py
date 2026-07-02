@@ -21,6 +21,12 @@ class AnomalyState:
     action: str      # NONE | HALT
     triggers: tuple  # the l5_* reason strings that fired, severity order; () when NONE
 
+    def __post_init__(self):
+        if self.action == HALT and not self.triggers:
+            raise ValueError(
+                "HALT requires at least one trigger (the controller reports triggers[0] as "
+                "the halt reason)")
+
 
 class AnomalyMonitor:
     """evaluate(positions, book_for) -> AnomalyState, once per controller cycle. Consults the

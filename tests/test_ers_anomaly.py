@@ -50,6 +50,16 @@ def test_anomaly_state_is_a_frozen_dataclass_with_action_and_triggers():
         state.action = "NONE"
 
 
+def test_anomaly_state_halt_with_empty_triggers_is_unrepresentable():
+    # S4.4a review LOW-2: HALT => non-empty triggers, pinned AT THE BOUNDARY. The controller's
+    # kill path reports state.triggers[0] verbatim as the halt reason. MUTATION KILLED:
+    # removing the __post_init__ guard lets a triggerless HALT reach the controller's
+    # triggers[0] = IndexError in the kill path at the exact moment an anomaly fires.
+    from polybot.ers.anomaly import HALT, AnomalyState
+    with pytest.raises(ValueError):
+        AnomalyState(action=HALT, triggers=())
+
+
 def test_monitor_with_all_seams_none_is_inert_and_returns_action_none():
     # Dormant-by-default (design §6.5): a bare AnomalyMonitor(caps, clock=...) with every
     # seam left None must NEVER fire, whatever positions/books look like -- the data-gated
