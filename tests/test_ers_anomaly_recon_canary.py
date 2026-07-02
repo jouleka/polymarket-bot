@@ -166,3 +166,43 @@ def test_make_recon_provider_with_wallet_unexplained_internal_excess_is_diverged
     result = provider()
     assert result.status == DIVERGED
     assert [d.token_id for d in result.divergences] == ["42"]
+
+
+# --- Task E3: the recon_provider seam in AnomalyMonitor.evaluate ------------------------------
+
+def test_recon_seam_diverged_status_fires_l5_recon_mismatch_halt():
+    """A recon_provider returning DIVERGED must HALT with l5_recon_mismatch as triggers[0]
+    (the set_state reason). Kills: dropping the recon consult from evaluate entirely."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon(DIVERGED))
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers[0] == "l5_recon_mismatch"
+
+
+def test_recon_seam_ok_dormant_and_settling_statuses_do_not_fire():
+    """OK / DORMANT / SETTLING are the three benign reconcile outcomes (the settle window
+    exists precisely so in-flight fills don't false-halt); none may fire. Kills: inverting
+    the status check so a healthy reconcile halts the loop."""
+    for status in (OK, DORMANT, SETTLING):
+        clock, _ = _clock_box()
+        monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: _recon(status))
+        state = monitor.evaluate((), {}.get)
+        assert state.action == NONE, f"{status} must not fire"
+        assert state.triggers == ()
+
+
+def test_recon_seam_absent_provider_is_dormant():
+    """recon_provider=None (the default) keeps the trigger dormant -- the data-gated seam
+    pattern. Kills: consulting a None seam (TypeError on the call)."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock)
+    assert monitor.evaluate((), {}.get).action == NONE
+
+
+def test_recon_seam_provider_returning_none_result_is_skipped():
+    """A wired provider yielding None (no result this cycle) is a SKIP -- not a fire, not a
+    crash. Kills: unconditional r.status attribute access on a None result."""
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, recon_provider=lambda: None)
+    assert monitor.evaluate((), {}.get).action == NONE
