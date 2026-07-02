@@ -36,6 +36,12 @@ REASON_UNCLEAN_RESTART = "unclean_restart"
 # --- S4.5 reason codes (NET-NEW; free-form Decision.reason / op-audit strings) ----------------
 REASON_L5_RECON_MISMATCH = "l5_recon_mismatch"     # running-cadence recon-mismatch (S4.4 consumer)
 REASON_RESTART_RECONCILED = "restart_reconciled"   # the clean restart-reconcile HALTED->RUNNING reason
+# --- S4.4 reason codes (NET-NEW; the L5 AnomalyMonitor trigger vocabulary) --------------------
+REASON_L5_CLOCK_SKEW = "l5_clock_skew"        # |wall - ntp| beyond tolerance (halts signing)
+REASON_L5_ABNORMAL_BOOK = "l5_abnormal_book"  # crossed/locked mid, depth collapse, mid jump
+REASON_L5_API_STORM = "l5_api_storm"          # 5xx / auth-failure storm within the window
+REASON_L5_WS_DOWN = "l5_ws_down"              # WS silent beyond staleness (None frame = +inf age)
+REASON_L5_CANARY_FAIL = "l5_canary_fail"      # signing canary failed/raised -- NEVER blind-retried
 
 
 @dataclass(frozen=True)
