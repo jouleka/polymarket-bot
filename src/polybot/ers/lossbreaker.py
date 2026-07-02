@@ -10,7 +10,8 @@ wall-clock seconds over wall_at -- the monotonic `at` column is never used for w
 from dataclasses import dataclass
 from decimal import Decimal
 
-from polybot.ers.safety import REASON_FLOW_DATA_ERROR, REASON_WEEKLY_LOSS
+from polybot.ers.safety import (
+    REASON_CONSECUTIVE_LOSS, REASON_FLOW_DATA_ERROR, REASON_WEEKLY_LOSS)
 
 NONE = "NONE"
 PAUSE = "PAUSE"
@@ -64,4 +65,14 @@ class LossBreakers:
             Decimal(0))
         if weekly_loss_total > caps.weekly_loss_halt:
             return LossState(HALT, (REASON_WEEKLY_LOSS,), ("weekly",))
+        # Streak arm (DECISIONS row 72): trailing consecutive losses at the END of the
+        # realized sequence (flow order). NO time window -- only a win (amount >= 0) breaks it.
+        streak = 0
+        for row in reversed(realized):
+            if row["amount"] < 0:
+                streak += 1
+            else:
+                break
+        if streak >= caps.consecutive_loss:
+            return LossState(PAUSE, (REASON_CONSECUTIVE_LOSS,), ())
         return LossState(NONE, (), ())
