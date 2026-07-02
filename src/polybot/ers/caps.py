@@ -155,7 +155,9 @@ class RiskCaps:
             raise ValueError(f"reconcile_tolerance must be > 0, got {self.reconcile_tolerance}")
         for name in ("consecutive_loss", "new_positions_per_hour", "new_positions_per_day",
                      "clock_skew_tolerance_seconds", "signing_canary_interval_seconds",
-                     "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds"):
+                     "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds",
+                     "ws_staleness_halt_seconds", "api_5xx_storm_count",
+                     "api_auth_storm_count", "api_storm_window_seconds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be > 0, got {getattr(self, name)}")
         # --- S4.4 L5 anomaly book thresholds (DESIGN-S4.4-ANOMALY §5) ---
