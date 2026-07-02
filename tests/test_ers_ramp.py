@@ -137,3 +137,41 @@ def test_step_daily_is_idempotent_by_hash():
     # (run_cycle re-applies steps every cycle while the trigger holds -- must be a no-op)
     once = ramp.step_daily(RiskCaps())
     assert ramp.step_daily(once).content_hash() == once.content_hash()
+
+
+# --- B4: step_weekly + composition ------------------------------------------------------------
+
+
+def test_step_weekly_pins_the_exact_operator_signed_values():
+    # Kills: any wrong weekly constant (fork 1 signed: per_trade 6, total 30, reserve 270, gtd 30)
+    stepped = ramp.step_weekly(RiskCaps())
+    assert stepped.per_trade == Decimal("6")
+    assert stepped.total_open_risk == Decimal("30")
+    assert stepped.reserve_floor == Decimal("270")
+    assert stepped.gtd_bracket_aggregate == Decimal("30")
+
+
+def test_step_weekly_passes_the_tighten_only_guard():
+    # Kills: the weekly constants drifting loose -- swap_caps would refuse the step
+    ramp.assert_tighten_only(RiskCaps(), ramp.step_weekly(RiskCaps()))  # must not raise
+
+
+def test_step_weekly_after_daily_composes_to_weekly():
+    # The pinned compose law: weekly(daily(c)) == weekly(c) by content hash.
+    # Kills: a step pair that cannot stack (a daily breach then a weekly halt must land
+    # exactly on the deeper weekly envelope)
+    assert (ramp.step_weekly(ramp.step_daily(RiskCaps())).content_hash()
+            == ramp.step_weekly(RiskCaps()).content_hash())
+
+
+def test_step_daily_after_weekly_never_loosens_back():
+    # Kills: dropping the min() -- a later daily trigger must NOT relax the deeper weekly
+    # step from 6/30 back to 9/45 (that swap would also be refused, wedging the ramp)
+    assert (ramp.step_daily(ramp.step_weekly(RiskCaps())).content_hash()
+            == ramp.step_weekly(RiskCaps()).content_hash())
+
+
+def test_step_weekly_is_idempotent_by_hash():
+    # Kills: a subtractive weekly step that keeps tightening on re-application
+    once = ramp.step_weekly(RiskCaps())
+    assert ramp.step_weekly(once).content_hash() == once.content_hash()

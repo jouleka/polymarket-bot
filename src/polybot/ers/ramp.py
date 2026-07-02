@@ -94,3 +94,19 @@ def step_daily(caps):
         reserve_floor=caps.nav - tightened_total,
         gtd_bracket_aggregate=tightened_total,
     )
+
+
+def step_weekly(caps):
+    """The weekly-halt ramp step (fork 1; DEEPER than step_daily): per_trade -> min(., $6),
+    total_open_risk -> min(., $30), reserve/gtd re-derived exactly as step_daily. The min()
+    gives idempotence and the compose laws weekly(daily(c)) == weekly(c) and
+    daily(weekly(c)) == weekly(c) -- a later daily trigger can never loosen the weekly
+    envelope back."""
+    tightened_total = min(caps.total_open_risk, Decimal("30"))
+    return dataclasses.replace(
+        caps,
+        per_trade=min(caps.per_trade, Decimal("6")),
+        total_open_risk=tightened_total,
+        reserve_floor=caps.nav - tightened_total,
+        gtd_bracket_aggregate=tightened_total,
+    )
