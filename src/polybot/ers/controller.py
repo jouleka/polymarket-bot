@@ -14,7 +14,8 @@ Clocks are injected for deterministic TDD.
 """
 
 from polybot.ers.anomaly import HALT
-from polybot.ers.safety import HALTED, PAUSED, RUNNING
+from polybot.ers.ramp import step_daily, step_weekly
+from polybot.ers.safety import HALTED, PAUSED, REASON_RAMP_DOWN, RUNNING
 from polybot.ers.service import process_pending
 
 
@@ -83,7 +84,14 @@ class ERSController:
             # S4.7d: realized-loss breakers, consulted every cycle. Frozen positions (row 74)
             # are excluded from the realized counters via the live Portfolio's frozen flags.
             frozen = frozenset(p.token_id for p in self._portfolio.positions if p.frozen)
-            self._lossbreakers.evaluate(frozen_tokens=frozen)
+            ls = self._lossbreakers.evaluate(frozen_tokens=frozen)
+            for step in ls.ramp_steps:
+                # Idempotent tighten-only ratchet (DESIGN §6.7): applied in ANY op-state --
+                # re-application is a hash-identical no-op inside swap_caps (no audit spam),
+                # and tightening while halted is harmless and desirable.
+                step_fn = step_weekly if step == "weekly" else step_daily
+                self._controller.swap_caps(step_fn(self._controller.active_caps()),
+                                           reason=REASON_RAMP_DOWN)
         # THE S4.7 re-plumb: read the SWAPPABLE caps from the SafetyController EVERY cycle so
         # a ramp-DOWN swap_caps lands on the very next cycle's validator/GTD derivation.
         # self._caps remains only the construction-time NAV source for the scaffold portfolio.
