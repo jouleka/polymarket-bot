@@ -158,3 +158,39 @@ def test_accepts_in_window_counts_only_accept_rows():
         {"at": 3, "wall_at": 100.0, "kind": "realized", "token_id": "t1", "amount": Decimal("5")},
     ]
     assert accepts_in_window(rows, wall_now=100.0, window_seconds=3600) == 1
+
+
+# --- S4.7a: pending_in_window (accept flow + abs realized losses; wins NEVER offset) ----------
+from polybot.ers.flow import pending_in_window
+
+
+def test_pending_in_window_sums_accepts_plus_abs_of_realized_losses_across_mixed_kinds():
+    # Kills: adding the SIGNED loss (12 + 8 - 3.50) instead of abs; dropping either kind
+    # from the sum. Expected: 12 + 8 + |−3.50| = 23.50.
+    rows = [
+        {"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1", "amount": Decimal("12")},
+        {"at": 2, "wall_at": 200.0, "kind": "accept", "token_id": "t2", "amount": Decimal("8")},
+        {"at": 3, "wall_at": 300.0, "kind": "realized", "token_id": "t1", "amount": Decimal("-3.50")},
+    ]
+    assert pending_in_window(rows, wall_now=300.0) == Decimal("23.50")
+
+
+def test_pending_in_window_a_realized_win_contributes_exactly_zero():
+    # Kills: abs() over ALL realized rows (a win would ADD 50) and signed summation (a win
+    # would SUBTRACT 50) -- wins NEVER offset pending (conservative, DESIGN §4).
+    rows = [
+        {"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1", "amount": Decimal("12")},
+        {"at": 2, "wall_at": 200.0, "kind": "realized", "token_id": "t2", "amount": Decimal("50")},
+    ]
+    assert pending_in_window(rows, wall_now=200.0) == Decimal("12")
+
+
+def test_pending_in_window_default_window_boundary_pair_exact_edge_in_just_older_out():
+    # Boundary PAIR on the DEFAULT 86400s window: exactly-86400s-old is IN (inclusive old
+    # edge); 86401s-old is OUT.
+    # Kills: `<` on the old edge; a wrong default window_seconds.
+    rows = [
+        {"at": 1, "wall_at": 13600.0, "kind": "accept", "token_id": "t1", "amount": Decimal("7")},
+        {"at": 2, "wall_at": 13599.0, "kind": "accept", "token_id": "t2", "amount": Decimal("9")},
+    ]
+    assert pending_in_window(rows, wall_now=100000.0) == Decimal("7")
