@@ -230,3 +230,28 @@ def test_the_streak_has_no_time_window_so_ancient_losses_still_count(tmp_path):
         state = _breakers(store).evaluate()
         assert state.action == "PAUSE"
         assert state.triggers == ("consecutive_loss",)
+
+
+def test_pending_of_exactly_24_does_not_pause(tmp_path):
+    # Pending-arm boundary pair, at side: pending_in_window == daily_pending_ceiling () is
+    # a STRICT >, so at-the-ceiling does not fire. Kills: >= on the pending comparison.
+    with _store(tmp_path) as store:
+        _accept_row(store, "12", age=100.0)
+        _accept_row(store, "12", age=100.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "NONE"
+
+
+def test_pending_of_24_01_pauses_with_daily_pending_pause_and_the_daily_ramp_step(tmp_path):
+    # Pending-arm boundary pair, over side (rows 70-vs-72 interplay: only a REALIZED LOSS can
+    # push pending past the gate-guarded ceiling -- here a /usr/bin/zsh.01 loss joins  of accepts).
+    # 24.01 > 24 -> PAUSE(daily_pending_pause) + ramp step A ("daily"). Kills: dropping the
+    # pending arm, wrong reason, or forgetting the "daily" step.
+    with _store(tmp_path) as store:
+        _accept_row(store, "12", age=100.0)
+        _accept_row(store, "12", age=100.0)
+        _realized(store, "-0.01", age=100.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "PAUSE"
+        assert state.triggers == ("daily_pending_pause",)
+        assert state.ramp_steps == ("daily",)
