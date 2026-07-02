@@ -10,8 +10,10 @@ wall-clock seconds over wall_at -- the monotonic `at` column is never used for w
 from dataclasses import dataclass
 from decimal import Decimal
 
+from polybot.ers.flow import pending_in_window
 from polybot.ers.safety import (
-    REASON_CONSECUTIVE_LOSS, REASON_FLOW_DATA_ERROR, REASON_WEEKLY_LOSS)
+    REASON_CONSECUTIVE_LOSS, REASON_DAILY_PENDING_PAUSE, REASON_FLOW_DATA_ERROR,
+    REASON_WEEKLY_LOSS)
 
 NONE = "NONE"
 PAUSE = "PAUSE"
@@ -75,4 +77,12 @@ class LossBreakers:
                 break
         if streak >= caps.consecutive_loss:
             return LossState(PAUSE, (REASON_CONSECUTIVE_LOSS,), ())
+        # Pending arm (rows 70 vs 72 interplay): accepts + |realized losses| in the rolling
+        # 24h window, via the shared pending_in_window helper. Fed the concatenated list of
+        # ALL accept rows + the realized rows (the helper ignores wins and raises on
+        # malformed rows -- the fail-closed wrapper converts that raise into the data halt).
+        accepts = [r for r in rows if r["kind"] == "accept"]
+        pending_today = pending_in_window(accepts + realized, wall_now=now)
+        if pending_today > caps.daily_pending_ceiling:
+            return LossState(PAUSE, (REASON_DAILY_PENDING_PAUSE,), ("daily",))
         return LossState(NONE, (), ())
