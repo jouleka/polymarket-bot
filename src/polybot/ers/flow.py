@@ -30,3 +30,11 @@ def compose_sinks(*sinks):
         for sink in sinks:
             sink(intent, decision, position)
     return _sink
+
+
+def accepts_in_window(rows, *, wall_now, window_seconds):
+    """Count kind=="accept" rows inside the rolling window: in-window iff
+    ``wall_now - wall_at <= window_seconds`` (INCLUSIVE old edge -- the breaker/ApiStorm
+    convention; keeping the boundary row is the tighter direction)."""
+    return sum(1 for r in rows
+               if r["kind"] == "accept" and wall_now - r["wall_at"] <= window_seconds)

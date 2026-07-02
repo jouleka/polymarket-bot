@@ -132,3 +132,29 @@ def test_composed_sink_writes_both_a_fills_row_and_a_flow_row_on_an_accept(tmp_p
         assert len(flow) == 1
         assert flow[0]["kind"] == "accept" and flow[0]["token_id"] == "t1"
         assert flow[0]["amount"] == Decimal("12") and flow[0]["wall_at"] == 1000.0
+
+
+# --- S4.7a: accepts_in_window (rolling count over wall_at; INCLUSIVE old edge) ----------------
+from polybot.ers.flow import accepts_in_window
+
+
+def test_accepts_in_window_boundary_pair_exact_edge_in_just_older_out():
+    # Boundary PAIR (DESIGN §4: in-window iff wall_now - wall_at <= window, INCLUSIVE old edge):
+    # exactly-3600s-old is IN; 3601s-old is OUT.
+    # Kills: `<` instead of `<=` on the old edge (the at-edge row); an unbounded / wrong-sign
+    # window comparison (the just-older row).
+    rows = [
+        {"at": 1, "wall_at": 1000.0, "kind": "accept", "token_id": "t1", "amount": Decimal("12")},
+        {"at": 2, "wall_at": 999.0, "kind": "accept", "token_id": "t2", "amount": Decimal("12")},
+    ]
+    assert accepts_in_window(rows, wall_now=4600.0, window_seconds=3600) == 1
+
+
+def test_accepts_in_window_counts_only_accept_rows():
+    # Kills: counting realized rows (win OR loss) toward the rate caps.
+    rows = [
+        {"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1", "amount": Decimal("12")},
+        {"at": 2, "wall_at": 100.0, "kind": "realized", "token_id": "t1", "amount": Decimal("-5")},
+        {"at": 3, "wall_at": 100.0, "kind": "realized", "token_id": "t1", "amount": Decimal("5")},
+    ]
+    assert accepts_in_window(rows, wall_now=100.0, window_seconds=3600) == 1
