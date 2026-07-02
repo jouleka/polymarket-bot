@@ -16,6 +16,7 @@ from polybot.ers.reconcile import DORMANT, OK, SETTLING
 from polybot.ers.safety import (
     REASON_L5_ABNORMAL_BOOK,
     REASON_L5_API_STORM,
+    REASON_L5_CANARY_FAIL,
     REASON_L5_CLOCK_SKEW,
     REASON_L5_RECON_MISMATCH,
     REASON_L5_WS_DOWN,
@@ -124,15 +125,21 @@ class AnomalyMonitor:
                 triggers.append(REASON_L5_RECON_MISMATCH)
         # --- l5_canary_fail (S4.4e): the signing-canary scheduler ----------------------------
         # Severity slot 3: after l5_recon_mismatch, before l5_abnormal_book (the pinned order).
-        # Due when never run or >= caps.signing_canary_interval_seconds since the last run;
-        # at most ONE call per evaluate.
+        # Due when never run or >= caps.signing_canary_interval_seconds since the last run; at
+        # most ONE call per evaluate. last_run is stamped BEFORE the call so a failing/raising
+        # canary is NEVER blind-retried (DESIGN §3 #6); falsy return OR raise -> the trigger.
         if self._canary is not None:
             now_s = self._clock()
             if (self._canary_last_run is None
                     or (now_s - self._canary_last_run)
                     >= self._caps.signing_canary_interval_seconds):
                 self._canary_last_run = now_s
-                self._canary()
+                try:
+                    healthy = self._canary()
+                except Exception:
+                    healthy = False
+                if not healthy:
+                    triggers.append(REASON_L5_CANARY_FAIL)
         # Severity slot 4: abnormal book -- internal check over positions + book_for, no
         # seam kwarg, but fail-closed wrapped all the same: a raising book/book_for IS an
         # abnormal-book anomaly, and an unwrapped raise here would VOID the triggers already
