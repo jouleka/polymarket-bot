@@ -61,3 +61,13 @@ def test_depth_collapse_min_prev_shares_of_zero_is_rejected():
     # Kills: dropping the strictly-positive check on the noise floor.
     with pytest.raises(ValueError, match="depth_collapse_min_prev_shares"):
         RiskCaps(depth_collapse_min_prev_shares=Decimal("0"))
+
+
+def test_each_anomaly_int_cap_of_zero_fails_verify():
+    # All four join the existing strictly-positive-int loop; a zero window/count/staleness
+    # would make its check vacuous (0 events always "storm", any frame age always "stale").
+    # Kills: leaving any one name out of the _verify loop tuple.
+    for field in ("ws_staleness_halt_seconds", "api_5xx_storm_count",
+                  "api_auth_storm_count", "api_storm_window_seconds"):
+        with pytest.raises(ValueError, match=field):
+            RiskCaps(**{field: 0})
