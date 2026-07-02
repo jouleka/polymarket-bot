@@ -59,6 +59,7 @@ class MarketStream:
         self._tracked = set(asset_ids) if asset_ids is not None else None
         self._resync_requested = False
         self._clean_progress = False
+        self._last_frame_at = None  # stamper-ns of the last dispatched REAL venue frame (S4.4d)
 
     def book_for(self, asset_id):
         return self._books.get(asset_id)
@@ -94,6 +95,25 @@ class MarketStream:
             return True
         return False
 
+    def last_frame_at(self):
+        """Stamper-ns ``observed_at`` of the last dispatched REAL venue frame;
+        ``None`` before any frame (the L5 WS sentinel treats wired-but-None as
+        +inf age = down). NON-consuming, unlike ``consume_resync_request`` /
+        ``consume_clean_progress``: the health check reads it every cycle.
+        Benign-ignored event types (``last_trade_price`` / ``tick_size_change``)
+        never stamp, so they do not refresh health -- conservative: only bookable
+        venue frames prove liveness (errs toward staleness, i.e. fail-closed).
+        """
+        return self._last_frame_at
+
+    def _stamp_frame(self):
+        # Stamp a REAL venue frame at dispatch and record it for last_frame_at().
+        # Synthetic events (_emit_synthetic) keep calling the stamper directly:
+        # derived events are NOT venue frames and must never refresh WS health.
+        observed_at = self._stamper.stamp()
+        self._last_frame_at = observed_at
+        return observed_at
+
     def ingest(self, message):
         event_type = message["event_type"]
         if event_type in _BENIGN_IGNORED:
@@ -103,7 +123,7 @@ class MarketStream:
         if event_type != "book":
             raise ValueError(f"unknown WS event_type: {event_type!r}")
 
-        observed_at = self._stamper.stamp()  # stamp at dispatch, before book mutation
+        observed_at = self._stamp_frame()  # stamp at dispatch, before book mutation
         asset_id = message["asset_id"]
         book = self._books.setdefault(asset_id, LocalBook())
         book.apply_book(message)
@@ -139,14 +159,14 @@ class MarketStream:
                 # untracked sibling leg is skipped: no phantom book, and no duplicate
                 # row racing the shard that actually subscribed to it.
                 if self._tracked is not None and asset_id in self._tracked and self._sink is not None:
-                    observed_at = self._stamper.stamp()
+                    observed_at = self._stamp_frame()
                     self._sink(Observation(
                         asset_id, "price_change", observed_at,
                         self._per_asset_message(message, asset_id, entries),
                     ))
                     stamps.append(observed_at)
                 continue
-            observed_at = self._stamper.stamp()  # stamp before mutation, per tracked asset
+            observed_at = self._stamp_frame()  # stamp before mutation, per tracked asset
             if self._detector is not None:
                 before_top = book.top_of_book()
                 level_changes = [

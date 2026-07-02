@@ -13,12 +13,14 @@ the controller consulted FIRST. The beat-before-process order matters: the out-o
 Clocks are injected for deterministic TDD.
 """
 
+from polybot.ers.anomaly import HALT
+from polybot.ers.safety import HALTED, PAUSED, RUNNING
 from polybot.ers.service import process_pending
 
 
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
-                 heartbeat=None, gtd_for=None, fill_sink=None, clock):
+                 heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -35,6 +37,9 @@ class ERSController:
         # straight through to process_pending so every ACCEPT appends a durable fill. fill_sink=None
         # (the default) == today's behavior -- no fills recorded -- so the S4.1 tests stay green.
         self._fill_sink = fill_sink
+        # anomaly (S4.4a seam): the opt-in L5 AnomalyMonitor consulted each cycle AHEAD of
+        # process_pending. anomaly=None (the default) == today's behavior byte-for-byte.
+        self._anomaly = anomaly
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -45,10 +50,31 @@ class ERSController:
         return Portfolio(nav=self._caps.nav)
 
     def run_cycle(self):
-        """One cadence tick: beat (if wired) THEN process_pending(controller=...). Returns the
-        updated portfolio (threaded for the next cycle)."""
+        """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
+        process_pending(controller=...). Returns the updated portfolio (threaded for the
+        next cycle)."""
         if self._heartbeat is not None:
             self._heartbeat.beat()
+        if self._anomaly is not None:
+            # L5 (S4.4): ALWAYS evaluated when wired (keeps the monitor's per-token
+            # prev-state warm every cycle). On HALT: the gate closes FIRST (set_state audits
+            # the transition), THEN the one-shot de-risk + its own audit row.
+            state = self._anomaly.evaluate(self._portfolio.positions, self._book_for)
+            # EDGE-triggered: act only from a LIVE loop (RUNNING/PAUSED) -- never re-fire on
+            # an existing HALTED (no audit spam, no cancel_all churn against the standing GTD
+            # exits) and never preempt FLATTENING (a stronger de-risk already in flight; it
+            # settles HALTED on its own).
+            if state.action == HALT and self._controller.state() in (RUNNING, PAUSED):
+                self._controller.set_state(HALTED, reason=state.triggers[0])
+                try:
+                    self._signer.cancel_all()
+                    self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
+                                                detail=",".join(state.triggers))
+                except Exception as exc:
+                    # A raising signer must NOT unwind the halt or kill the cycle -- audit the
+                    # failure; the pre-staged GTD exits are the backstop.
+                    self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
+                                                detail=f"FAILED: {exc}")
         self._portfolio = process_pending(
             self._store, book_for=self._book_for, portfolio=self._portfolio, caps=self._caps,
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,

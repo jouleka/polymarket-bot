@@ -60,6 +60,15 @@ class RiskCaps:
     reconcile_settle_window_seconds: int = 90          # internal-fill age under which a not-yet-on-chain
     # token is SETTLING (exempt from the divergence halt), NOT DIVERGED. Tighten-only: a future S4.7
     # ratchet may only DECREASE it. Added + hashed + _verify'd here (the guard enforcement is S4.7).
+    # S4.4 / POL-6 L5 anomaly thresholds (DESIGN-S4.4-ANOMALY §5). Tighten-only + hashed;
+    # _verify range checks join below. Book thresholds are Decimal (exact prob/share math).
+    midpoint_jump_halt: Decimal = Decimal("0.15")             # |mid - prev_mid| >= x -> l5_abnormal_book
+    depth_collapse_fraction: Decimal = Decimal("0.8")         # top-of-book depth drop >= frac vs prev
+    depth_collapse_min_prev_shares: Decimal = Decimal("1000") # noise floor for the collapse check
+    ws_staleness_halt_seconds: int = 30                       # last-WS-frame age -> l5_ws_down
+    api_5xx_storm_count: int = 5                              # >= N statuses >=500 in window -> l5_api_storm
+    api_auth_storm_count: int = 2                             # >= N of {401,403} in window -> l5_api_storm
+    api_storm_window_seconds: int = 60                        # the storm counting window
 
     def __post_init__(self):
         self._verify()
@@ -146,9 +155,26 @@ class RiskCaps:
             raise ValueError(f"reconcile_tolerance must be > 0, got {self.reconcile_tolerance}")
         for name in ("consecutive_loss", "new_positions_per_hour", "new_positions_per_day",
                      "clock_skew_tolerance_seconds", "signing_canary_interval_seconds",
-                     "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds"):
+                     "dead_man_switch_timeout_seconds", "reconcile_settle_window_seconds",
+                     "ws_staleness_halt_seconds", "api_5xx_storm_count",
+                     "api_auth_storm_count", "api_storm_window_seconds"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be > 0, got {getattr(self, name)}")
+        # --- S4.4 L5 anomaly book thresholds (DESIGN-S4.4-ANOMALY §5) ---
+        if not (Decimal(0) < self.midpoint_jump_halt < Decimal(1)):
+            raise ValueError(
+                f"midpoint_jump_halt must be in (0, 1) -- a mid is a probability, "
+                f"got {self.midpoint_jump_halt}"
+            )
+        if not (Decimal(0) < self.depth_collapse_fraction <= Decimal(1)):
+            raise ValueError(
+                f"depth_collapse_fraction must be in (0, 1], got {self.depth_collapse_fraction}"
+            )
+        if self.depth_collapse_min_prev_shares <= 0:
+            raise ValueError(
+                f"depth_collapse_min_prev_shares must be > 0, "
+                f"got {self.depth_collapse_min_prev_shares}"
+            )
 
     def cluster_cap(self, rho):
         """Aggregate worst-case-risk cap for a WARM co-move cluster with representative

@@ -70,6 +70,11 @@ class EventStore:
         self._conn.commit()
 
     def all(self):
+        """MUST return a re-iterable, materialized sequence (a list), never a generator/
+        cursor: `ers/reconcile.py make_recon_provider` and `ers/restart.py` each feed ONE
+        .all() result to BOTH the clob and onchain leg parsers -- an iterator would be
+        silently exhausted by the first parser and the on-chain leg would read empty (a
+        silent under-halt)."""
         return self._query(f"SELECT {_COLUMNS} FROM events ORDER BY observed_at, rowid")
 
     def replay_until(self, observed_at_cutoff):

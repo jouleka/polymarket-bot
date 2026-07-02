@@ -448,3 +448,100 @@ def test_evaporation_fires_when_best_bid_is_consumed():
     assert [o.event_type for o in synth] == ["liquidity_evaporation"]
     assert synth[0].message["price"] == "0.60" and synth[0].message["size_removed"] == "5000"
     assert not stream.book_for("A").is_stale()  # consistent venue top -> no gap
+
+
+# --- S4.4d: non-consuming WS-health read last_frame_at() -----------------------
+# Clock-domain note: stamps are MonotonicStamper-domain NANOSECONDS
+# (time.monotonic_ns family); the L5 monitor converts age_s = now_s - stamp/1e9.
+
+
+def test_last_frame_at_is_none_before_any_frame():
+    """Kills: initializing _last_frame_at to 0/now instead of None -- a stream that
+    never saw a frame must read as None so the WS sentinel's wired-but-silent
+    (+inf age) fail-closed path fires."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+
+    assert stream.last_frame_at() is None
+
+
+def test_last_frame_at_returns_the_book_snapshot_dispatch_stamp():
+    """Kills: recording a FRESH stamper stamp instead of THE dispatched frame's
+    observed_at (they would differ -- every stamp is unique)."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+
+    observed_at = stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+
+    assert stream.last_frame_at() == observed_at
+
+
+def test_last_frame_at_is_non_consuming_and_does_not_clear_the_consume_flags():
+    """Kills: implementing last_frame_at with the read-and-clear consume_* pattern,
+    or routing it through consume_resync_request/consume_clean_progress state."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))  # clean delta
+
+    first = stream.last_frame_at()
+    second = stream.last_frame_at()
+
+    assert first is not None and first == second     # repeated reads: same value
+    assert stream.consume_clean_progress() is True   # clean-progress flag survived the reads
+
+    stream.ingest(_price_change(("A", "0.615", "BUY", "50", "0.70", "0.62")))  # gap
+    stream.last_frame_at()                           # a health read between gap and consume
+    assert stream.consume_resync_request() is True   # the resync request survived too
+
+
+def test_last_frame_at_not_refreshed_by_benign_ignored_event_types():
+    """Kills: stamping/recording in the _BENIGN_IGNORED early-return. last_trade_price
+    is recognized-but-unbooked; it never stamps, so it must not refresh health
+    (conservative: only bookable venue frames prove the socket is alive)."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+
+    result = stream.ingest({"event_type": "last_trade_price", "asset_id": "A"})
+
+    assert result is None
+    assert stream.last_frame_at() is None
+
+
+def test_last_frame_at_advances_to_the_applied_price_change_stamp():
+    """Kills: recording only in the book-snapshot path (leaving the applied
+    price_change dispatch site on the raw stamper)."""
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    snapshot_stamp = stream.last_frame_at()
+
+    stamps = stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))
+
+    assert stream.last_frame_at() == stamps[-1]
+    assert stream.last_frame_at() > snapshot_stamp
+
+
+def test_last_frame_at_advances_on_a_pre_snapshot_archived_delta():
+    """A SUBSCRIBED asset's delta landing before its snapshot is stamped+archived but
+    never APPLIED -- it is still a real venue frame, so it proves the socket is alive
+    and must refresh health. Kills: recording only in the applied-delta branch."""
+    seen = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=seen.append, asset_ids=["A"])
+
+    stamps = stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))
+
+    assert stream.book_for("A") is None           # not applied (no baseline)...
+    assert stream.last_frame_at() == stamps[-1]   # ...but health still refreshed
+
+
+def test_last_frame_at_records_the_venue_frame_stamp_not_the_synthetic_stamp():
+    """Kills: recording inside _emit_synthetic -- a DERIVED event would masquerade
+    as venue liveness. Health must equal the triggering venue frame's observed_at,
+    never the synthetic event's own (later) stamp."""
+    market, synth = [], []
+    det = _detector(large_print_size="5000", min_evaporation_size="1000000")
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=market.append,
+                          detector=det, synthetic_sink=synth.append)
+    stream.ingest(_book("A", [("0.60", "8000")], [("0.62", "100")]))
+
+    stream.ingest(_price_change(("A", "0.60", "BUY", "500", "0.60", "0.62")))  # -> large_print
+
+    assert [o.event_type for o in synth] == ["large_print"]   # a synthetic DID fire
+    assert stream.last_frame_at() == market[-1].observed_at   # health == the venue frame's stamp
+    assert stream.last_frame_at() < synth[0].observed_at      # NOT the later synthetic stamp

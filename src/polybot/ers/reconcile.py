@@ -199,3 +199,22 @@ class ThreeWayReconciler:
             settling_tokens=tuple(settling),
             triggers=tuple(triggers),
         )
+
+
+def make_recon_provider(store, event_store, reconciler, *, wallet, clock_ns):
+    """Bind the per-cycle reconcile cadence (S4.4e) into the 0-arg ``recon_provider=`` seam the
+    AnomalyMonitor consults. ``clock_ns`` is a 0-arg callable in the MonotonicStamper
+    monotonic-ns domain (ReconResult's settle window lives there -- NOT the monitor's
+    float-seconds clock). Shadow (wallet=None) short-circuits STRAIGHT to the reconciler's
+    DORMANT path without scanning the event store -- cheap enough to run every cycle until a
+    POL-4 wallet exists."""
+    def _provider():
+        if wallet is None:
+            return reconciler.reconcile({}, {}, None, wallet=None, now=clock_ns())
+        envelopes = event_store.all()  # ONE scan per cycle feeds BOTH external legs
+        return reconciler.reconcile(
+            internal_balances(store.fills_log(), in_session=True),
+            clob_balances(envelopes),
+            onchain_balances(envelopes, wallet=wallet),
+            wallet=wallet, now=clock_ns())
+    return _provider
