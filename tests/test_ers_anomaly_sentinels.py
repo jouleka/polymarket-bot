@@ -10,6 +10,7 @@ from decimal import Decimal
 
 import pytest
 
+from polybot.ers.anomaly import ClockSkewSentinel
 from polybot.ers.caps import RiskCaps
 
 
@@ -71,3 +72,30 @@ def test_each_anomaly_int_cap_of_zero_fails_verify():
                   "api_auth_storm_count", "api_storm_window_seconds"):
         with pytest.raises(ValueError, match=field):
             RiskCaps(**{field: 0})
+
+
+def test_clock_skew_of_exactly_the_tolerance_is_not_skewed():
+    # Boundary pair (strict >): |wall - ntp| == tolerance (2s default) must NOT trip.
+    # Kills: mutating > to >= in ClockSkewSentinel.skewed.
+    sentinel = ClockSkewSentinel(wall_clock=lambda: 1_000_002.0,
+                                 ntp_ref=lambda: 1_000_000.0, caps=RiskCaps())
+    assert sentinel.skewed() is False
+
+
+def test_clock_skew_just_over_the_tolerance_is_skewed():
+    # Boundary pair partner: 2.5s > 2s tolerance trips.
+    # Kills: deleting the comparison / hardcoding skewed False.
+    sentinel = ClockSkewSentinel(wall_clock=lambda: 1_000_002.5,
+                                 ntp_ref=lambda: 1_000_000.0, caps=RiskCaps())
+    assert sentinel.skewed() is True
+
+
+def test_clock_skew_is_symmetric_when_the_wall_clock_runs_behind_ntp():
+    # wall BEHIND ntp by 2.5s trips too; behind by exactly 2s does not (same strict edge).
+    # Kills: dropping abs() -- a signed compare only catches one direction of skew.
+    behind = ClockSkewSentinel(wall_clock=lambda: 1_000_000.0,
+                               ntp_ref=lambda: 1_000_002.5, caps=RiskCaps())
+    assert behind.skewed() is True
+    behind_at_edge = ClockSkewSentinel(wall_clock=lambda: 1_000_000.0,
+                                       ntp_ref=lambda: 1_000_002.0, caps=RiskCaps())
+    assert behind_at_edge.skewed() is False

@@ -28,6 +28,20 @@ class AnomalyState:
                 "the halt reason)")
 
 
+class ClockSkewSentinel:
+    """L5 clock-skew seam (design §3 #4): pure compare of two injected 0-arg refs, both
+    returning float unix-seconds (real NTP/chrony ref is deploy-time wiring). Strictly
+    GREATER than ``caps.clock_skew_tolerance_seconds`` trips; symmetric via abs()."""
+
+    def __init__(self, *, wall_clock, ntp_ref, caps):
+        self._wall_clock = wall_clock
+        self._ntp_ref = ntp_ref
+        self._caps = caps
+
+    def skewed(self):
+        return abs(self._wall_clock() - self._ntp_ref()) > self._caps.clock_skew_tolerance_seconds
+
+
 class AnomalyMonitor:
     """evaluate(positions, book_for) -> AnomalyState, once per controller cycle. Consults the
     wired seams in pinned severity order and collects ALL firing triggers; triggers[0] is the
