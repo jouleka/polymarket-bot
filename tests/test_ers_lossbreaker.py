@@ -640,3 +640,84 @@ def test_loss_halt_is_sticky_after_the_losses_clear_and_the_next_intent_rejects_
         assert store.get("i1").decision_reason == "weekly_loss_halt"
         assert len(signer.cancelled_all) == 1            # the one-shot stayed one-shot
         assert [r["kind"] for r in store.op_audit_log()].count("state_change") == 2
+
+
+def test_s4_7_whole_slice_e2e_rate_gate_slide_weekly_halt_ramp_and_sticky_reject(tmp_path):
+    # DESIGN-S4.7 §8.3: the whole slice assembled -- flow recorder composed onto the fill
+    # sink, the flow gate wired into verdict, the loss breakers + ramp in run_cycle.
+    # Kills: cross-module mis-wiring invisible to the unit tests (gate never consulted,
+    # recorder not journaling, ramp not biting active_caps, halt not sticky) -- see the
+    # Step-2 probe battery.
+    from polybot.ers.flow import compose_sinks, make_flow_gate, make_flow_recorder
+    from polybot.ers.lossbreaker import LossBreakers
+    from polybot.ers.service import make_fill_sink
+
+    wall = [1000.0]                      # the injected, advanceable wall clock (epoch seconds)
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        ctl.wire_flow_gate(make_flow_gate(store, ctl.active_caps, wall_clock=lambda: wall[0]))
+        signer = PaperSigner()
+        books = {"t1": _book("0.50"), "t2": _book("0.50"), "t3": _book("0.50"),
+                 "t4": _book("0.50")}
+        rc = ERSController(
+            store=store, book_for=books.get, caps=RiskCaps(), signer=signer, controller=ctl,
+            fill_sink=compose_sinks(make_fill_sink(store),
+                                    make_flow_recorder(store, wall_clock=lambda: wall[0])),
+            lossbreakers=LossBreakers(store=store, caps_provider=ctl.active_caps,
+                                      wall_clock=lambda: wall[0]),
+            clock=lambda: 0)
+
+        # Phase 1: two accepts flow; the recorder journals each ( worst-case at ask 0.50).
+        store.propose_trade("i1", **_P)
+        rc.run_cycle()
+        store.propose_trade("i2", **dict(_P, token_id="t2", condition_id="m2", event_id="e2"))
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert store.get("i2").status == "ACCEPTED"
+        assert [r["kind"] for r in store.flow_log()] == ["accept", "accept"]
+
+        # Phase 2: the 3rd intent inside the hour REJECTs rate_cap_hourly -- the gate blocks
+        # WITHOUT touching op-state.
+        store.propose_trade("i3", **dict(_P, token_id="t3", condition_id="m3", event_id="e3"))
+        rc.run_cycle()
+        assert store.get("i3").status == "REJECTED"
+        assert store.get("i3").decision_reason == "rate_cap_hourly"
+        assert ctl.state() == _safety.RUNNING
+
+        # Phase 3: the wall clock slides past BOTH windows and flow resumes with an ACCEPT.
+        # (24h+, not just 1h+: the two  accepts hold pending AT the  ceiling, so the
+        # conservative daily gate would keep blocking until they age out of the 24h window.)
+        wall[0] = 1000.0 + 86401.0
+        store.propose_trade("i4", **dict(_P, token_id="t4", condition_id="m4", event_id="e4"))
+        rc.run_cycle()
+        assert store.get("i4").status == "ACCEPTED"
+
+        # Phase 4: realized losses cross the  weekly halt (streak 2 < 3: the weekly arm,
+        # not the streak arm; they also push pending over , so step A rides along and
+        # composes into step B -> exactly ONE caps_swap row).
+        store.record_flow_event(kind="realized", token_id="t1", amount=Decimal("-18"),
+                                wall_at=wall[0])
+        store.record_flow_event(kind="realized", token_id="t2", amount=Decimal("-18.01"),
+                                wall_at=wall[0])
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert len(signer.cancelled_all) == 1
+        assert ctl.active_caps().per_trade == Decimal("6")        # step B bit active_caps
+        assert ctl.active_caps().total_open_risk == Decimal("30")
+        swap_rows = [r for r in store.op_audit_log() if r["kind"] == "caps_swap"]
+        assert [(r["reason"], r["detail"]) for r in swap_rows] == [
+            ("ramp_down", _weekly_swap_detail())]
+        cancel_rows = [r for r in store.op_audit_log() if r["kind"] == "cancel_all"]
+        assert [(r["reason"], r["detail"]) for r in cancel_rows] == [
+            ("weekly_loss_halt", "weekly_loss_halt,daily_pending_pause")]
+
+        # Phase 5: sticky -- the halted loop never re-fires (still-firing breakers, no new
+        # rows) and a fresh intent REJECTs with the stored weekly_loss_halt reason.
+        store.propose_trade("i5", **dict(_P, token_id="t1", condition_id="m5", event_id="e5"))
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert store.get("i5").status == "REJECTED"
+        assert store.get("i5").decision_reason == "weekly_loss_halt"
+        assert len(signer.cancelled_all) == 1
+        assert len([r for r in store.op_audit_log() if r["kind"] == "caps_swap"]) == 1
