@@ -328,3 +328,104 @@ def test_all_three_arms_firing_order_triggers_most_severe_first(tmp_path):
         assert state.action == "HALT"
         assert state.triggers == ("weekly_loss_halt", "consecutive_loss", "daily_pending_pause")
         assert state.ramp_steps == ("weekly", "daily")
+
+
+# --- ERSController lossbreakers= seam (the run_cycle consult wiring) ---------------------------
+from polybot.ers import safety as _safety
+from polybot.ers.controller import ERSController
+from polybot.ers.safety import SafetyController
+from polybot.ers.service import PaperSigner
+from polybot.ers.validator import OpenPosition, Portfolio
+from polybot.ingestion.orderbook import LocalBook
+
+
+def _book(ask, *, size="1000", bid="0.01"):
+    book = LocalBook()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+          max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+          resolution_summary="", thesis="", citations=())
+
+
+def _loss_state(action, triggers=(), ramp_steps=()):
+    from polybot.ers.lossbreaker import LossState
+    return LossState(action=action, triggers=triggers, ramp_steps=ramp_steps)
+
+
+class _LossDouble:
+    """Duck-typed LossBreakers double (.evaluate(frozen_tokens=...) -> LossState) recording
+    the frozen_tokens it was consulted with; mutable so the sticky tests can CLEAR it."""
+
+    def __init__(self, state):
+        self.state = state
+        self.frozen_seen = []
+
+    def evaluate(self, *, frozen_tokens=frozenset()):
+        self.frozen_seen.append(frozen_tokens)
+        return self.state
+
+
+def _rc(store, ctl, signer, *, lossbreakers=None):
+    return ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=RiskCaps(),
+                         signer=signer, controller=ctl, lossbreakers=lossbreakers,
+                         clock=lambda: 0)
+
+
+def test_a_none_action_lossbreakers_is_consulted_but_the_cycle_trades_exactly_as_today(tmp_path):
+    # The seam exists and is consulted once per cycle (with the empty frozen set for an empty
+    # portfolio), and a NONE state changes nothing: the intent ACCEPTs, no cancel_all, no
+    # caps_swap, only the setup state_change in op_audit. Kills: making the seam mandatory,
+    # forgetting the consult, or acting on a NONE state.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("NONE"))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc.run_cycle()
+        assert double.frozen_seen == [frozenset()]
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.cancelled_all == []
+        assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
+
+
+def test_lossbreakers_none_default_leaves_the_cycle_exactly_as_today(tmp_path):
+    # Dormant-by-default: an ERSController WITHOUT the lossbreakers kwarg trades exactly as
+    # before S4.7d. Expected GREEN from birth (pins the None default; the full-suite baseline
+    # is the wider proof). Kills: consulting/acting when the seam is None.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        rc = ERSController(store=store, book_for={"t1": _book("0.50")}.get, caps=RiskCaps(),
+                           signer=signer, controller=ctl, clock=lambda: 0)  # lossbreakers unset
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.cancelled_all == []
+        assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
+
+
+def test_frozen_position_tokens_are_plumbed_into_the_consult(tmp_path):
+    # run_cycle feeds evaluate(frozen_tokens=...) the token_ids of FROZEN positions only
+    # (row 74's live-Portfolio filter). Direct _portfolio assignment mimics the S4.5
+    # boot-reconcile rebuild. Kills: passing all tokens, or never passing frozen ones.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot HALTED ok
+        signer = PaperSigner()
+        double = _LossDouble(_loss_state("NONE"))
+        rc = _rc(store, ctl, signer, lossbreakers=double)
+        rc._portfolio = Portfolio(nav=Decimal("300"), positions=(
+            OpenPosition(condition_id="m9", event_id="e9", resolution_source="s9",
+                         cluster_id="c9", worst_case_risk=Decimal("8"), matrix_cold=False,
+                         token_id="t9", entry_price=Decimal("0.50"), frozen=True),
+            OpenPosition(condition_id="m8", event_id="e8", resolution_source="s8",
+                         cluster_id="c8", worst_case_risk=Decimal("8"), matrix_cold=False,
+                         token_id="t8", entry_price=Decimal("0.50"), frozen=False),
+        ))
+        rc.run_cycle()
+        assert double.frozen_seen == [frozenset({"t9"})]

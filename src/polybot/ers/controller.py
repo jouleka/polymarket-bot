@@ -20,7 +20,8 @@ from polybot.ers.service import process_pending
 
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
-                 heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, clock):
+                 heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
+                 clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -40,6 +41,9 @@ class ERSController:
         # anomaly (S4.4a seam): the opt-in L5 AnomalyMonitor consulted each cycle AHEAD of
         # process_pending. anomaly=None (the default) == today's behavior byte-for-byte.
         self._anomaly = anomaly
+        # lossbreakers (S4.7d seam): the opt-in realized-loss breakers consulted each cycle
+        # AFTER the L5 anomaly block. lossbreakers=None (the default) == today byte-for-byte.
+        self._lossbreakers = lossbreakers
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -75,6 +79,11 @@ class ERSController:
                     # failure; the pre-staged GTD exits are the backstop.
                     self._store.record_op_event(kind="cancel_all", reason=state.triggers[0],
                                                 detail=f"FAILED: {exc}")
+        if self._lossbreakers is not None:
+            # S4.7d: realized-loss breakers, consulted every cycle. Frozen positions (row 74)
+            # are excluded from the realized counters via the live Portfolio's frozen flags.
+            frozen = frozenset(p.token_id for p in self._portfolio.positions if p.frozen)
+            self._lossbreakers.evaluate(frozen_tokens=frozen)
         # THE S4.7 re-plumb: read the SWAPPABLE caps from the SafetyController EVERY cycle so
         # a ramp-DOWN swap_caps lands on the very next cycle's validator/GTD derivation.
         # self._caps remains only the construction-time NAV source for the scaffold portfolio.
