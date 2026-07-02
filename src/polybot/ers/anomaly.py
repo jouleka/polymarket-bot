@@ -46,7 +46,12 @@ class AnomalyMonitor:
         # Severity slot 1 of the pinned order (skew, recon, canary, book, api, ws): clock
         # skew. Slots 2-6 land in S4.4b-e.
         if self._skew_sentinel is not None:
-            if self._skew_sentinel.skewed():
+            try:
+                if self._skew_sentinel.skewed():
+                    triggers.append(REASON_L5_CLOCK_SKEW)
+            except Exception:
+                # FAIL-CLOSED SEAM RULE: a raising sentinel IS the anomaly -- fire this
+                # seam's trigger and continue to the next seam; never mask, never propagate.
                 triggers.append(REASON_L5_CLOCK_SKEW)
         if not triggers:
             return AnomalyState(NONE, ())
