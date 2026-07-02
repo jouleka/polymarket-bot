@@ -298,3 +298,33 @@ def test_accept_rows_on_a_frozen_token_still_count_toward_pending(tmp_path):
         state = _breakers(store).evaluate(frozen_tokens=frozenset({"tf"}))
         assert state.action == "PAUSE"
         assert state.triggers == ("daily_pending_pause",)
+
+
+def test_weekly_and_pending_both_firing_halt_with_both_triggers_and_both_ramp_steps(tmp_path):
+    # Losses inside 24h: weekly sum 36.01 > 36 AND pending 36.01 > 24 (streak 2 < 3 stays
+    # quiet). HALT beats PAUSE; triggers most-severe-first; ramp_steps ordered
+    # ("weekly", "daily") deduped. Kills: the early-return implementation that reports only
+    # the first firing arm (the consumer would miss the daily tightening + the audit detail
+    # would under-report provenance).
+    with _store(tmp_path) as store:
+        _realized(store, "-18", age=100.0)
+        _realized(store, "-18.01", age=100.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "HALT"
+        assert state.triggers == ("weekly_loss_halt", "daily_pending_pause")
+        assert state.ramp_steps == ("weekly", "daily")
+
+
+def test_all_three_arms_firing_order_triggers_most_severe_first(tmp_path):
+    # Three losses inside 24h: weekly 36.01 > 36, streak 3 >= 3, pending 36.01 > 24. Pinned
+    # severity order (weekly_loss_halt, consecutive_loss, daily_pending_pause); ramp_steps
+    # stay ("weekly", "daily") -- the streak arm never adds a step. Kills: any reordering of
+    # the trigger tuple, or dedupe loss on ramp_steps.
+    with _store(tmp_path) as store:
+        _realized(store, "-12", age=100.0)
+        _realized(store, "-12", age=100.0)
+        _realized(store, "-12.01", age=100.0)
+        state = _breakers(store).evaluate()
+        assert state.action == "HALT"
+        assert state.triggers == ("weekly_loss_halt", "consecutive_loss", "daily_pending_pause")
+        assert state.ramp_steps == ("weekly", "daily")

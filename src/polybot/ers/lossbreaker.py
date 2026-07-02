@@ -63,16 +63,20 @@ class LossBreakers:
         # NOT filtered -- frozen positions still count toward pending/open flow.
         realized = [r for r in rows
                     if r["kind"] == "realized" and r["token_id"] not in frozen_tokens]
-        # Weekly arm (DECISIONS row 71): sum of |realized losses| in the rolling 7d wall
-        # window, STRICT > (at-the-cap does not fire). INCLUSIVE old edge (<=).
+        triggers = []
+        ramp_steps = []
+        # Arm 1 (most severe -- DECISIONS row 71): |realized losses| over the rolling 7d wall
+        # window, STRICT >, INCLUSIVE old edge.
         weekly_loss_total = sum(
             (abs(r["amount"]) for r in realized
              if r["amount"] < 0 and now - r["wall_at"] <= _WEEKLY_WINDOW_SECONDS),
             Decimal(0))
-        if weekly_loss_total > caps.weekly_loss_halt:
-            return LossState(HALT, (REASON_WEEKLY_LOSS,), ("weekly",))
-        # Streak arm (DECISIONS row 72): trailing consecutive losses at the END of the
-        # realized sequence (flow order). NO time window -- only a win (amount >= 0) breaks it.
+        weekly_fired = weekly_loss_total > caps.weekly_loss_halt
+        if weekly_fired:
+            triggers.append(REASON_WEEKLY_LOSS)
+            ramp_steps.append("weekly")
+        # Arm 2 (row 72): trailing consecutive losses at the END of the realized sequence
+        # (flow order). NO time window -- only a win (amount >= 0) breaks the trail.
         streak = 0
         for row in reversed(realized):
             if row["amount"] < 0:
@@ -80,13 +84,16 @@ class LossBreakers:
             else:
                 break
         if streak >= caps.consecutive_loss:
-            return LossState(PAUSE, (REASON_CONSECUTIVE_LOSS,), ())
-        # Pending arm (rows 70 vs 72 interplay): accepts + |realized losses| in the rolling
-        # 24h window, via the shared pending_in_window helper. Fed the concatenated list of
-        # ALL accept rows + the realized rows (the helper ignores wins and raises on
-        # malformed rows -- the fail-closed wrapper converts that raise into the data halt).
+            triggers.append(REASON_CONSECUTIVE_LOSS)
+        # Arm 3 (rows 70 vs 72 interplay): accepts + |realized losses| in the rolling 24h
+        # window via the shared helper (ignores wins; raises on malformed rows -- the
+        # fail-closed wrapper converts that raise into the data halt).
         accepts = [r for r in rows if r["kind"] == "accept"]
         pending_today = pending_in_window(accepts + realized, wall_now=now)
         if pending_today > caps.daily_pending_ceiling:
-            return LossState(PAUSE, (REASON_DAILY_PENDING_PAUSE,), ("daily",))
-        return LossState(NONE, (), ())
+            triggers.append(REASON_DAILY_PENDING_PAUSE)
+            ramp_steps.append("daily")
+        if not triggers:
+            return LossState(NONE, (), ())
+        action = HALT if weekly_fired else PAUSE
+        return LossState(action, tuple(triggers), tuple(ramp_steps))
