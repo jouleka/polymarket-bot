@@ -58,7 +58,9 @@ class ApiStormSentinel:
 
     def storming(self, now):
         fivexx = sum(1 for _, s in self._events if s >= 500)
-        return fivexx >= self._caps.api_5xx_storm_count
+        auth = sum(1 for _, s in self._events if s in (401, 403))
+        return (fivexx >= self._caps.api_5xx_storm_count
+                or auth >= self._caps.api_auth_storm_count)
 
 
 class AnomalyMonitor:

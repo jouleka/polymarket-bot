@@ -118,3 +118,30 @@ def test_five_mixed_5xx_responses_in_the_window_storm():
     for t, status in ((0.0, 500), (1.0, 502), (2.0, 503), (3.0, 504), (4.0, 500)):
         sentinel.record(status, now=t)
     assert sentinel.storming(10.0) is True
+
+
+def test_one_auth_failure_in_the_window_does_not_storm():
+    # Boundary pair (auth >= api_auth_storm_count == 2): a single 401 is under.
+    # Kills: loosening the auth count compare or hardcoding storming True.
+    sentinel = ApiStormSentinel(RiskCaps())
+    sentinel.record(401, now=0.0)
+    assert sentinel.storming(5.0) is False
+
+
+def test_two_auth_failures_storm_and_403_counts_like_401():
+    # Boundary pair partner: 401 + 403 == exactly 2 auth fails at the threshold storms.
+    # Kills: mutating >= to > on the auth count, and an auth filter matching only 401.
+    sentinel = ApiStormSentinel(RiskCaps())
+    sentinel.record(401, now=0.0)
+    sentinel.record(403, now=1.0)
+    assert sentinel.storming(5.0) is True
+
+
+def test_non_auth_4xx_statuses_never_count_toward_either_storm():
+    # 404/429/400 are ordinary client noise: NOT auth failures, NOT 5xx -- even eight of
+    # them must not fire. Kills: widening the auth filter to any 4xx (400 <= s < 500) or
+    # widening the 5xx filter to s >= 400.
+    sentinel = ApiStormSentinel(RiskCaps())
+    for t, status in enumerate((404, 429, 400, 404, 429, 400, 404, 429)):
+        sentinel.record(status, now=float(t))
+    assert sentinel.storming(8.0) is False
