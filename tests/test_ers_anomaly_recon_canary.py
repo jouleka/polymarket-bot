@@ -200,6 +200,60 @@ def test_recon_seam_absent_provider_is_dormant():
     assert monitor.evaluate((), {}.get).action == NONE
 
 
+# --- Task E6: canary failure semantics (falsy / raise / no blind retry / severity order) -------
+
+def test_canary_falsy_return_fires_l5_canary_fail():
+    """A due canary returning falsy is a signing failure -> HALT with exactly the
+    l5_canary_fail trigger. Kills: discarding the canary's return value."""
+    canary, _calls = _counting_canary(result=False)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+
+
+def test_canary_raising_fires_l5_canary_fail_and_never_propagates():
+    """The fail-closed seam rule for the canary: a RAISING canary fires the trigger and the
+    exception never escapes evaluate. Kills: dropping the try/except around the call."""
+    def _boom():
+        raise RuntimeError("signer wedged mid-canary")
+
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=_boom)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_canary_fail",)
+
+
+def test_canary_failure_is_never_blind_retried_before_the_next_interval():
+    """DESIGN §3 #6: NEVER blind-retry. After a failing canary at t=0, an immediate evaluate
+    at t=1 must NOT re-call it -- last_run was stamped even though it FAILED; re-due only at
+    t >= 300. Kills: stamping last_run only on success, which loops a failing canary every
+    cycle."""
+    canary, calls = _counting_canary(result=False)
+    clock, box = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock, canary=canary)
+    monitor.evaluate((), {}.get)      # t=0: due, FAILS -> trigger fired, 1 call
+    box["now"] = 1.0
+    monitor.evaluate((), {}.get)      # not re-due: no blind retry of the failed canary
+    assert calls["n"] == 1
+
+
+def test_recon_mismatch_outranks_canary_fail_in_the_triggers_order():
+    """evaluate collects ALL firing triggers in the pinned severity order, so a cycle where
+    BOTH recon and canary fail reports ("l5_recon_mismatch", "l5_canary_fail") -- triggers[0]
+    becomes the set_state reason. Kills: a consult-order swap or a first-trigger
+    early-return."""
+    canary, _calls = _counting_canary(result=False)
+    clock, _ = _clock_box()
+    monitor = AnomalyMonitor(RiskCaps(), clock=clock,
+                             recon_provider=lambda: _recon(DIVERGED), canary=canary)
+    state = monitor.evaluate((), {}.get)
+    assert state.action == HALT
+    assert state.triggers == ("l5_recon_mismatch", "l5_canary_fail")
+
+
 def test_recon_seam_provider_returning_none_result_is_skipped():
     """A wired provider yielding None (no result this cycle) is a SKIP -- not a fire, not a
     crash. Kills: unconditional r.status attribute access on a None result."""
