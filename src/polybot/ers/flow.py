@@ -11,6 +11,8 @@ and each consumer converts the raise into its fail-closed action.
 
 from decimal import Decimal
 
+from polybot.ers.safety import REASON_RATE_HOURLY
+
 _KINDS = ("accept", "realized")
 
 
@@ -62,3 +64,24 @@ def pending_in_window(rows, *, wall_now, window_seconds=86400):
         elif amount < Decimal("0"):
             total += -amount
     return total
+
+
+def make_flow_gate(store, caps_provider, *, wall_clock):
+    """The per-cycle flow gate (DESIGN-S4.7 SS3 rows 1-2 + SS4): returns a 0-arg callable ->
+    None | a REASON_* string, wired into SafetyController.verdict's running-state branch via
+    wire_flow_gate.
+
+    store / caps_provider / wall_clock are consulted PER CALL: the gate follows the sliding
+    window AND the ramp ratchet (assembly binds caps_provider=controller.active_caps). The
+    gate does NOT catch its own exceptions -- verdict wraps a raise into flow_gate_error
+    (fail closed, SS6.4). It does NOT filter frozen tokens: it is 0-arg with no portfolio
+    view, and unfiltered accepts only count HIGHER = MORE blocking = the conservative
+    direction (documented deviation from the breakers' frozen exclusion)."""
+    def _gate():
+        caps = caps_provider()
+        rows = store.flow_log()
+        now = wall_clock()
+        if accepts_in_window(rows, wall_now=now, window_seconds=3600) >= caps.new_positions_per_hour:
+            return REASON_RATE_HOURLY
+        return None
+    return _gate

@@ -168,3 +168,69 @@ def test_halted_verdict_never_consults_the_gate(tmp_path):
         assert calls == []
     finally:
         store.close()
+
+
+def test_flow_gate_one_accept_in_the_hour_returns_none_under_cap_two(tmp_path):
+    # At-boundary partner: 1 accept < new_positions_per_hour(2) -> the 2nd is still allowed.
+    # Kills: off-by-one down (count >= cap - 1), which would block with headroom left.
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=100.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
+        assert gate() is None
+
+
+def test_flow_gate_two_accepts_in_the_hour_blocks_the_would_be_third(tmp_path):
+    # Just-over partner: 2 accepts == new_positions_per_hour(2) -> rate_cap_hourly (blocking
+    # the WOULD-BE 3rd). Amounts are tiny so no other arm can fire.
+    # Kills: >= mutated to > (2 > 2 would let a 3rd position through the signed rate cap).
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=100.0)
+        store.record_flow_event(kind="accept", token_id="a2", amount=Decimal("1"), wall_at=150.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
+        assert gate() == "rate_cap_hourly"
+
+
+def test_flow_gate_re_reads_the_journal_on_every_call(tmp_path):
+    # The gate is consulted PER CYCLE: rows recorded after make_flow_gate must count.
+    # Kills: capturing store.flow_log() once at make time (new accepts would never be counted).
+    from polybot.ers.flow import make_flow_gate
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=100.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: 200.0)
+        assert gate() is None
+        store.record_flow_event(kind="accept", token_id="a2", amount=Decimal("1"), wall_at=150.0)
+        assert gate() == "rate_cap_hourly"
+
+
+def test_flow_gate_auto_slides_open_when_the_window_passes(tmp_path):
+    # Blocked at the inclusive old edge (age == 3600 still counts -- the breaker/ApiStorm
+    # convention, keeping the boundary row is tighter), open one second past it. Recovery is
+    # AUTOMATIC: no set_state, no operator. Kills: freezing wall_clock() at make time (a
+    # captured `now` would block forever), and flipping the inclusive <= window edge.
+    from polybot.ers.flow import make_flow_gate
+    wall = [200.0]
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=100.0)
+        store.record_flow_event(kind="accept", token_id="a2", amount=Decimal("1"), wall_at=150.0)
+        gate = make_flow_gate(store, lambda: RiskCaps(), wall_clock=lambda: wall[0])
+        assert gate() == "rate_cap_hourly"
+        wall[0] = 3700.0   # oldest accept age == 3600 exactly -> STILL in-window (inclusive);
+        assert gate() == "rate_cap_hourly"          # both rows count -> still >= cap 2
+        wall[0] = 3701.0   # oldest ages to 3601 -> out; only 1 accept remains in the hour;
+        assert gate() is None                       # daily 2 < 6; pending 2 + 12 <= 24 -> open again
+
+
+def test_flow_gate_consults_the_caps_provider_on_every_call(tmp_path):
+    # The gate follows the ratchet: a tightened envelope flips the verdict on the SAME journal.
+    # Kills: capturing caps_provider() once at make time (a swap_caps ramp step would never
+    # bite the gate -- design SS4 binds caps_provider=controller.active_caps for exactly this).
+    from polybot.ers.flow import make_flow_gate
+    caps_cell = [RiskCaps()]
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_flow_event(kind="accept", token_id="a1", amount=Decimal("1"), wall_at=100.0)
+        gate = make_flow_gate(store, lambda: caps_cell[0], wall_clock=lambda: 200.0)
+        assert gate() is None                                # 1 accept < hour cap 2
+        caps_cell[0] = RiskCaps(new_positions_per_hour=1)    # tighten (1 <= day 6: constructible)
+        assert gate() == "rate_cap_hourly"                   # same rows, tighter caps -> blocked
