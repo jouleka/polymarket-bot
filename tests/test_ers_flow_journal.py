@@ -212,3 +212,16 @@ def test_pending_in_window_propagates_key_error_on_a_missing_amount_key():
     rows = [{"at": 1, "wall_at": 100.0, "kind": "accept", "token_id": "t1"}]
     with pytest.raises(KeyError):
         pending_in_window(rows, wall_now=100.0)
+
+
+def test_flow_module_source_never_references_the_resume_state_or_set_state():
+    # STICKY pin (DESIGN §6.2, extended to the new modules; mirrors the ers/anomaly.py pin):
+    # nothing in ers/flow.py may transition op-state or even NAME the resume state -- the ONLY
+    # automatic HALTED->resume in the system stays RestartReconciler's clean boot-reconcile.
+    # Kills: any op-state mutation (or auto-resume) creeping into the flow module.
+    from pathlib import Path
+
+    from polybot.ers import flow as _f
+    src = Path(_f.__file__).read_text(encoding="utf-8")
+    assert "set_state" not in src
+    assert "RUNNING" not in src
