@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from polybot.ers.anomaly import HALT, NONE, AnomalyMonitor
 from polybot.ers.caps import RiskCaps
-from polybot.ers.safety import REASON_L5_ABNORMAL_BOOK
+from polybot.ers.safety import REASON_L5_ABNORMAL_BOOK, REASON_L5_CLOCK_SKEW
 from polybot.ers.validator import OpenPosition
 from polybot.ingestion.orderbook import LocalBook
 
@@ -241,3 +241,49 @@ def test_stale_interlude_preserves_prev_depth_so_collapse_across_the_gap_still_f
                                                            bid_size="100", ask_size="100"))  # depth 200
     assert state.action == HALT
     assert REASON_L5_ABNORMAL_BOOK in state.triggers
+
+
+class _ExplodingBook:
+    """Broken book infrastructure: reports fresh, then explodes mid-check (a buggy book
+    object / wedged feed layer behind book_for)."""
+
+    def is_stale(self):
+        return False
+
+    def midpoint(self):
+        raise RuntimeError("book infrastructure exploded")
+
+    def top_of_book(self):
+        raise RuntimeError("book infrastructure exploded")
+
+
+class _TrippedSkew:
+    """Truthy skew double: the skew consult fires BEFORE the book block runs."""
+
+    def skewed(self):
+        return True
+
+
+def test_raising_book_infrastructure_fires_l5_abnormal_book_instead_of_propagating():
+    """FAIL-CLOSED (design §6.4): a broken book object/book_for IS an abnormal-book
+    anomaly. evaluate() accumulates triggers across consults; an unwrapped book block that
+    raises voids any ALREADY-COLLECTED trigger and propagates -> run_cycle crashes -> the
+    loop dies into the L6 SIGKILL path instead of a clean audited halt.
+    MUTATION KILLED: removing the try/except lets the RuntimeError escape evaluate
+    (kill-switch crash)."""
+    mon = _monitor()
+    state = mon.evaluate([_pos("t1")], lambda token: _ExplodingBook())  # must NOT raise
+    assert state.action == HALT
+    assert state.triggers == (REASON_L5_ABNORMAL_BOOK,)
+
+
+def test_raising_book_block_does_not_void_an_already_collected_skew_trigger():
+    """evaluate() accumulates triggers across consults: skew fires on this cycle (slot 1),
+    THEN the broken book raises (slot 4). An unwrapped book block would propagate the
+    RuntimeError out of evaluate and VOID the collected skew trigger -- the skew halt is
+    lost and the loop dies instead of halting clean with both reasons, severity-ordered.
+    MUTATION KILLED: unwrapped book block loses the collected skew trigger."""
+    mon = AnomalyMonitor(RiskCaps(), clock=lambda: 0.0, skew_sentinel=_TrippedSkew())
+    state = mon.evaluate([_pos("t1")], lambda token: _ExplodingBook())  # must NOT raise
+    assert state.action == HALT
+    assert state.triggers == (REASON_L5_CLOCK_SKEW, REASON_L5_ABNORMAL_BOOK)
