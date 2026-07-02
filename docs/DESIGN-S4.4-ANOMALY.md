@@ -97,6 +97,11 @@ ERSController.run_cycle (extended additively; anomaly=None == today byte-for-byt
 
 ## 3. The six triggers (each its own seam)
 
+**Severity order** (the order `evaluate` consults the seams and sorts `triggers`; `triggers[0]` is the
+halt reason the controller reports and audits): `l5_clock_skew, l5_recon_mismatch, l5_canary_fail,
+l5_abnormal_book, l5_api_storm, l5_ws_down`. The `#` column below catalogues the master-design §5 L5
+narrative — it is NOT the severity ranking.
+
 | # | Trigger | Sentinel / seam | Fires (`HALT` + reason) when | Dormant when |
 |---|---|---|---|---|
 | 1 | Abnormal book | internal to the monitor, over `positions` + `book_for` | on a HELD token with a NON-stale book: (a) `midpoint() is None` while `is_stale()` is False (crossed/locked/empty side); (b) top-of-book depth (bid_size+ask_size) drops ≥ `depth_collapse_fraction` vs the monitor's prev observation AND prev depth ≥ `depth_collapse_min_prev_shares`; (c) \|mid − prev_mid\| ≥ `midpoint_jump_halt`. Prev state is NET-NEW per-token memory inside the monitor; first observation of a token never fires (b)/(c). Reason `l5_abnormal_book`. | no positions / book absent (the breaker's `stale_mark` + validator `no_book` own those) |

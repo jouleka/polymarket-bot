@@ -6,9 +6,13 @@ is constructed bare (caps + clock only) because these checks need no seam.
 
 from decimal import Decimal
 
-from polybot.ers.anomaly import HALT, NONE, AnomalyMonitor
+from polybot.ers.anomaly import HALT, NONE, AnomalyMonitor, ApiStormSentinel
 from polybot.ers.caps import RiskCaps
-from polybot.ers.safety import REASON_L5_ABNORMAL_BOOK, REASON_L5_CLOCK_SKEW
+from polybot.ers.safety import (
+    REASON_L5_ABNORMAL_BOOK,
+    REASON_L5_API_STORM,
+    REASON_L5_CLOCK_SKEW,
+)
 from polybot.ers.validator import OpenPosition
 from polybot.ingestion.orderbook import LocalBook
 
@@ -345,3 +349,19 @@ def test_two_positions_on_the_same_token_hit_book_for_exactly_once():
     assert state.action == HALT
     assert state.triggers.count(REASON_L5_ABNORMAL_BOOK) == 1
     assert calls == {"t1": 1}
+
+
+def test_abnormal_book_co_fires_with_a_later_slot_api_storm_collecting_both():
+    # Kills: an early-return after the book block (the whole-slice final-review mutation) --
+    # evaluate must collect ALL firing triggers, not stop at the first. A truncated tuple
+    # keeps the halt correct (book outranks api/ws) but silently drops the co-occurring
+    # l5_api_storm from the op-audit detail string -- a diagnostic-completeness regression.
+    caps = RiskCaps()
+    api = ApiStormSentinel(caps)
+    for _ in range(caps.api_5xx_storm_count):
+        api.record(500, now=0.0)
+    mon = AnomalyMonitor(caps, clock=lambda: 0.0, api_sentinel=api)
+    book = _book(bid="0.60", ask="0.55")  # crossed -> abnormal book fires
+    state = mon.evaluate([_pos("t1")], lambda token: book)
+    assert state.action == HALT
+    assert state.triggers == (REASON_L5_ABNORMAL_BOOK, REASON_L5_API_STORM)
