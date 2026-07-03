@@ -97,3 +97,33 @@ def test_secret_holder_rotate_swaps_current():
     assert holder.current() == b"old"
     holder.rotate(b"new")
     assert holder.current() == b"new"
+
+
+from polybot.ers import telegram_auth as _auth
+
+
+def test_command_set_is_exactly_the_six_safety_verbs():
+    # Kills: mutation adding an OPEN/PLACE verb to the command set, or dropping a safety verb.
+    assert _auth._COMMAND_SET == frozenset(
+        {"KILL", "PAUSE", "RESUME", "FLATTEN", "LOWER_CAPS", "BLACKLIST"}
+    )
+
+
+def test_command_set_is_a_frozenset():
+    # Kills: mutation making the command set a mutable set (a runtime .add of "OPEN" would then be possible).
+    assert isinstance(_auth._COMMAND_SET, frozenset)
+
+
+def test_command_set_excludes_open_trade_verbs():
+    # Kills: mutation that widens the set; an explicit pin that no trade verb is dispatchable.
+    for forbidden in ("OPEN", "PLACE", "OPEN_TRADE", "SIGN", "SUBMIT", "BUY", "SELL"):
+        assert forbidden not in _auth._COMMAND_SET
+
+
+def test_refusal_reason_constants_exact_values():
+    # Kills: mutation drifting any of the five auth-refusal reason strings.
+    assert _auth.REASON_MALFORMED == "l8_malformed"
+    assert _auth.REASON_BAD_CHAT == "l8_bad_chat"
+    assert _auth.REASON_UNKNOWN_CMD == "l8_unknown_cmd"
+    assert _auth.REASON_BAD_SIG == "l8_bad_sig"
+    assert _auth.REASON_REPLAY == "l8_replay"
