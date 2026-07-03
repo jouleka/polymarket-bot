@@ -56,3 +56,27 @@ def test_authresult_is_immutable():
     assert r.chat_id == "c1"
     with pytest.raises(dataclasses.FrozenInstanceError):
         r.ok = True
+
+
+from polybot.ers.telegram_auth import TelegramTransport
+
+
+def test_transport_protocol_is_runtime_checkable_on_duck_typed_fake():
+    # Kills: mutation dropping @runtime_checkable (isinstance against a Protocol would raise TypeError).
+    class _FakeTransport:
+        def poll(self):
+            return []
+
+        def send(self, text):
+            return True
+
+    assert isinstance(_FakeTransport(), TelegramTransport)
+
+
+def test_transport_protocol_rejects_object_missing_send():
+    # Kills: mutation renaming/removing `send` from the Protocol (an incomplete transport would pass).
+    class _PollOnly:
+        def poll(self):
+            return []
+
+    assert not isinstance(_PollOnly(), TelegramTransport)
