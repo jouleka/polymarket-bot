@@ -362,3 +362,48 @@ def test_gate4_correct_signature_passes_gate4(tmp_path):
     raw = _signed_g4("c1", "FLATTEN", "", "1", secret=b"matching")
     result = auth.authenticate(raw)
     assert result.ok is True and result.command == "FLATTEN"
+
+
+def _auth_obj_ct(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_ct(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate4_correct_length_but_wrong_sig_refuses(tmp_path):
+    # Kills: mutation comparing sig by length or truthiness instead of value; a 32-byte-but-wrong sig must refuse.
+    auth = _auth_obj_ct(secret=b"the-real-secret")
+    good = _signed_ct("c1", "KILL", "", "1", secret=b"the-real-secret")
+    assert len(good.sig) == 32                       # HMAC-SHA256 digest length
+    flipped = bytes([good.sig[0] ^ 0x01]) + good.sig[1:]   # same length, one bit flipped
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=flipped)
+    assert auth.authenticate(raw).reason == _auth.REASON_BAD_SIG
+
+
+def test_gate4_uses_compare_digest_not_equality(monkeypatch, tmp_path):
+    # Kills: mutation replacing hmac.compare_digest with `==` (drops constant-time comparison).
+    # We assert the module-level hmac.compare_digest is the function actually consulted in gate 4:
+    # patching it to a sentinel-recording spy must be hit exactly once during a verify.
+    import polybot.ers.telegram_auth as mod
+    calls = {"n": 0}
+    real = mod.hmac.compare_digest
+
+    def _spy(a, b):
+        calls["n"] += 1
+        return real(a, b)
+
+    monkeypatch.setattr(mod.hmac, "compare_digest", _spy)
+    auth = _auth_obj_ct(secret=b"matching")
+    raw = _signed_ct("c1", "KILL", "", "1", secret=b"matching")
+    auth.authenticate(raw)
+    assert calls["n"] == 1
