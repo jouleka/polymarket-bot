@@ -567,3 +567,45 @@ def test_neutralize_returned_command_carries_no_control_chars(tmp_path):
     result = auth.authenticate(raw)
     assert result.ok is True and result.command == "PAUSE"
     assert "​" not in result.command
+
+
+# --- S4.6a opus security review pins (HIGH / MEDIUM / LOW) ------------------------------------
+def test_gate1_unicode_digit_nonce_refuses_malformed_not_raises(tmp_path):
+    # MUTATION KILLED = isdigit()-only lets a unicode-digit nonce reach int() and crash the auth core.
+    # "²" (superscript two, category No) is str.isdigit()==True but int() REJECTS it. neutralize keeps
+    # it, so a validly-signed message with nonce="²" passes gates 1-4 then crashes at gate 5's int()
+    # unless gate 1 also requires isascii(). Must return l8_malformed, NOT raise ValueError.
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = _signed_neut("c1", "KILL", "", "²")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+class _BoomHolder:
+    # A SecretHolder-shaped double whose current() raises -- models an internal backend hiccup.
+    def current(self):
+        raise RuntimeError("secret backend down")
+
+    def rotate(self, new_secret):
+        raise RuntimeError("secret backend down")
+
+
+def test_authenticate_never_returns_ok_true_when_an_internal_component_raises(tmp_path):
+    # MUTATION KILLED = wrapping the body in a fail-OPEN try/except that returns ok=True on any internal
+    # error would let a garbage-sig message authenticate when the secret backend hiccups. The current
+    # code is fail-closed-by-propagation: a garbage sig reaches gate 4, current() raises, and the
+    # exception propagates -- it MUST NOT return ok=True. Pin the propagate-don't-swallow contract.
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=_BoomHolder())
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"garbage")
+    with pytest.raises(RuntimeError):
+        auth.authenticate(raw)
+
+
+def test_gate1_pipe_delimiter_in_chat_id_refuses_malformed(tmp_path):
+    # MUTATION KILLED = an unescaped "|" in a plumbing field makes canonical_message ambiguous
+    # (two distinct tuples -> one MAC). neutralize does NOT strip "|" (category Sm), so gate 1 must
+    # reject it explicitly. chat_id="a|b" must return l8_malformed (NOT reach gate 2 -> l8_bad_chat).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = RawMessage(chat_id="a|b", command="KILL", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
