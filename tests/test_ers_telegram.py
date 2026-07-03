@@ -747,3 +747,37 @@ def test_run_cycle_drains_first_so_an_authenticated_kill_halts_before_any_intent
         assert store.get("i1").status == "REJECTED"                 # ...before the intent processed
         assert store.get("i1").decision_reason == "l8_kill"         # under the KILL's stored reason
         assert signer.placed == []                                  # NOTHING was placed this cycle
+
+
+class _StateSnoopingHeartbeat_d:
+    """A heartbeat that records the controller op-state AT THE MOMENT beat() is called --
+    proves the KILL drain ran (HALTED) BEFORE the beat, per the DESIGN §2 step-0-before-step-1
+    ordering."""
+    def __init__(self, ctl):
+        self._ctl = ctl
+        self.state_at_beat = []
+
+    def beat(self):
+        self.state_at_beat.append(self._ctl.state())
+
+
+def test_drain_runs_before_the_heartbeat_beat(tmp_path):
+    # DESIGN §2: step 0 (drain) precedes step 1 (beat). A KILL queued this cycle must ALREADY
+    # have flipped the loop HALTED by the time beat() fires. Kills: ordering the drain AFTER
+    # beat (state_at_beat would read RUNNING), which would let the out-of-band supervisor beat
+    # a loop that should already be dying.
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    from polybot.ers.service import PaperSigner
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        transport = _FakeTransport_d([_signed_d("ops", "KILL", "", "1")])
+        tc = _tc_d(store, ctl, transport)
+        hb = _StateSnoopingHeartbeat_d(ctl)
+        rc = _ERS_seam(store=store, book_for={"t1": _book_seam("0.50")}.get, caps=RiskCaps(),
+                       signer=signer, controller=ctl, telegram=tc, heartbeat=hb, clock=lambda: 0)
+        rc.run_cycle()
+        assert hb.state_at_beat == [_safety.HALTED]   # the KILL drained BEFORE the beat
