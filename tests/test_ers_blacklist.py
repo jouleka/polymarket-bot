@@ -27,3 +27,16 @@ def test_record_blacklist_round_trips_wallet_market_source_in_bl_id_order(tmp_pa
             ("wallet", "0xabc"), ("market", "m-42"), ("source", "rss-7")]
         ats = [r["at"] for r in rows]
         assert ats == sorted(ats) and len(set(ats)) == 3 and ats[0] > 0
+
+
+def test_record_blacklist_is_dumb_and_records_an_unknown_kind_verbatim(tmp_path):
+    # DESIGN Fork 2 + the pinned contract: the store does NOT validate target_kind (kind
+    # validation lives in TelegramController.__apply, which raises BEFORE calling). Proves the
+    # store persists a kind OUTSIDE {wallet,market,source} verbatim. Kills: sneaking a
+    # kind-whitelist ValueError into record_blacklist (which would move policy into the store
+    # and break the "dumb store" contract D3 relies on).
+    with _store(str(tmp_path / "i.db")) as store:
+        store.record_blacklist(target_kind="banana", target_value="whatever")
+        rows = store.blacklist_log()
+        assert [(r["target_kind"], r["target_value"]) for r in rows] == [
+            ("banana", "whatever")]
