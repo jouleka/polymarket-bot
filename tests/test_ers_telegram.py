@@ -171,7 +171,7 @@ def test_drain_accepted_message_applies_and_audits_l8_command(tmp_path):
 
 def test_drain_isolates_a_raising_apply_audits_l8_apply_error_and_continues(tmp_path):
     # Per-message isolation (mirrors news.poll_all): an authenticated command whose __apply
-    # RAISES (BLACKLIST is unbuilt in B -> NotImplementedError) is caught + audited
+    # RAISES (a BLACKLIST with an UNKNOWN kind -> ValueError, S4.6d) is caught + audited
     # kind="l8_command", reason="l8_apply_error", and the drain CONTINUES to the next message
     # (a following KILL still halts). Two DISTINCT chat-ids so both pass the monotonic nonce.
     # Kills: a raising __apply escaping drain (loop crash); the drain aborting the remaining
@@ -179,7 +179,7 @@ def test_drain_isolates_a_raising_apply_audits_l8_apply_error_and_continues(tmp_
     with _store(tmp_path) as store:
         ctl = _running_ctl(store)
         allow = {"chatA": "operator", "chatB": "operator"}
-        boom = _signed("chatA", "BLACKLIST", "wallet:0xdead", "1")
+        boom = _signed("chatA", "BLACKLIST", "banana:x", "1")   # unknown kind -> __apply raises
         kill = _signed("chatB", "KILL", "", "1")
         transport = _FakeTransport([boom, kill])
         tc = TelegramController(ctl, store, transport, _auth(allowlist=allow))
@@ -590,3 +590,72 @@ def test_notify_a_none_returning_send_counts_as_a_failure(tmp_path):
             ("state_change", "clean_reconcile", "RUNNING"),
             ("state_change", "l8_alerts_down", "HALTED"),
         ]
+
+
+# --- S4.6d: the BLACKLIST verb (replacing the S4.6b NotImplementedError stub) -----------------
+import hmac as _hmac_d
+from polybot.core.clock import MonotonicStamper as _Stamper_d
+from polybot.ers.intent_store import IntentStore as _IntentStore_d
+from polybot.ers import telegram_auth as _ta_d
+from polybot.ers.telegram import TelegramController as _TC_d
+
+
+def _store_d(tmp_path):
+    return _IntentStore_d(str(tmp_path / "i.db"), _Stamper_d())
+
+
+_SECRET_D = b"s4.6d-secret"
+
+
+def _signed_d(chat_id, command, payload, nonce, secret=_SECRET_D):
+    # Build a VALID signed RawMessage: sig = compute_mac(canonical over the sig-less message).
+    unsigned = _ta_d.RawMessage(chat_id=chat_id, command=command, payload=payload,
+                                nonce=nonce, sig=b"")
+    sig = _ta_d.compute_mac(_ta_d.canonical_message(unsigned), secret)
+    return _ta_d.RawMessage(chat_id=chat_id, command=command, payload=payload,
+                            nonce=nonce, sig=sig)
+
+
+class _FakeTransport_d:
+    """Duck-typed TelegramTransport: poll() drains a FIFO queue of RawMessages; send() records."""
+    def __init__(self, inbound=()):
+        self._inbound = list(inbound)
+        self.sent = []
+        self.send_result = True
+
+    def poll(self):
+        out, self._inbound = self._inbound, []
+        return out
+
+    def send(self, text):
+        self.sent.append(text)
+        return self.send_result
+
+
+def _auth_d(chat_id="ops"):
+    return _ta_d.CommandAuth(allowlist={chat_id: "operator"},
+                             secret_holder=_ta_d.SecretHolder(_SECRET_D))
+
+
+def _tc_d(store, ctl, transport, chat_id="ops"):
+    return _TC_d(ctl, store, transport, _auth_d(chat_id))
+
+
+def test_blacklist_verb_records_the_parsed_kind_value_and_audits_l8_blacklist(tmp_path):
+    # DESIGN §3 row BLACKLIST: an authenticated "kind:value" payload parses to
+    # (target_kind, target_value), records a durable blacklist row, and the drain audits
+    # kind="l8_command" reason="l8_blacklist" detail="BLACKLIST". Kills: leaving the
+    # NotImplementedError stub, mis-parsing the payload, or the wrong audit reason.
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        transport = _FakeTransport_d([_signed_d("ops", "BLACKLIST", "wallet:0xdead", "1")])
+        tc = _tc_d(store, ctl, transport)
+        tc.drain()
+        # The durable row landed with the parsed kind + value.
+        assert [(r["target_kind"], r["target_value"]) for r in store.blacklist_log()] == [
+            ("wallet", "0xdead")]
+        # The drain audited exactly the l8_command / l8_blacklist row for BLACKLIST.
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("l8_command", "l8_blacklist", "BLACKLIST")]
