@@ -685,6 +685,49 @@ def test_blacklist_unknown_kind_is_isolated_as_l8_apply_error_and_touches_no_sta
         assert rows[0]["detail"].startswith("BLACKLIST:")
 
 
+def test_blacklist_verb_records_a_value_containing_colons(tmp_path):
+    # Pins the "split on the FIRST colon" contract: an authenticated BLACKLIST "market:0x:weird"
+    # records target_kind="market", target_value="0x:weird" -- the value KEEPS its internal
+    # colons. MUTATION KILLED = partition(":") -> split(":") breaks a value containing colons
+    # (unpacks 3+ parts / truncates the value at the first colon).
+    # MUTATION-VERIFY: change partition(":") to split(":") in telegram.py __apply, confirm THIS
+    # test fails, revert + sweep pycache.
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        transport = _FakeTransport_d([_signed_d("ops", "BLACKLIST", "market:0x:weird", "1")])
+        tc = _tc_d(store, ctl, transport)
+        tc.drain()
+        assert [(r["target_kind"], r["target_value"]) for r in store.blacklist_log()] == [
+            ("market", "0x:weird")]                  # the value keeps its internal colons
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("l8_command", "l8_blacklist", "BLACKLIST")]
+
+
+def test_blacklist_empty_value_is_isolated_not_recorded(tmp_path):
+    # Fail-close the empty-value asymmetry: an authenticated BLACKLIST "wallet:" (a known kind
+    # but an EMPTY value) is an authenticated-but-malformed payload -- __apply raises ValueError,
+    # so it flows to drain's l8_apply_error isolation like an unknown kind. NO junk row is
+    # recorded and the op-state is untouched (still boot HALTED). MUTATION KILLED = an
+    # empty-value BLACKLIST silently records a junk (kind, "") row instead of fail-closing.
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot: HALTED
+        transport = _FakeTransport_d([_signed_d("ops", "BLACKLIST", "wallet:", "1")])
+        tc = _tc_d(store, ctl, transport)
+        tc.drain()                                   # must NOT raise
+        assert store.blacklist_log() == []           # nothing recorded (no junk (wallet,"") row)
+        assert ctl.state() == _safety.HALTED         # op-state untouched
+        rows = store.op_audit_log()
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "l8_command"
+        assert rows[0]["reason"] == "l8_apply_error"
+        assert rows[0]["detail"].startswith("BLACKLIST:")
+
+
 # --- S4.6d: the ERSController(telegram=) seam -------------------------------------------------
 from polybot.ers import safety as _safety_seam
 from polybot.ers.controller import ERSController as _ERS_seam
@@ -813,7 +856,6 @@ def test_s4_6_whole_slice_e2e_kill_dominates_then_forgery_wrongchat_replay_all_r
         assert signer.placed == []
 
         # Cycle 2: three forgeries, each refused with its specific reason; op-state stays HALTED.
-        forged = _signed_d("ops", "KILL", "", "2")
         forged = _ta_d.RawMessage(chat_id="ops", command="KILL", payload="", nonce="2",
                                   sig=b"wrongsig")                       # bad HMAC
         wrong_chat = _signed_d("intruder", "KILL", "", "9")             # not on the allowlist
