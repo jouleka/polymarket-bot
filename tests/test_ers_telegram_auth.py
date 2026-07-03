@@ -151,3 +151,32 @@ def test_canonical_message_order_is_chat_command_payload_nonce_not_permuted():
     raw = RawMessage(chat_id="A", command="B", payload="C", nonce="9", sig=b"")
     assert canonical_message(raw) == b"A|B|C|9"
     assert canonical_message(raw) != b"A|C|B|9"
+
+
+import hashlib as _hashlib
+import hmac as _hmac
+
+from polybot.ers.telegram_auth import compute_mac
+
+
+def test_compute_mac_matches_stdlib_hmac_sha256_digest():
+    # Kills: mutation swapping the hash to md5/sha1, or returning hexdigest() instead of digest().
+    canonical = b"c1|KILL|p|7"
+    secret = b"s3cr3t"
+    expected = _hmac.new(secret, canonical, _hashlib.sha256).digest()
+    assert compute_mac(canonical, secret) == expected
+
+
+def test_compute_mac_is_deterministic():
+    # Kills: mutation introducing per-call salt/nonce into the MAC (verify would never match).
+    assert compute_mac(b"m", b"k") == compute_mac(b"m", b"k")
+
+
+def test_compute_mac_depends_on_secret():
+    # Kills: mutation ignoring the secret arg (all messages would share one MAC -> forgeable).
+    assert compute_mac(b"m", b"k1") != compute_mac(b"m", b"k2")
+
+
+def test_compute_mac_depends_on_message():
+    # Kills: mutation ignoring the canonical arg (any message would verify under a known MAC).
+    assert compute_mac(b"m1", b"k") != compute_mac(b"m2", b"k")

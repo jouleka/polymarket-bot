@@ -93,3 +93,8 @@ def canonical_message(raw) -> bytes:
             raw.nonce.encode(),
         )
     )
+
+
+def compute_mac(canonical: bytes, secret: bytes) -> bytes:
+    """HMAC-SHA256(secret, canonical) raw digest bytes (compared constant-time in gate 4)."""
+    return hmac.new(secret, canonical, hashlib.sha256).digest()
