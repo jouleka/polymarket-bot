@@ -494,3 +494,32 @@ def test_notify_default_threshold_is_three(tmp_path):
         assert ctl.state() == _safety.RUNNING          # default 3 not reached at 2
         tg.notify("d3")
         assert ctl.state() == _safety.HALTED           # reached at 3 -> the default IS 3
+
+
+def test_notify_over_persistently_raising_transport_returns_normally_and_halts(tmp_path):
+    # Kills: notify() blocking/crashing the loop on a hostile transport; the halt failing to fire
+    #        under a stream of raises.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport(["raise", "raise", "raise", "raise", "raise"])
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        for i in range(5):
+            assert tg.notify(f"m{i}") is None          # every call returns normally, never raises
+        assert ctl.state() == _safety.HALTED
+        assert transport.sent == ["m0", "m1", "m2", "m3", "m4"]   # all five attempted
+        # The counter keeps tripping >= threshold on calls 3,4,5 -> one set_state each = 3 rows
+        # (the pinned notify body has NO reset-on-halt and NO already-halted guard).
+        alerts_rows = [s for s in _c_states(store) if s == ("state_change", "l8_alerts_down", "HALTED")]
+        assert len(alerts_rows) == 3
+
+
+def test_notify_does_not_write_its_own_op_audit_row(tmp_path):
+    # Kills: notify() sneaking a record_op_event call (an l8_* audit row) -- the ONLY audit trail
+    #        of the alerts-down halt must be set_state's state_change row, nothing else.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False])          # below threshold -> no halt, no rows at all
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        tg.notify("quiet-failure")
+        # Only the setup RUNNING row exists; notify wrote NOTHING to op_audit on a sub-threshold fail.
+        assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
