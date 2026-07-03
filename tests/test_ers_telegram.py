@@ -108,3 +108,24 @@ def test_structural_sweep_public_surface_is_exactly_drain_and_notify_no_trade_ve
         assert getattr(tc, "_TelegramController__store", None) is store
         assert getattr(tc, "_TelegramController__transport", None) is transport
         assert getattr(tc, "_TelegramController__auth", None) is auth
+
+
+def test_command_set_is_exactly_the_six_safety_increasing_verbs(tmp_path):
+    # Structural pin: the auth command set (imported from telegram_auth, the single source of
+    # truth) is EXACTLY the six safety-increasing verbs -- no seventh, no open-trade verb.
+    # Kills: adding a verb to _COMMAND_SET; dropping one; a typo'd verb string.
+    from polybot.ers.telegram_auth import _COMMAND_SET
+    assert _COMMAND_SET == frozenset(
+        {"KILL", "PAUSE", "RESUME", "FLATTEN", "LOWER_CAPS", "BLACKLIST"})
+
+
+def test_telegram_module_source_never_references_a_trade_verb():
+    # Defense-in-depth over the structural sweep: the module TEXT must not contain a
+    # place/propose/sign/submit/open_trade token -- there is no code path, dead or live, that
+    # could ever be a trade dispatch. "open_trade" (not bare "open") avoids false hits on the
+    # English word 'open' in the docstring.
+    # Kills: sneaking a place()/sign()/submit()/propose_trade()/open_trade() into telegram.py.
+    import polybot.ers.telegram as _mod
+    src = Path(_mod.__file__).read_text(encoding="utf-8")
+    for forbidden in ("place", "propose_trade", "sign", "submit", "open_trade"):
+        assert forbidden not in src, f"trade-verb token leaked into telegram.py: {forbidden!r}"

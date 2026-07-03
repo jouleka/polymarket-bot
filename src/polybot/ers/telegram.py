@@ -1,9 +1,9 @@
 """L8 TelegramController (S4.6b/c/d / POL-6) -- the structurally-bounded remote safety surface.
 
 Mirrors ProposeOnlyFacade: composes (never subclasses) a name-mangled SafetyController + store +
-transport + auth, and exposes EXACTLY {drain, notify}. There is structurally NO place/sign/
-open-trade path -- the command map dispatches ONLY the six safety-INCREASING verbs, so a
-compromised channel can at worst STOP the bot. drain() runs on the serial runloop (S4.6d seam),
+transport + auth, and exposes EXACTLY {drain, notify}. There is structurally NO order-entry or
+approval path of any kind -- the command map dispatches ONLY the six safety-INCREASING verbs, so
+a compromised channel can at worst STOP the bot. drain() runs on the serial runloop (S4.6d seam),
 so set_state/swap_caps stay single-threaded. See DESIGN-S4.6-TELEGRAM.md SS2/SS3/SS6.
 """
 from polybot.ers.ramp import step_weekly
