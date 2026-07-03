@@ -781,3 +781,53 @@ def test_drain_runs_before_the_heartbeat_beat(tmp_path):
                        signer=signer, controller=ctl, telegram=tc, heartbeat=hb, clock=lambda: 0)
         rc.run_cycle()
         assert hb.state_at_beat == [_safety.HALTED]   # the KILL drained BEFORE the beat
+
+
+def test_s4_6_whole_slice_e2e_kill_dominates_then_forgery_wrongchat_replay_all_refuse(tmp_path):
+    # DESIGN-S4.6 §8.3 (part 1): a RUNNING loop with a wired TelegramController over a fake
+    # transport. Cycle 1: an authenticated KILL halts the loop at the TOP before a proposed
+    # intent processes (it REJECTs under l8_kill, nothing placed). Cycle 2: a forged-sig, a
+    # wrong-chat, and a replayed KILL are EACH refused (audited l8_refused with the specific
+    # reason; op-state stays HALTED; no blacklist/extra state_change). Kills: cross-module
+    # mis-wiring (drain not at top, auth gates bypassed, a refusal mutating op-state).
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    from polybot.ers.service import PaperSigner
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        transport = _FakeTransport_d()
+        tc = _tc_d(store, ctl, transport)
+        rc = _ERS_seam(store=store, book_for={"t1": _book_seam("0.50")}.get, caps=RiskCaps(),
+                       signer=signer, controller=ctl, telegram=tc, clock=lambda: 0)
+
+        # Cycle 1: an authenticated KILL dominates -- the pending intent REJECTs under l8_kill.
+        store.propose_trade("i1", **_P_seam)
+        transport._inbound = [_signed_d("ops", "KILL", "", "1")]
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "l8_kill"
+        assert signer.placed == []
+
+        # Cycle 2: three forgeries, each refused with its specific reason; op-state stays HALTED.
+        forged = _signed_d("ops", "KILL", "", "2")
+        forged = _ta_d.RawMessage(chat_id="ops", command="KILL", payload="", nonce="2",
+                                  sig=b"wrongsig")                       # bad HMAC
+        wrong_chat = _signed_d("intruder", "KILL", "", "9")             # not on the allowlist
+        replay = _signed_d("ops", "KILL", "", "1")                      # nonce 1 <= last-seen 1
+        transport._inbound = [forged, wrong_chat, replay]
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED                            # unchanged by any refusal
+        refused = [(r["kind"], r["reason"]) for r in store.op_audit_log()
+                   if r["kind"] == "l8_refused"]
+        assert refused == [
+            ("l8_refused", "l8_bad_sig"),
+            ("l8_refused", "l8_bad_chat"),
+            ("l8_refused", "l8_replay"),
+        ]
+        # No forgery applied a command: the ONLY l8_command row is cycle 1's legitimate KILL --
+        # none of cycle 2's three refusals produced one.
+        assert [r["kind"] for r in store.op_audit_log()].count("l8_command") == 1
