@@ -494,3 +494,35 @@ def test_order_malformed_before_bad_chat(tmp_path):
     auth = _auth_obj_ord(allowlist={"c1": "operator"})
     raw = RawMessage(chat_id="", command="KILL", payload="", nonce="1", sig=b"garbage")
     assert auth.authenticate(raw).reason == _auth.REASON_MALFORMED
+
+
+def _signed_rot(chat_id, command, payload, nonce, secret):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_rotation_old_secret_sig_fails_after_rotate(tmp_path):
+    # Kills: mutation making authenticate() read a cached/stale secret instead of secret_holder.current().
+    # After rotate(new), a message validly signed under the OLD secret must now fail l8_bad_sig.
+    holder = SecretHolder(b"old-secret")
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=holder)
+    old_signed = _signed_rot("c1", "KILL", "", "1", secret=b"old-secret")
+    holder.rotate(b"new-secret")
+    result = auth.authenticate(old_signed)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_SIG
+
+
+def test_rotation_new_secret_sig_authenticates_after_rotate(tmp_path):
+    # Kills: over-tight rotation that breaks the live path. A message signed under the NEW secret
+    # must authenticate after rotate. Accept half of the pair.
+    holder = SecretHolder(b"old-secret")
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=holder)
+    holder.rotate(b"new-secret")
+    new_signed = _signed_rot("c1", "KILL", "", "1", secret=b"new-secret")
+    result = auth.authenticate(new_signed)
+    assert result.ok is True and result.command == "KILL"
