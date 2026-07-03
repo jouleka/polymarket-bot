@@ -873,3 +873,29 @@ def test_s4_6_whole_slice_e2e_resume_lifts_the_halt_then_lower_caps_tightens_sam
         assert kinds.count("caps_swap") == 1
         assert ("l8_command", "l8_lower_caps") in [
             (r["kind"], r["reason"]) for r in store.op_audit_log()]
+
+
+def test_s4_6_whole_slice_e2e_alerts_down_threshold_notify_failures_halt_the_loop(tmp_path):
+    # DESIGN-S4.6 §8.3 (part 3) + invariant 5: from a RUNNING loop, alerts_down_threshold (=3)
+    # CONSECUTIVE failed notify() sends flip the loop to sticky HALTED(l8_alerts_down) -- the
+    # master-design fail-safe. The 2nd failure must NOT yet halt (boundary), the 3rd does.
+    # Kills: an off-by-one threshold (halting at 2 or never), or notify() re-raising into the
+    # caller (it must be best-effort).
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    from polybot.ers.service import PaperSigner
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+        signer = PaperSigner()
+        transport = _FakeTransport_d()
+        transport.send_result = False                     # every send() fails (alerts down)
+        tc = _tc_d(store, ctl, transport)                 # default alerts_down_threshold=3
+
+        tc.notify("ping")                                 # fail 1
+        tc.notify("ping")                                 # fail 2 -- still under threshold
+        assert ctl.state() == _safety.RUNNING             # boundary: 2 < 3, no halt yet
+        tc.notify("ping")                                 # fail 3 -- crosses the threshold
+        assert ctl.state() == _safety.HALTED              # sticky fail-safe halt
+        assert any(r["reason"] == "l8_alerts_down" for r in store.op_audit_log())
