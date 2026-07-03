@@ -67,3 +67,15 @@ class SecretHolder:
 
     def rotate(self, new_secret: bytes) -> None:
         self._secret = new_secret
+
+
+# The safety-increasing-ONLY command set -- structurally pinned to EXACTLY these six verbs.
+# There is deliberately NO open-trade verb: a compromised channel can at worst STOP the bot.
+_COMMAND_SET = frozenset({"KILL", "PAUSE", "RESUME", "FLATTEN", "LOWER_CAPS", "BLACKLIST"})
+
+# The five auth-refusal reasons -- used both as AuthResult.reason and the op-audit reason.
+REASON_MALFORMED = "l8_malformed"      # gate 1: empty/absent field OR non-base-10 nonce
+REASON_BAD_CHAT = "l8_bad_chat"        # gate 2: chat-id not in the operator allowlist
+REASON_UNKNOWN_CMD = "l8_unknown_cmd"  # gate 3: command not in _COMMAND_SET
+REASON_BAD_SIG = "l8_bad_sig"          # gate 4: HMAC mismatch (constant-time compare)
+REASON_REPLAY = "l8_replay"            # gate 5: nonce <= last-seen for this chat-id
