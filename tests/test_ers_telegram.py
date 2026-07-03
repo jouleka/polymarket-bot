@@ -192,3 +192,35 @@ def test_drain_isolates_a_raising_apply_audits_l8_apply_error_and_continues(tmp_
             ("state_change", "l8_kill"),                            # KILL's set_state row
             ("l8_command", "l8_kill"),                              # KILL's command row
         ]
+
+
+def test_apply_kill_from_running_halts_via_set_state_l8_kill(tmp_path):
+    # KILL -> set_state(HALTED, reason=REASON_L8_KILL). The state_change audit carries l8_kill
+    # (NOT a generic 'halted'), and the drain's l8_command row detail is "KILL".
+    # Kills: KILL routed to PAUSED/FLATTENING; wrong reason on set_state; a swap_caps instead.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        transport = _FakeTransport([_signed("chatA", "KILL", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.state() == _safety.HALTED
+        assert store.op_audit_log()[-2:] == [
+            {"at": store.op_audit_log()[-2]["at"], "kind": "state_change",
+             "reason": "l8_kill", "detail": "HALTED"},
+            {"at": store.op_audit_log()[-1]["at"], "kind": "l8_command",
+             "reason": "l8_kill", "detail": "KILL"},
+        ]
+
+
+def test_apply_pause_from_running_pauses_via_set_state_l8_paused(tmp_path):
+    # PAUSE -> set_state(PAUSED, reason=REASON_L8_PAUSED). Distinct from KILL: soft halt.
+    # Kills: PAUSE routed to HALTED; reason l8_kill instead of l8_paused.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        transport = _FakeTransport([_signed("chatA", "PAUSE", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.state() == _safety.PAUSED
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_paused", "PAUSED"),
+            ("l8_command", "l8_paused", "PAUSE"),
+        ]
