@@ -117,7 +117,16 @@ class CommandAuth:
         nc_cmd = neutralize(raw.command)
         nc_nonce = neutralize(raw.nonce)
         nc_payload = neutralize(raw.payload)
-        if not nc_chat or not nc_cmd or not nc_nonce or not nc_nonce.isdigit():
+        if not nc_chat or not nc_cmd or not nc_nonce:
+            return AuthResult(False, REASON_MALFORMED)
+        # Nonce must be a base-10 ASCII integer: str.isdigit() also accepts unicode digits
+        # (superscripts etc.) that int() rejects -- gate isascii() too, or gate 5's int() crashes.
+        if not (nc_nonce.isascii() and nc_nonce.isdigit()):
+            return AuthResult(False, REASON_MALFORMED)
+        # Reject the "|" canonical-message delimiter in any plumbing field: neutralize does NOT
+        # strip it, and an unescaped "|" makes canonical_message ambiguous (two distinct tuples
+        # -> one MAC). nonce is already ASCII-digits-only above, so this bites chat/command.
+        if "|" in nc_chat or "|" in nc_cmd or "|" in nc_nonce:
             return AuthResult(False, REASON_MALFORMED)
         # Gate 2 -- chat-id allowlist (the FIRST semantic check).
         if self._allow.get(nc_chat) is None:
