@@ -526,3 +526,44 @@ def test_rotation_new_secret_sig_authenticates_after_rotate(tmp_path):
     new_signed = _signed_rot("c1", "KILL", "", "1", secret=b"new-secret")
     result = auth.authenticate(new_signed)
     assert result.ok is True and result.command == "KILL"
+
+
+def _signed_neut(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_neutralize_strips_zero_width_from_command_before_dispatch(tmp_path):
+    # Kills: mutation removing neutralize() on the command; a zero-width-joiner-laced "KI<ZWJ>LL" would
+    # otherwise miss the command set. The signed helper neutralizes before signing, so a raw laced command
+    # that neutralizes to "KILL" must authenticate with command=="KILL".
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    laced_cmd = "KI‍LL"                        # ZWJ (Cf) inside KILL
+    raw = _signed_neut("c1", laced_cmd, "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "KILL"
+
+
+def test_neutralize_strips_control_char_from_chat_id_before_allowlist(tmp_path):
+    # Kills: mutation removing neutralize() on chat_id; a control-char-laced id that neutralizes to an
+    # allowlisted id must match the allowlist (and the returned chat_id is the clean form).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    laced_chat = "c\x001"                           # NUL (Cc) inside c1
+    raw = _signed_neut(laced_chat, "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.chat_id == "c1"
+
+
+def test_neutralize_returned_command_carries_no_control_chars(tmp_path):
+    # Kills: mutation returning raw.command instead of the neutralized nc_cmd in the ok AuthResult
+    # (a laced command string could otherwise flow to the __apply map / audit detail).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = _signed_neut("c1", "PAU​SE", "", "1")   # ZWSP (Cf) inside PAUSE
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "PAUSE"
+    assert "​" not in result.command
