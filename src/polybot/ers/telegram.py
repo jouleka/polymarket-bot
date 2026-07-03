@@ -52,12 +52,21 @@ class TelegramController:
                     detail=f"{result.command}:{exc}")
 
     def notify(self, text):
-        # Best-effort; the alerts-down->HALT counter lands in S4.6c. Placeholder keeps the
-        # public surface == {drain, notify} for the B1 sweep; C-tasks flesh out the body.
+        """Best-effort fire-and-forget alert over the (fake) transport. NEVER raises into the
+        caller/loop: a send that returns False OR raises is counted as ONE consecutive failure.
+        A success resets the run to zero. When the CONSECUTIVE-failure run reaches the
+        alerts-down threshold, the top-level fail-safe fires: HALTED(l8_alerts_down)
+        (persistent alerts-down means the operator is blind -> stop the bot). Returns None."""
         try:
-            self.__transport.send(text)
+            ok = self.__transport.send(text)
         except Exception:
-            pass
+            ok = False
+        if ok:
+            self.__notify_fails = 0
+        else:
+            self.__notify_fails += 1
+            if self.__notify_fails >= self.__threshold:
+                self.__ctl.set_state(HALTED, reason=REASON_L8_ALERTS_DOWN)
 
     def __reason_for(self, command):
         return _REASON_FOR_COMMAND[command]
