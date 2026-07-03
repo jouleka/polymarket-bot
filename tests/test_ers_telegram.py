@@ -395,3 +395,31 @@ def test_notify_success_after_failures_resets_the_consecutive_counter(tmp_path):
         # 4 total failures but never 3 IN A ROW -> no halt; the success reset the run.
         assert ctl.state() == _safety.RUNNING
         assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
+
+
+def test_notify_false_send_does_not_raise_into_caller(tmp_path):
+    # Kills: a `raise` on a False send; notify propagating the transport's soft-failure to the loop.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False])          # one soft failure, below threshold
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        result = tg.notify("degraded")                 # MUST NOT raise
+        assert result is None
+        assert transport.sent == ["degraded"]
+        assert ctl.state() == _safety.RUNNING          # one failure < threshold -> no halt yet
+
+
+def test_notify_raising_send_is_caught_and_counted_not_propagated(tmp_path):
+    # Kills: an uncaught exception from send() escaping notify(); a raising send NOT counting
+    #        toward alerts-down (a bare `try/except: pass` that forgets to increment the counter).
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        # Two raises with threshold=2 -> the SECOND consecutive raise must trip the halt, proving
+        # a raising send is both (a) swallowed and (b) counted exactly like a False send.
+        transport = _CFlakyTransport(["raise", "raise"])
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=2)
+        tg.notify("boom-1")                            # raise #1 caught, counted (1 < 2, no halt)
+        assert ctl.state() == _safety.RUNNING
+        tg.notify("boom-2")                            # raise #2 caught, counted (2 >= 2 -> halt)
+        assert ctl.state() == _safety.HALTED
+        assert transport.sent == ["boom-1", "boom-2"]  # both sends were attempted, neither escaped
