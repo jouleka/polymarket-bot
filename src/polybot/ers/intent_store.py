@@ -135,6 +135,16 @@ class IntentStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blacklist (
+                bl_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                at           INTEGER NOT NULL,
+                target_kind  TEXT    NOT NULL,
+                target_value TEXT    NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def propose_trade(self, intent_id, *, token_id, condition_id, event_id, side,
@@ -205,9 +215,10 @@ class IntentStore:
 
     def record_op_event(self, *, kind, reason, detail=""):
         """Append an IMMUTABLE op/kill/heartbeat audit row (S4.1). ``kind`` in
-        {state_change, kill, pause, flatten, heartbeat, cancel_all, caps_swap}; ``reason`` is a REASON_* code
-        or a free-form string. Append-only + the shared monotonic stamp, mirroring intent_audit,
-        so the restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
+        {state_change, kill, pause, flatten, heartbeat, cancel_all, caps_swap, l8_command,
+        l8_refused, l8_blacklist}; ``reason`` is a REASON_* code or a free-form string.
+        Append-only + the shared monotonic stamp, mirroring intent_audit, so the
+        restart-reconcile (S4.5) can replay the op timeline crash-consistently."""
         self._conn.execute(
             "INSERT INTO op_audit (at, kind, reason, detail) VALUES (?, ?, ?, ?)",
             (self._stamper.stamp(), kind, reason, detail),
@@ -262,6 +273,23 @@ class IntentStore:
         ).fetchall()
         return [{"at": r[0], "wall_at": r[1], "kind": r[2], "token_id": r[3],
                  "amount": Decimal(r[4])} for r in rows]
+
+    def record_blacklist(self, *, target_kind, target_value):
+        """Append an IMMUTABLE blacklist row (S4.6d). The store is DUMB: it records ANY
+        target_kind string -- the TelegramController.__apply validates the kind in
+        {wallet, market, source} and raises BEFORE calling this. Append-only + the shared
+        monotonic stamp; commit per write (mirrors record_op_event / record_fill)."""
+        self._conn.execute(
+            "INSERT INTO blacklist (at, target_kind, target_value) VALUES (?, ?, ?)",
+            (self._stamper.stamp(), target_kind, target_value),
+        )
+        self._conn.commit()
+
+    def blacklist_log(self):
+        rows = self._conn.execute(
+            "SELECT at, target_kind, target_value FROM blacklist ORDER BY bl_id"
+        ).fetchall()
+        return [{"at": r[0], "target_kind": r[1], "target_value": r[2]} for r in rows]
 
     def close(self):
         self._conn.close()

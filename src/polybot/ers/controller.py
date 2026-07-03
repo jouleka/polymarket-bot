@@ -23,7 +23,7 @@ from polybot.ers.service import process_pending
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
                  heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
-                 clock):
+                 telegram=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -46,6 +46,10 @@ class ERSController:
         # lossbreakers (S4.7d seam): the opt-in realized-loss breakers consulted each cycle
         # AFTER the L5 anomaly block. lossbreakers=None (the default) == today byte-for-byte.
         self._lossbreakers = lossbreakers
+        # telegram (S4.6d seam): the opt-in L8 TelegramController drained at the TOP of
+        # run_cycle (ahead of even beat/anomaly) so an operator KILL dominates the cycle.
+        # telegram=None (the default) == pre-S4.6 byte-for-byte.
+        self._telegram = telegram
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -59,6 +63,11 @@ class ERSController:
         """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
         process_pending(controller=...). Returns the updated portfolio (threaded for the
         next cycle)."""
+        # S4.6d: drain authenticated Telegram commands FIRST -- ahead of even the heartbeat
+        # beat / L5 anomaly / loss consults -- so an operator KILL dominates THIS cycle (the
+        # HALTED verdict then blocks every pending intent). telegram=None == today (no drain).
+        if self._telegram is not None:
+            self._telegram.drain()
         if self._heartbeat is not None:
             self._heartbeat.beat()
         if self._anomaly is not None:

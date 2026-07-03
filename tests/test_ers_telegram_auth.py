@@ -1,0 +1,611 @@
+"""S4.6a — the L8 auth core (telegram_auth.py) + the new safety.py reason constants."""
+from polybot.ers import safety as _safety
+
+
+def test_new_l8_reason_constants_exist_with_exact_values():
+    # Kills: mutation deleting/renaming any of the 4 NEW S4.6 reason constants, or drifting a value.
+    assert _safety.REASON_L8_RESUME == "l8_resume"
+    assert _safety.REASON_L8_LOWER_CAPS == "l8_lower_caps"
+    assert _safety.REASON_L8_BLACKLIST == "l8_blacklist"
+    assert _safety.REASON_L8_ALERTS_DOWN == "l8_alerts_down"
+
+
+def test_preexisting_l8_reason_constants_unchanged():
+    # Kills: mutation that accidentally edits the S4.1 constants while adding the new ones.
+    assert _safety.REASON_L8_KILL == "l8_kill"
+    assert _safety.REASON_L8_PAUSED == "l8_paused"
+    assert _safety.REASON_OP_FLATTEN == "op_flatten"
+
+
+import dataclasses
+
+import pytest
+
+from polybot.ers.telegram_auth import RawMessage, AuthResult
+
+
+def test_rawmessage_is_frozen_dataclass_with_exact_fields():
+    # Kills: mutation making RawMessage mutable, or dropping/renaming a field, or reordering sig off bytes.
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"\x00\x01")
+    assert dataclasses.is_dataclass(raw)
+    assert raw.chat_id == "c1" and raw.command == "KILL" and raw.payload == ""
+    assert raw.nonce == "1" and raw.sig == b"\x00\x01"
+    names = [f.name for f in dataclasses.fields(raw)]
+    assert names == ["chat_id", "command", "payload", "nonce", "sig"]
+
+
+def test_rawmessage_is_immutable():
+    # Kills: mutation dropping frozen=True (an untrusted inbound record must not be mutable in place).
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        raw.command = "RESUME"
+
+
+def test_authresult_defaults_and_fields():
+    # Kills: mutation changing AuthResult field defaults (command/payload=None, chat_id="") or their order.
+    r = AuthResult(True, "ok")
+    assert r.ok is True and r.reason == "ok"
+    assert r.command is None and r.payload is None and r.chat_id == ""
+    names = [f.name for f in dataclasses.fields(r)]
+    assert names == ["ok", "reason", "command", "payload", "chat_id"]
+
+
+def test_authresult_is_immutable():
+    # Kills: mutation dropping frozen=True on AuthResult.
+    r = AuthResult(False, "l8_bad_sig", chat_id="c1")
+    assert r.chat_id == "c1"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.ok = True
+
+
+from polybot.ers.telegram_auth import TelegramTransport
+
+
+def test_transport_protocol_is_runtime_checkable_on_duck_typed_fake():
+    # Kills: mutation dropping @runtime_checkable (isinstance against a Protocol would raise TypeError).
+    class _FakeTransport:
+        def poll(self):
+            return []
+
+        def send(self, text):
+            return True
+
+    assert isinstance(_FakeTransport(), TelegramTransport)
+
+
+def test_transport_protocol_rejects_object_missing_send():
+    # Kills: mutation renaming/removing `send` from the Protocol (an incomplete transport would pass).
+    class _PollOnly:
+        def poll(self):
+            return []
+
+    assert not isinstance(_PollOnly(), TelegramTransport)
+
+
+from polybot.ers.telegram_auth import SecretHolder
+
+
+def test_secret_holder_current_returns_initial_secret():
+    # Kills: mutation making current() return a constant / the wrong field.
+    holder = SecretHolder(b"seed-secret")
+    assert holder.current() == b"seed-secret"
+
+
+def test_secret_holder_rotate_swaps_current():
+    # Kills: mutation making rotate() a no-op (cross-restart-replay defense relies on the swap).
+    holder = SecretHolder(b"old")
+    assert holder.current() == b"old"
+    holder.rotate(b"new")
+    assert holder.current() == b"new"
+
+
+from polybot.ers import telegram_auth as _auth
+
+
+def test_command_set_is_exactly_the_six_safety_verbs():
+    # Kills: mutation adding an OPEN/PLACE verb to the command set, or dropping a safety verb.
+    assert _auth._COMMAND_SET == frozenset(
+        {"KILL", "PAUSE", "RESUME", "FLATTEN", "LOWER_CAPS", "BLACKLIST"}
+    )
+
+
+def test_command_set_is_a_frozenset():
+    # Kills: mutation making the command set a mutable set (a runtime .add of "OPEN" would then be possible).
+    assert isinstance(_auth._COMMAND_SET, frozenset)
+
+
+def test_command_set_excludes_open_trade_verbs():
+    # Kills: mutation that widens the set; an explicit pin that no trade verb is dispatchable.
+    for forbidden in ("OPEN", "PLACE", "OPEN_TRADE", "SIGN", "SUBMIT", "BUY", "SELL"):
+        assert forbidden not in _auth._COMMAND_SET
+
+
+def test_refusal_reason_constants_exact_values():
+    # Kills: mutation drifting any of the five auth-refusal reason strings.
+    assert _auth.REASON_MALFORMED == "l8_malformed"
+    assert _auth.REASON_BAD_CHAT == "l8_bad_chat"
+    assert _auth.REASON_UNKNOWN_CMD == "l8_unknown_cmd"
+    assert _auth.REASON_BAD_SIG == "l8_bad_sig"
+    assert _auth.REASON_REPLAY == "l8_replay"
+
+
+from polybot.ers.telegram_auth import canonical_message
+
+
+def test_canonical_message_is_pipe_joined_fixed_order():
+    # Kills: mutation reordering fields, changing the separator, or dropping the payload from the MAC input.
+    raw = RawMessage(chat_id="c1", command="KILL", payload="p", nonce="7", sig=b"ignored")
+    assert canonical_message(raw) == b"c1|KILL|p|7"
+
+
+def test_canonical_message_encodes_each_field_and_omits_sig():
+    # Kills: mutation that folds sig into the canonical bytes, or str()s the whole tuple instead of encoding fields.
+    raw = RawMessage(chat_id="chat", command="RESUME", payload="", nonce="42", sig=b"\xff\xff")
+    canonical = canonical_message(raw)
+    assert canonical == b"chat|RESUME||42"     # empty payload -> two adjacent separators
+    assert b"\xff" not in canonical            # the signature is NEVER part of its own input
+
+
+def test_canonical_message_order_is_chat_command_payload_nonce_not_permuted():
+    # Kills: mutation swapping command<->payload or nonce<->payload (a transposition would still be "|"-joined).
+    raw = RawMessage(chat_id="A", command="B", payload="C", nonce="9", sig=b"")
+    assert canonical_message(raw) == b"A|B|C|9"
+    assert canonical_message(raw) != b"A|C|B|9"
+
+
+import hashlib as _hashlib
+import hmac as _hmac
+
+from polybot.ers.telegram_auth import compute_mac
+
+
+def test_compute_mac_matches_stdlib_hmac_sha256_digest():
+    # Kills: mutation swapping the hash to md5/sha1, or returning hexdigest() instead of digest().
+    canonical = b"c1|KILL|p|7"
+    secret = b"s3cr3t"
+    expected = _hmac.new(secret, canonical, _hashlib.sha256).digest()
+    assert compute_mac(canonical, secret) == expected
+
+
+def test_compute_mac_is_deterministic():
+    # Kills: mutation introducing per-call salt/nonce into the MAC (verify would never match).
+    assert compute_mac(b"m", b"k") == compute_mac(b"m", b"k")
+
+
+def test_compute_mac_depends_on_secret():
+    # Kills: mutation ignoring the secret arg (all messages would share one MAC -> forgeable).
+    assert compute_mac(b"m", b"k1") != compute_mac(b"m", b"k2")
+
+
+def test_compute_mac_depends_on_message():
+    # Kills: mutation ignoring the canonical arg (any message would verify under a known MAC).
+    assert compute_mac(b"m1", b"k") != compute_mac(b"m2", b"k")
+
+
+from polybot.ers.telegram_auth import CommandAuth, compute_mac, canonical_message, RawMessage, SecretHolder
+from polybot.ers import telegram_auth as _auth
+
+
+# --- helpers (copied verbatim into A8..A13 gate tests) ---------------------------------------
+def _holder(secret=b"unit-secret"):
+    return SecretHolder(secret)
+
+
+def _auth_obj(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=_holder(secret))
+
+
+def _signed(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    """Build a RawMessage with a VALID signature over the NEUTRALIZED plumbing fields + raw
+    payload (mirrors CommandAuth's gate-4 canonical construction)."""
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate1_malformed_empty_chat_id_refuses(tmp_path):
+    # Kills: mutation removing the empty-nc_chat structure check (an empty id must never reach the allowlist).
+    auth = _auth_obj()
+    raw = _signed("", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+def test_gate1_malformed_non_integer_nonce_refuses(tmp_path):
+    # Kills: mutation removing the base-10-int nonce check (a non-numeric nonce would crash gate 5's int()).
+    auth = _auth_obj()
+    raw = _signed("c1", "KILL", "", "not-a-number")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+def test_gate1_accept_shape_wellformed_message_passes_structure(tmp_path):
+    # Kills: over-tight gate 1 that rejects a legitimate well-formed message. Boundary PAIR to the two refuses.
+    auth = _auth_obj()
+    raw = _signed("c1", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.reason == "ok"
+    assert result.command == "KILL" and result.chat_id == "c1"
+
+
+def _holder_g2(secret=b"unit-secret"):
+    return SecretHolder(secret)
+
+
+def _auth_obj_g2(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=_holder_g2(secret))
+
+
+def _signed_g2(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate2_unknown_chat_id_refuses_bad_chat(tmp_path):
+    # Kills: mutation deleting the allowlist gate (`self._allow.get(...) is None`), which would let an
+    # un-allowlisted chat reach the HMAC gate. RED if gate 2 is removed: reason becomes l8_bad_sig, not l8_bad_chat.
+    auth = _auth_obj_g2(allowlist={"c1": "operator"})
+    raw = _signed_g2("intruder", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_CHAT
+    assert result.chat_id == "intruder"
+
+
+def test_gate2_allowlisted_chat_id_passes_gate2(tmp_path):
+    # Kills: over-tight gate 2 that rejects an allowlisted id. Accept half of the pair.
+    auth = _auth_obj_g2(allowlist={"c1": "operator"})
+    raw = _signed_g2("c1", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.chat_id == "c1"
+
+
+def _auth_obj_g3(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g3(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate3_open_trade_verb_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation widening dispatch to a non-safety verb. An "OPEN" command must be refused at gate 3.
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "OPEN", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+    assert result.chat_id == "c1"
+
+
+def test_gate3_place_verb_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation that would let a "PLACE" trade verb through (defense-in-depth with the structural sweep).
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "PLACE", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+
+
+def test_gate3_lowercase_kill_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation case-folding the command (the set is case-SENSITIVE; "kill" must not match "KILL").
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "kill", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+
+
+def test_gate3_known_verb_passes_gate3(tmp_path):
+    # Kills: over-tight gate 3 that rejects a valid safety verb. Accept half of the pair.
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "PAUSE", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "PAUSE"
+
+
+def _auth_obj_g4(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g4(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate4_signature_under_wrong_secret_refuses_bad_sig(tmp_path):
+    # Kills: mutation dropping the HMAC gate. A sig computed under a DIFFERENT secret must be refused.
+    auth = _auth_obj_g4(secret=b"the-real-secret")
+    raw = _signed_g4("c1", "KILL", "", "1", secret=b"attacker-secret")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_SIG
+    assert result.chat_id == "c1"
+
+
+def test_gate4_garbage_signature_refuses_bad_sig(tmp_path):
+    # Kills: mutation that accepts any sig (e.g. `if True:` short-circuit). A junk sig must be refused.
+    auth = _auth_obj_g4(secret=b"the-real-secret")
+    good = _signed_g4("c1", "KILL", "", "1", secret=b"the-real-secret")
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"wrong")
+    assert auth.authenticate(raw).reason == _auth.REASON_BAD_SIG
+    # sanity: the same message with the RIGHT sig authenticates (fresh auth to avoid nonce state)
+    assert _auth_obj_g4(secret=b"the-real-secret").authenticate(good).ok is True
+
+
+def test_gate4_correct_signature_passes_gate4(tmp_path):
+    # Kills: over-tight gate 4 rejecting a correctly-signed message. Accept half of the pair.
+    auth = _auth_obj_g4(secret=b"matching")
+    raw = _signed_g4("c1", "FLATTEN", "", "1", secret=b"matching")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "FLATTEN"
+
+
+def _auth_obj_ct(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_ct(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate4_correct_length_but_wrong_sig_refuses(tmp_path):
+    # Kills: mutation comparing sig by length or truthiness instead of value; a 32-byte-but-wrong sig must refuse.
+    auth = _auth_obj_ct(secret=b"the-real-secret")
+    good = _signed_ct("c1", "KILL", "", "1", secret=b"the-real-secret")
+    assert len(good.sig) == 32                       # HMAC-SHA256 digest length
+    flipped = bytes([good.sig[0] ^ 0x01]) + good.sig[1:]   # same length, one bit flipped
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=flipped)
+    assert auth.authenticate(raw).reason == _auth.REASON_BAD_SIG
+
+
+def test_gate4_uses_compare_digest_not_equality(monkeypatch, tmp_path):
+    # Kills: mutation replacing hmac.compare_digest with `==` (drops constant-time comparison).
+    # We assert the module-level hmac.compare_digest is the function actually consulted in gate 4:
+    # patching it to a sentinel-recording spy must be hit exactly once during a verify.
+    import polybot.ers.telegram_auth as mod
+    calls = {"n": 0}
+    real = mod.hmac.compare_digest
+
+    def _spy(a, b):
+        calls["n"] += 1
+        return real(a, b)
+
+    monkeypatch.setattr(mod.hmac, "compare_digest", _spy)
+    auth = _auth_obj_ct(secret=b"matching")
+    raw = _signed_ct("c1", "KILL", "", "1", secret=b"matching")
+    auth.authenticate(raw)
+    assert calls["n"] == 1
+
+
+def _auth_obj_g5(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator", "c2": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g5(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate5_equal_nonce_is_replay_refused(tmp_path):
+    # Kills: mutation using `<` instead of `<=` in the replay check (an exact-replay nonce would slip through).
+    auth = _auth_obj_g5()
+    first = auth.authenticate(_signed_g5("c1", "KILL", "", "5"))
+    assert first.ok is True
+    second = auth.authenticate(_signed_g5("c1", "KILL", "", "5"))   # same nonce 5
+    assert second.ok is False and second.reason == _auth.REASON_REPLAY
+
+
+def test_gate5_lower_nonce_is_replay_refused(tmp_path):
+    # Kills: mutation that records but does not compare (an out-of-order lower nonce would authenticate).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "10")).ok is True
+    down = auth.authenticate(_signed_g5("c1", "KILL", "", "9"))
+    assert down.ok is False and down.reason == _auth.REASON_REPLAY
+
+
+def test_gate5_strictly_greater_nonce_accepts(tmp_path):
+    # Kills: over-tight gate 5 rejecting a legitimately-advancing nonce. Boundary PAIR to the equal-refuse.
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "5")).ok is True
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "6")).ok is True
+
+
+def test_gate5_nonce_is_per_chat_id_independent(tmp_path):
+    # Kills: mutation using a single global last-nonce instead of per-chat-id (chat A's 9 must not gate chat B).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "9")).ok is True
+    # c2 has never sent -> its sentinel is -1, so nonce 1 must be accepted despite c1 being at 9.
+    assert auth.authenticate(_signed_g5("c2", "KILL", "", "1")).ok is True
+
+
+def test_gate5_first_nonce_zero_accepts(tmp_path):
+    # Kills: mutation setting the unseen sentinel to 0 instead of -1 (nonce 0 would falsely be a replay).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "0")).ok is True
+
+
+def _auth_obj_ord(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def test_order_bad_chat_before_bad_sig(tmp_path):
+    # Kills: mutation reordering the HMAC gate ahead of the allowlist gate. A message with BOTH a
+    # non-allowlisted chat-id AND a garbage sig must report l8_bad_chat (chat checked first), proving
+    # HMAC is never even computed for an unknown chat.
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="intruder", command="KILL", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.reason == _auth.REASON_BAD_CHAT     # NOT l8_bad_sig
+
+
+def test_order_unknown_cmd_before_bad_sig(tmp_path):
+    # Kills: mutation reordering HMAC ahead of the command-set gate. An unknown command with a bad sig
+    # must report l8_unknown_cmd (command checked before the crypto).
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="c1", command="NOPE", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.reason == _auth.REASON_UNKNOWN_CMD  # NOT l8_bad_sig
+
+
+def test_order_malformed_before_bad_chat(tmp_path):
+    # Kills: mutation reordering the allowlist gate ahead of the structure gate. An empty chat-id must
+    # report l8_malformed (structure first), not l8_bad_chat.
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="", command="KILL", payload="", nonce="1", sig=b"garbage")
+    assert auth.authenticate(raw).reason == _auth.REASON_MALFORMED
+
+
+def _signed_rot(chat_id, command, payload, nonce, secret):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_rotation_old_secret_sig_fails_after_rotate(tmp_path):
+    # Kills: mutation making authenticate() read a cached/stale secret instead of secret_holder.current().
+    # After rotate(new), a message validly signed under the OLD secret must now fail l8_bad_sig.
+    holder = SecretHolder(b"old-secret")
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=holder)
+    old_signed = _signed_rot("c1", "KILL", "", "1", secret=b"old-secret")
+    holder.rotate(b"new-secret")
+    result = auth.authenticate(old_signed)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_SIG
+
+
+def test_rotation_new_secret_sig_authenticates_after_rotate(tmp_path):
+    # Kills: over-tight rotation that breaks the live path. A message signed under the NEW secret
+    # must authenticate after rotate. Accept half of the pair.
+    holder = SecretHolder(b"old-secret")
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=holder)
+    holder.rotate(b"new-secret")
+    new_signed = _signed_rot("c1", "KILL", "", "1", secret=b"new-secret")
+    result = auth.authenticate(new_signed)
+    assert result.ok is True and result.command == "KILL"
+
+
+def _signed_neut(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_neutralize_strips_zero_width_from_command_before_dispatch(tmp_path):
+    # Kills: mutation removing neutralize() on the command; a zero-width-joiner-laced "KI<ZWJ>LL" would
+    # otherwise miss the command set. The signed helper neutralizes before signing, so a raw laced command
+    # that neutralizes to "KILL" must authenticate with command=="KILL".
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    laced_cmd = "KI‍LL"                        # ZWJ (Cf) inside KILL
+    raw = _signed_neut("c1", laced_cmd, "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "KILL"
+
+
+def test_neutralize_strips_control_char_from_chat_id_before_allowlist(tmp_path):
+    # Kills: mutation removing neutralize() on chat_id; a control-char-laced id that neutralizes to an
+    # allowlisted id must match the allowlist (and the returned chat_id is the clean form).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    laced_chat = "c\x001"                           # NUL (Cc) inside c1
+    raw = _signed_neut(laced_chat, "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.chat_id == "c1"
+
+
+def test_neutralize_returned_command_carries_no_control_chars(tmp_path):
+    # Kills: mutation returning raw.command instead of the neutralized nc_cmd in the ok AuthResult
+    # (a laced command string could otherwise flow to the __apply map / audit detail).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = _signed_neut("c1", "PAU​SE", "", "1")   # ZWSP (Cf) inside PAUSE
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "PAUSE"
+    assert "​" not in result.command
+
+
+# --- S4.6a opus security review pins (HIGH / MEDIUM / LOW) ------------------------------------
+def test_gate1_unicode_digit_nonce_refuses_malformed_not_raises(tmp_path):
+    # MUTATION KILLED = isdigit()-only lets a unicode-digit nonce reach int() and crash the auth core.
+    # "²" (superscript two, category No) is str.isdigit()==True but int() REJECTS it. neutralize keeps
+    # it, so a validly-signed message with nonce="²" passes gates 1-4 then crashes at gate 5's int()
+    # unless gate 1 also requires isascii(). Must return l8_malformed, NOT raise ValueError.
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = _signed_neut("c1", "KILL", "", "²")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+class _BoomHolder:
+    # A SecretHolder-shaped double whose current() raises -- models an internal backend hiccup.
+    def current(self):
+        raise RuntimeError("secret backend down")
+
+    def rotate(self, new_secret):
+        raise RuntimeError("secret backend down")
+
+
+def test_authenticate_never_returns_ok_true_when_an_internal_component_raises(tmp_path):
+    # MUTATION KILLED = wrapping the body in a fail-OPEN try/except that returns ok=True on any internal
+    # error would let a garbage-sig message authenticate when the secret backend hiccups. The current
+    # code is fail-closed-by-propagation: a garbage sig reaches gate 4, current() raises, and the
+    # exception propagates -- it MUST NOT return ok=True. Pin the propagate-don't-swallow contract.
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=_BoomHolder())
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"garbage")
+    with pytest.raises(RuntimeError):
+        auth.authenticate(raw)
+
+
+def test_gate1_pipe_delimiter_in_chat_id_refuses_malformed(tmp_path):
+    # MUTATION KILLED = an unescaped "|" in a plumbing field makes canonical_message ambiguous
+    # (two distinct tuples -> one MAC). neutralize does NOT strip "|" (category Sm), so gate 1 must
+    # reject it explicitly. chat_id="a|b" must return l8_malformed (NOT reach gate 2 -> l8_bad_chat).
+    auth = CommandAuth(allowlist={"c1": "operator"}, secret_holder=SecretHolder(b"unit-secret"))
+    raw = RawMessage(chat_id="a|b", command="KILL", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED

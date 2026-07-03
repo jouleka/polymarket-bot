@@ -54,6 +54,11 @@ REASON_CONSECUTIVE_LOSS = "consecutive_loss"        # trailing realized-loss str
 REASON_RAMP_DOWN = "ramp_down"                      # swap_caps audit reason for a ratchet step
 REASON_FLOW_GATE_ERROR = "flow_gate_error"          # the flow gate raised -> fail-closed verdict block
 REASON_FLOW_DATA_ERROR = "flow_data_error"          # flow_journal corruption -> loss breakers HALT
+# --- S4.6 reason codes (NET-NEW; the L8 TelegramController vocabulary) ------------------------
+REASON_L8_RESUME = "l8_resume"              # operator RESUME: PAUSED or HALTED -> RUNNING (Fork 1)
+REASON_L8_LOWER_CAPS = "l8_lower_caps"      # operator LOWER_CAPS: swap_caps(step_weekly(active_caps))
+REASON_L8_BLACKLIST = "l8_blacklist"        # operator BLACKLIST: durable (target_kind, target_value)
+REASON_L8_ALERTS_DOWN = "l8_alerts_down"    # notify() persistent failure -> fail-safe HALT
 
 
 @dataclass(frozen=True)
