@@ -270,3 +270,52 @@ def test_gate2_allowlisted_chat_id_passes_gate2(tmp_path):
     raw = _signed_g2("c1", "KILL", "", "1")
     result = auth.authenticate(raw)
     assert result.ok is True and result.chat_id == "c1"
+
+
+def _auth_obj_g3(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g3(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate3_open_trade_verb_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation widening dispatch to a non-safety verb. An "OPEN" command must be refused at gate 3.
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "OPEN", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+    assert result.chat_id == "c1"
+
+
+def test_gate3_place_verb_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation that would let a "PLACE" trade verb through (defense-in-depth with the structural sweep).
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "PLACE", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+
+
+def test_gate3_lowercase_kill_refuses_unknown_cmd(tmp_path):
+    # Kills: mutation case-folding the command (the set is case-SENSITIVE; "kill" must not match "KILL").
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "kill", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_UNKNOWN_CMD
+
+
+def test_gate3_known_verb_passes_gate3(tmp_path):
+    # Kills: over-tight gate 3 that rejects a valid safety verb. Accept half of the pair.
+    auth = _auth_obj_g3()
+    raw = _signed_g3("c1", "PAUSE", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "PAUSE"
