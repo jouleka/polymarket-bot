@@ -423,3 +423,36 @@ def test_notify_raising_send_is_caught_and_counted_not_propagated(tmp_path):
         tg.notify("boom-2")                            # raise #2 caught, counted (2 >= 2 -> halt)
         assert ctl.state() == _safety.HALTED
         assert transport.sent == ["boom-1", "boom-2"]  # both sends were attempted, neither escaped
+
+
+def test_notify_two_consecutive_failures_below_default_threshold_do_not_halt(tmp_path):
+    # Kills (boundary, the "no" half of the pair): an off-by-one `>= threshold-1` that would
+    #        halt at the 2nd failure under the default threshold of 3.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False, False])   # exactly 2 consecutive failures
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        tg.notify("f1")
+        tg.notify("f2")
+        assert ctl.state() == _safety.RUNNING          # 2 < 3 -> NO halt
+        # No state_change row beyond the initial RUNNING (the halt would append one).
+        assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
+
+
+def test_notify_third_consecutive_failure_at_default_threshold_halts_alerts_down(tmp_path):
+    # Kills (boundary, the "yes" half): a `> threshold` that would NEVER fire at exactly 3;
+    #        the wrong halt reason; the missing state_change audit row.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False, False, False])   # the 3rd trips it
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        tg.notify("f1")
+        tg.notify("f2")
+        assert ctl.state() == _safety.RUNNING          # still running after 2
+        tg.notify("f3")                                # the 3rd consecutive failure
+        assert ctl.state() == _safety.HALTED           # 3 >= 3 -> HALTED
+        # set_state wrote the alerts-down transition row (the ONLY audit trail of the halt).
+        assert _c_states(store) == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_alerts_down", "HALTED"),
+        ]
