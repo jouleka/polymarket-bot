@@ -720,3 +720,30 @@ def test_telegram_none_default_leaves_the_cycle_exactly_as_today(tmp_path):
         rc.run_cycle()
         assert store.get("i1").status == "ACCEPTED"
         assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
+
+
+def test_run_cycle_drains_first_so_an_authenticated_kill_halts_before_any_intent_processes(tmp_path):
+    # DESIGN §2 step 0 + invariant 7 (DOMINANCE): drain is run_cycle's FIRST step, so a queued
+    # authenticated KILL flips the loop HALTED at the top -- and the SAME cycle's process_pending
+    # then REJECTs the pending intent under l8_kill and places NOTHING (the S4.4/S4.7 drain-at-top
+    # pattern, mirroring test_run_cycle_starts_halted_and_blocks). Kills: draining AFTER
+    # beat/anomaly/process_pending (the KILL would land a cycle late and the intent would ACCEPT
+    # first), or not wiring the seam into run_cycle at all.
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    from polybot.ers.service import PaperSigner
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.RUNNING, reason="clean_reconcile")   # a LIVE loop
+        store.propose_trade("i1", **_P_seam)
+        signer = PaperSigner()
+        transport = _FakeTransport_d([_signed_d("ops", "KILL", "", "1")])
+        tc = _tc_d(store, ctl, transport)
+        rc = _ERS_seam(store=store, book_for={"t1": _book_seam("0.50")}.get, caps=RiskCaps(),
+                       signer=signer, controller=ctl, telegram=tc, clock=lambda: 0)
+        rc.run_cycle()
+        assert ctl.state() == _safety.HALTED                        # KILL applied at the top
+        assert store.get("i1").status == "REJECTED"                 # ...before the intent processed
+        assert store.get("i1").decision_reason == "l8_kill"         # under the KILL's stored reason
+        assert signer.placed == []                                  # NOTHING was placed this cycle
