@@ -659,3 +659,27 @@ def test_blacklist_verb_records_the_parsed_kind_value_and_audits_l8_blacklist(tm
         # The drain audited exactly the l8_command / l8_blacklist row for BLACKLIST.
         assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
             ("l8_command", "l8_blacklist", "BLACKLIST")]
+
+
+def test_blacklist_unknown_kind_is_isolated_as_l8_apply_error_and_touches_no_state(tmp_path):
+    # Refuse-partner of D4: an AUTHENTICATED BLACKLIST with a kind outside {wallet,market,
+    # source} makes __apply raise ValueError, which drain's per-message isolation catches +
+    # audits kind="l8_command" reason="l8_apply_error" detail="BLACKLIST:<exc>". NO blacklist
+    # row is written and the op-state is untouched (still boot HALTED). Kills: over-widening
+    # the kind whitelist to accept the bad kind, or letting the raise escape drain (which
+    # would crash the runloop), or recording a row before the guard.
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot: HALTED
+        transport = _FakeTransport_d([_signed_d("ops", "BLACKLIST", "banana:x", "1")])
+        tc = _tc_d(store, ctl, transport)
+        tc.drain()                                   # must NOT raise
+        assert store.blacklist_log() == []           # nothing recorded
+        assert ctl.state() == _safety.HALTED         # op-state untouched
+        rows = store.op_audit_log()
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "l8_command"
+        assert rows[0]["reason"] == "l8_apply_error"
+        assert rows[0]["detail"].startswith("BLACKLIST:")
