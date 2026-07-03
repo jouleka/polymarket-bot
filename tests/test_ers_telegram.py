@@ -683,3 +683,40 @@ def test_blacklist_unknown_kind_is_isolated_as_l8_apply_error_and_touches_no_sta
         assert rows[0]["kind"] == "l8_command"
         assert rows[0]["reason"] == "l8_apply_error"
         assert rows[0]["detail"].startswith("BLACKLIST:")
+
+
+# --- S4.6d: the ERSController(telegram=) seam -------------------------------------------------
+from polybot.ers import safety as _safety_seam
+from polybot.ers.controller import ERSController as _ERS_seam
+from polybot.ers.safety import SafetyController as _SC_seam
+from polybot.ers.caps import RiskCaps as _RC_seam
+from polybot.ers.service import PaperSigner as _PS_seam
+from polybot.ingestion.orderbook import LocalBook as _LB_seam
+
+_P_seam = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+               max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+               resolution_summary="", thesis="", citations=())
+
+
+def _book_seam(ask, *, size="1000", bid="0.01"):
+    book = _LB_seam()
+    book.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return book
+
+
+def test_telegram_none_default_leaves_the_cycle_exactly_as_today(tmp_path):
+    # Dormant-by-default: an ERSController WITHOUT the telegram kwarg (None) trades exactly as
+    # before S4.6 -- the intent ACCEPTs, no extra audit rows beyond the setup state_change.
+    # Expected GREEN from birth (the 840 baseline is the wider proof). Mirrors
+    # test_lossbreakers_none_default_leaves_the_cycle_exactly_as_today. Kills: draining/acting
+    # when the seam is None, or requiring the kwarg.
+    with _store_d(tmp_path) as store:
+        ctl = _SC_seam(caps=_RC_seam(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety_seam.RUNNING, reason="clean_reconcile")
+        store.propose_trade("i1", **_P_seam)
+        signer = _PS_seam()
+        rc = _ERS_seam(store=store, book_for={"t1": _book_seam("0.50")}.get, caps=_RC_seam(),
+                       signer=signer, controller=ctl, clock=lambda: 0)   # telegram unset
+        rc.run_cycle()
+        assert store.get("i1").status == "ACCEPTED"
+        assert [r["kind"] for r in store.op_audit_log()] == ["state_change"]
