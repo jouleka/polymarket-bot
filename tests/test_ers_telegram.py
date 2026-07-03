@@ -523,3 +523,70 @@ def test_notify_does_not_write_its_own_op_audit_row(tmp_path):
         tg.notify("quiet-failure")
         # Only the setup RUNNING row exists; notify wrote NOTHING to op_audit on a sub-threshold fail.
         assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
+
+
+class _CConnDownTransport:
+    """send() raises a NON-RuntimeError (what a real Telegram transport raises when the
+    channel is down). poll()->[] (notify never polls)."""
+    def __init__(self):
+        self.sent = []
+
+    def poll(self):
+        return []
+
+    def send(self, text):
+        self.sent.append(text)
+        raise ConnectionError("channel down")
+
+
+class _CNoneReturnTransport:
+    """send() returns None (a transport with NO explicit return). poll()->[]."""
+    def __init__(self):
+        self.sent = []
+
+    def poll(self):
+        return []
+
+    def send(self, text):
+        self.sent.append(text)
+        return None
+
+
+def test_notify_a_non_runtimeerror_send_exception_is_still_caught_and_counted(tmp_path):
+    # MUTATION KILLED = narrowing `except Exception` to a specific-type tuple lets a live
+    # transport's ConnectionError/TimeoutError propagate into the run loop -- the exact
+    # real-world alerts-down failure. The catch MUST be broad (any Exception), and a caught
+    # raise MUST count toward the alerts-down threshold exactly like a False/raising send.
+    # MUTATION-VERIFY: narrow `except Exception` -> `except RuntimeError` in telegram.py,
+    # confirm THIS test fails (ConnectionError propagates), revert + sweep pycache.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CConnDownTransport()              # send() raises ConnectionError (non-RuntimeError)
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=1)
+        result = tg.notify("channel-down")             # MUST NOT propagate the ConnectionError
+        assert result is None                          # caught, returned normally
+        assert transport.sent == ["channel-down"]      # the send was attempted
+        assert ctl.state() == _safety.HALTED           # 1 >= 1 -> counted AND halted
+        assert _c_states(store) == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_alerts_down", "HALTED"),
+        ]
+
+
+def test_notify_a_none_returning_send_counts_as_a_failure(tmp_path):
+    # MUTATION KILLED = treating a None (no-explicit-return) send as success silently blinds
+    # the fail-safe. `if ok:` is correct (None is falsy -> the failure branch); a mutation to
+    # `if ok is not False:` would take the reset branch on None and never halt.
+    # MUTATION-VERIFY: change `if ok:` to `if ok is not False:`, confirm this test fails
+    # (None takes the reset branch, no halt), revert + sweep pycache.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CNoneReturnTransport()            # send() returns None
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=1)
+        tg.notify("no-return")
+        assert transport.sent == ["no-return"]         # the send was attempted
+        assert ctl.state() == _safety.HALTED           # None is falsy -> counted -> 1 >= 1 -> halt
+        assert _c_states(store) == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_alerts_down", "HALTED"),
+        ]
