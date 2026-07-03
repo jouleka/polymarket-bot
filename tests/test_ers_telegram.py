@@ -319,3 +319,79 @@ def test_apply_lower_caps_a_second_time_is_a_hash_identical_no_op_no_caps_swap_r
             ("l8_command", "l8_lower_caps"),     # first command
             ("l8_command", "l8_lower_caps"),     # second command applied (swap no-op'd, still audited)
         ]
+
+
+# ---------------------------------------------------------------------------
+# S4.6c: notify() best-effort + alerts-down halt (tasks C1-C5)
+# Module-level helpers copied per file (no conftest / no shared fixtures).
+# ---------------------------------------------------------------------------
+from polybot.core.clock import MonotonicStamper
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.caps import RiskCaps
+from polybot.ers import safety as _safety
+from polybot.ers.telegram import TelegramController
+
+
+def _c_store(tmp_path):
+    return IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+
+
+def _c_ctl(store):
+    # SafetyController driven to RUNNING so an alerts-down HALT is an observable transition.
+    ctl = _safety.SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+    ctl.set_state(_safety.RUNNING, reason="clean_reconcile")
+    return ctl
+
+
+class _CStubAuth:
+    """notify() never touches auth; a no-method stub satisfies construction."""
+
+
+class _CFlakyTransport:
+    """poll()->[] (notify never polls). send() replays a scripted sequence of
+    True (success), False (soft failure), or the string "raise" (send raises)."""
+    def __init__(self, script):
+        self._script = list(script)
+        self._i = 0
+        self.sent = []
+
+    def poll(self):
+        return []
+
+    def send(self, text):
+        self.sent.append(text)
+        step = self._script[self._i]
+        self._i += 1
+        if step == "raise":
+            raise RuntimeError("telegram send exploded")
+        return step
+
+
+def _c_states(store):
+    return [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()]
+
+
+def test_notify_success_returns_none_and_does_not_halt(tmp_path):
+    # Kills: notify() returning a truthy/echoed value instead of None; a spurious halt on success.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([True])
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        result = tg.notify("hello operator")
+        assert result is None
+        assert transport.sent == ["hello operator"]      # the text was actually sent
+        assert ctl.state() == _safety.RUNNING            # a success never halts
+
+
+def test_notify_success_after_failures_resets_the_consecutive_counter(tmp_path):
+    # Kills: a CUMULATIVE (not consecutive) counter -- a success in the middle must RESET it,
+    #        so fail,fail,success,fail,fail (4 total, run broken) stays BELOW a threshold of 3.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False, False, True, False, False])
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=3)
+        for _ in range(5):
+            tg.notify("beat")
+        # 4 total failures but never 3 IN A ROW -> no halt; the success reset the run.
+        assert ctl.state() == _safety.RUNNING
+        assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
