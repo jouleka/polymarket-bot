@@ -198,8 +198,9 @@ def compute_mac(canonical, secret) -> bytes            # hmac.new(secret, canoni
 
 # ers/telegram.py  (NET-NEW — the structurally-bounded L8 surface)
 class TelegramController:
-    def __init__(self, controller, store, transport, auth, *, notifier=None,
+    def __init__(self, controller, store, transport, auth, *,
                  alerts_down_threshold=3): ...         # controller/transport name-mangled: __ctl/__transport/__store/__auth
+                                                       # notify() sends via __transport.send (the transport IS the notifier)
     def drain(self) -> None                            # poll -> authenticate -> apply (the six-verb map) -> audit
     def notify(self, text) -> None                     # best-effort send; increments the consecutive-failure counter;
                                                        # threshold crossed -> __ctl.set_state(HALTED, REASON_L8_ALERTS_DOWN)
@@ -265,7 +266,7 @@ a signed risk cap.
 | CommandAuth (allowlist+cmd-set+HMAC+nonce) | ✅ full, fail-closed, constant-time | the real secret VALUE + rotation cadence (deploy-config, off-repo; `rotate()` seam built) |
 | TelegramController + structural bounding | ✅ full + sweep test | — |
 | The six-verb command map | ✅ KILL/PAUSE/RESUME/FLATTEN/LOWER_CAPS/BLACKLIST | — |
-| notify() + alerts-down halt | ✅ best-effort + counter + halt | the heartbeat-stop tie-in to the out-of-band dead-man (deploy) |
+| notify() + alerts-down halt | ✅ best-effort + counter + halt | the heartbeat-stop tie-in to the out-of-band dead-man (deploy) · a `max(1, alerts_down_threshold)` clamp/guard when a deploy passes the kwarg (it is an alerting knob, not a signed cap; `threshold<1` degenerates to halt-on-first-failure = more eager toward safe, so this is hygiene not a hole) |
 | BLACKLIST durable set | ✅ table + record/read + audit | ERS-side enforcement in the sizing path (FOLLOW/detector consumer hard-off — Fork 2) |
 | Transport | ✅ fake (Protocol) | real Telegram bot send/recv (deploy) |
 | RESUME | ✅ operator-trusted (Fork 1) | reconcile-gated RESUME (S9 — reconciler not in runloop; DORMANT in shadow) |
