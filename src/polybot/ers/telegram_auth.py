@@ -79,3 +79,17 @@ REASON_BAD_CHAT = "l8_bad_chat"        # gate 2: chat-id not in the operator all
 REASON_UNKNOWN_CMD = "l8_unknown_cmd"  # gate 3: command not in _COMMAND_SET
 REASON_BAD_SIG = "l8_bad_sig"          # gate 4: HMAC mismatch (constant-time compare)
 REASON_REPLAY = "l8_replay"            # gate 5: nonce <= last-seen for this chat-id
+
+
+def canonical_message(raw) -> bytes:
+    """The HMAC input: b"chat_id|command|payload|nonce" -- fixed field order, "|" separator,
+    each field .encode()d. The signature is NEVER part of its own input. The caller feeds a
+    RawMessage whose chat_id/command/nonce are already NEUTRALIZED (payload as received)."""
+    return b"|".join(
+        (
+            raw.chat_id.encode(),
+            raw.command.encode(),
+            raw.payload.encode(),
+            raw.nonce.encode(),
+        )
+    )

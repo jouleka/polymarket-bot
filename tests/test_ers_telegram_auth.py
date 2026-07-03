@@ -127,3 +127,27 @@ def test_refusal_reason_constants_exact_values():
     assert _auth.REASON_UNKNOWN_CMD == "l8_unknown_cmd"
     assert _auth.REASON_BAD_SIG == "l8_bad_sig"
     assert _auth.REASON_REPLAY == "l8_replay"
+
+
+from polybot.ers.telegram_auth import canonical_message
+
+
+def test_canonical_message_is_pipe_joined_fixed_order():
+    # Kills: mutation reordering fields, changing the separator, or dropping the payload from the MAC input.
+    raw = RawMessage(chat_id="c1", command="KILL", payload="p", nonce="7", sig=b"ignored")
+    assert canonical_message(raw) == b"c1|KILL|p|7"
+
+
+def test_canonical_message_encodes_each_field_and_omits_sig():
+    # Kills: mutation that folds sig into the canonical bytes, or str()s the whole tuple instead of encoding fields.
+    raw = RawMessage(chat_id="chat", command="RESUME", payload="", nonce="42", sig=b"\xff\xff")
+    canonical = canonical_message(raw)
+    assert canonical == b"chat|RESUME||42"     # empty payload -> two adjacent separators
+    assert b"\xff" not in canonical            # the signature is NEVER part of its own input
+
+
+def test_canonical_message_order_is_chat_command_payload_nonce_not_permuted():
+    # Kills: mutation swapping command<->payload or nonce<->payload (a transposition would still be "|"-joined).
+    raw = RawMessage(chat_id="A", command="B", payload="C", nonce="9", sig=b"")
+    assert canonical_message(raw) == b"A|B|C|9"
+    assert canonical_message(raw) != b"A|C|B|9"
