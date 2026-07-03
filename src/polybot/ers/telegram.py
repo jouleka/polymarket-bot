@@ -84,8 +84,13 @@ class TelegramController:
         elif command == "LOWER_CAPS":
             self.__ctl.swap_caps(step_weekly(self.__ctl.active_caps()), reason=REASON_L8_LOWER_CAPS)
         elif command == "BLACKLIST":
-            # S4.6d wires store.record_blacklist(kind:value); until then this verb is unbuilt and
-            # an authenticated BLACKLIST hits the drain's l8_apply_error isolation path (B3 pins it).
-            raise NotImplementedError("BLACKLIST wiring lands in S4.6d")
+            # Payload is the already-neutralized "kind:value" (split on the FIRST colon so a
+            # value may itself contain colons). An unknown kind raises ValueError, caught by
+            # drain's per-message isolation -> l8_apply_error audit, op-state untouched. The
+            # store is dumb (records any kind); the KIND policy lives HERE.
+            target_kind, _, target_value = result.payload.partition(":")
+            if target_kind not in ("wallet", "market", "source"):
+                raise ValueError(f"unknown blacklist kind: {target_kind!r}")
+            self.__store.record_blacklist(target_kind=target_kind, target_value=target_value)
         else:  # pragma: no cover -- unreachable: _COMMAND_SET gates command before dispatch.
             raise ValueError(f"unmapped command: {command!r}")
