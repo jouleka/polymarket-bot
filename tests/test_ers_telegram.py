@@ -129,3 +129,66 @@ def test_telegram_module_source_never_references_a_trade_verb():
     src = Path(_mod.__file__).read_text(encoding="utf-8")
     for forbidden in ("place", "propose_trade", "sign", "submit", "open_trade"):
         assert forbidden not in src, f"trade-verb token leaked into telegram.py: {forbidden!r}"
+
+
+def test_drain_refused_message_audits_l8_refused_with_reason_and_chat_and_leaves_state(tmp_path):
+    # A message auth rejects (unknown chat-id) is audited kind="l8_refused" with the SPECIFIC
+    # refusal reason + the neutralized chat_id, and does NOT mutate op-state (still RUNNING).
+    # PAIR with the accept case below (test_drain_accepted_message...).
+    # Kills: swallowing the refusal (no audit row); auditing the wrong kind/reason; a refused
+    # message reaching __apply and mutating op-state.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        bad = _signed("evil", "KILL", "", "1")   # valid sig, but 'evil' not in the allowlist
+        transport = _FakeTransport([bad])
+        tc = TelegramController(ctl, store, transport, _auth())
+        tc.drain()
+        assert ctl.state() == _safety.RUNNING                       # op-state untouched
+        # The seed state_change row, then exactly one l8_refused row for the bad chat-id.
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("l8_refused", "l8_bad_chat", "evil"),
+        ]
+
+
+def test_drain_accepted_message_applies_and_audits_l8_command(tmp_path):
+    # The accept half of the pair: a fully-authenticated KILL applies (HALTED) and is audited
+    # kind="l8_command", reason=l8_kill, detail="KILL" -- AND the set_state adds its own
+    # state_change row (l8_kill). Kills: dropping the l8_command audit; wrong reason/detail.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        msg = _signed("chatA", "KILL", "", "1")
+        transport = _FakeTransport([msg])
+        tc = TelegramController(ctl, store, transport, _auth())
+        tc.drain()
+        assert ctl.state() == _safety.HALTED
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_kill", "HALTED"),          # set_state's own row
+            ("l8_command", "l8_kill", "KILL"),              # the drain's command-level row
+        ]
+
+
+def test_drain_isolates_a_raising_apply_audits_l8_apply_error_and_continues(tmp_path):
+    # Per-message isolation (mirrors news.poll_all): an authenticated command whose __apply
+    # RAISES (BLACKLIST is unbuilt in B -> NotImplementedError) is caught + audited
+    # kind="l8_command", reason="l8_apply_error", and the drain CONTINUES to the next message
+    # (a following KILL still halts). Two DISTINCT chat-ids so both pass the monotonic nonce.
+    # Kills: a raising __apply escaping drain (loop crash); the drain aborting the remaining
+    # queue; not auditing the apply error.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        allow = {"chatA": "operator", "chatB": "operator"}
+        boom = _signed("chatA", "BLACKLIST", "wallet:0xdead", "1")
+        kill = _signed("chatB", "KILL", "", "1")
+        transport = _FakeTransport([boom, kill])
+        tc = TelegramController(ctl, store, transport, _auth(allowlist=allow))
+        tc.drain()
+        assert ctl.state() == _safety.HALTED                        # the KILL after the boom applied
+        kinds_reasons = [(r["kind"], r["reason"]) for r in store.op_audit_log()]
+        assert kinds_reasons == [
+            ("state_change", "clean_reconcile"),                    # seed
+            ("l8_command", "l8_apply_error"),                       # BLACKLIST raised, isolated
+            ("state_change", "l8_kill"),                            # KILL's set_state row
+            ("l8_command", "l8_kill"),                              # KILL's command row
+        ]
