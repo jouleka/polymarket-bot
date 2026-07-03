@@ -15,3 +15,44 @@ def test_preexisting_l8_reason_constants_unchanged():
     assert _safety.REASON_L8_KILL == "l8_kill"
     assert _safety.REASON_L8_PAUSED == "l8_paused"
     assert _safety.REASON_OP_FLATTEN == "op_flatten"
+
+
+import dataclasses
+
+import pytest
+
+from polybot.ers.telegram_auth import RawMessage, AuthResult
+
+
+def test_rawmessage_is_frozen_dataclass_with_exact_fields():
+    # Kills: mutation making RawMessage mutable, or dropping/renaming a field, or reordering sig off bytes.
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"\x00\x01")
+    assert dataclasses.is_dataclass(raw)
+    assert raw.chat_id == "c1" and raw.command == "KILL" and raw.payload == ""
+    assert raw.nonce == "1" and raw.sig == b"\x00\x01"
+    names = [f.name for f in dataclasses.fields(raw)]
+    assert names == ["chat_id", "command", "payload", "nonce", "sig"]
+
+
+def test_rawmessage_is_immutable():
+    # Kills: mutation dropping frozen=True (an untrusted inbound record must not be mutable in place).
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        raw.command = "RESUME"
+
+
+def test_authresult_defaults_and_fields():
+    # Kills: mutation changing AuthResult field defaults (command/payload=None, chat_id="") or their order.
+    r = AuthResult(True, "ok")
+    assert r.ok is True and r.reason == "ok"
+    assert r.command is None and r.payload is None and r.chat_id == ""
+    names = [f.name for f in dataclasses.fields(r)]
+    assert names == ["ok", "reason", "command", "payload", "chat_id"]
+
+
+def test_authresult_is_immutable():
+    # Kills: mutation dropping frozen=True on AuthResult.
+    r = AuthResult(False, "l8_bad_sig", chat_id="c1")
+    assert r.chat_id == "c1"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.ok = True
