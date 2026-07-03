@@ -319,3 +319,46 @@ def test_gate3_known_verb_passes_gate3(tmp_path):
     raw = _signed_g3("c1", "PAUSE", "", "1")
     result = auth.authenticate(raw)
     assert result.ok is True and result.command == "PAUSE"
+
+
+def _auth_obj_g4(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g4(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate4_signature_under_wrong_secret_refuses_bad_sig(tmp_path):
+    # Kills: mutation dropping the HMAC gate. A sig computed under a DIFFERENT secret must be refused.
+    auth = _auth_obj_g4(secret=b"the-real-secret")
+    raw = _signed_g4("c1", "KILL", "", "1", secret=b"attacker-secret")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_SIG
+    assert result.chat_id == "c1"
+
+
+def test_gate4_garbage_signature_refuses_bad_sig(tmp_path):
+    # Kills: mutation that accepts any sig (e.g. `if True:` short-circuit). A junk sig must be refused.
+    auth = _auth_obj_g4(secret=b"the-real-secret")
+    good = _signed_g4("c1", "KILL", "", "1", secret=b"the-real-secret")
+    raw = RawMessage(chat_id="c1", command="KILL", payload="", nonce="1", sig=b"wrong")
+    assert auth.authenticate(raw).reason == _auth.REASON_BAD_SIG
+    # sanity: the same message with the RIGHT sig authenticates (fresh auth to avoid nonce state)
+    assert _auth_obj_g4(secret=b"the-real-secret").authenticate(good).ok is True
+
+
+def test_gate4_correct_signature_passes_gate4(tmp_path):
+    # Kills: over-tight gate 4 rejecting a correctly-signed message. Accept half of the pair.
+    auth = _auth_obj_g4(secret=b"matching")
+    raw = _signed_g4("c1", "FLATTEN", "", "1", secret=b"matching")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.command == "FLATTEN"
