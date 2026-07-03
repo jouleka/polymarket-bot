@@ -80,3 +80,20 @@ def test_transport_protocol_rejects_object_missing_send():
             return []
 
     assert not isinstance(_PollOnly(), TelegramTransport)
+
+
+from polybot.ers.telegram_auth import SecretHolder
+
+
+def test_secret_holder_current_returns_initial_secret():
+    # Kills: mutation making current() return a constant / the wrong field.
+    holder = SecretHolder(b"seed-secret")
+    assert holder.current() == b"seed-secret"
+
+
+def test_secret_holder_rotate_swaps_current():
+    # Kills: mutation making rotate() a no-op (cross-restart-replay defense relies on the swap).
+    holder = SecretHolder(b"old")
+    assert holder.current() == b"old"
+    holder.rotate(b"new")
+    assert holder.current() == b"new"

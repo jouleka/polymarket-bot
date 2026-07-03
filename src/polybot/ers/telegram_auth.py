@@ -52,3 +52,18 @@ class TelegramTransport(Protocol):
     def poll(self) -> list: ...
 
     def send(self, text) -> bool: ...
+
+
+class SecretHolder:
+    """Holds the CURRENT rotating HMAC secret. The value lives off-repo (deploy-config);
+    this is the verify-side holder + the rotate() seam. rotate() is the per-restart +
+    operator-triggered swap (cadence is deploy-config, not a code constant)."""
+
+    def __init__(self, secret: bytes):
+        self._secret = secret
+
+    def current(self) -> bytes:
+        return self._secret
+
+    def rotate(self, new_secret: bytes) -> None:
+        self._secret = new_secret
