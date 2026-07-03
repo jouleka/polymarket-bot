@@ -232,3 +232,41 @@ def test_gate1_accept_shape_wellformed_message_passes_structure(tmp_path):
     result = auth.authenticate(raw)
     assert result.ok is True and result.reason == "ok"
     assert result.command == "KILL" and result.chat_id == "c1"
+
+
+def _holder_g2(secret=b"unit-secret"):
+    return SecretHolder(secret)
+
+
+def _auth_obj_g2(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=_holder_g2(secret))
+
+
+def _signed_g2(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate2_unknown_chat_id_refuses_bad_chat(tmp_path):
+    # Kills: mutation deleting the allowlist gate (`self._allow.get(...) is None`), which would let an
+    # un-allowlisted chat reach the HMAC gate. RED if gate 2 is removed: reason becomes l8_bad_sig, not l8_bad_chat.
+    auth = _auth_obj_g2(allowlist={"c1": "operator"})
+    raw = _signed_g2("intruder", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_BAD_CHAT
+    assert result.chat_id == "intruder"
+
+
+def test_gate2_allowlisted_chat_id_passes_gate2(tmp_path):
+    # Kills: over-tight gate 2 that rejects an allowlisted id. Accept half of the pair.
+    auth = _auth_obj_g2(allowlist={"c1": "operator"})
+    raw = _signed_g2("c1", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.chat_id == "c1"
