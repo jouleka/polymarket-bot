@@ -456,3 +456,41 @@ def test_notify_third_consecutive_failure_at_default_threshold_halts_alerts_down
             ("state_change", "clean_reconcile", "RUNNING"),
             ("state_change", "l8_alerts_down", "HALTED"),
         ]
+
+
+def test_notify_custom_threshold_one_halts_on_first_failure(tmp_path):
+    # Kills: a HARD-CODED threshold of 3 ignoring the ctor kwarg; the "yes" half at threshold=1.
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False])          # a single failure
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=1)
+        tg.notify("only-one")
+        assert ctl.state() == _safety.HALTED           # 1 >= 1 -> immediate halt
+        assert _c_states(store) == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "l8_alerts_down", "HALTED"),
+        ]
+
+
+def test_notify_custom_threshold_one_success_does_not_halt(tmp_path):
+    # Kills (the "no" half): a threshold=1 that halts even on SUCCESS (a mis-wired counter that
+    #        increments regardless of ok, or a halt outside the `else` branch).
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([True])
+        tg = TelegramController(ctl, store, transport, _CStubAuth(), alerts_down_threshold=1)
+        tg.notify("healthy")
+        assert ctl.state() == _safety.RUNNING          # a success never halts, even at threshold 1
+        assert _c_states(store) == [("state_change", "clean_reconcile", "RUNNING")]
+
+
+def test_notify_default_threshold_is_three(tmp_path):
+    # Kills: the ctor default drifting off 3 (a build error would surface here, not only in C3).
+    with _c_store(tmp_path) as store:
+        ctl = _c_ctl(store)
+        transport = _CFlakyTransport([False, False, False])
+        tg = TelegramController(ctl, store, transport, _CStubAuth())   # NO threshold kwarg -> default
+        tg.notify("d1"); tg.notify("d2")
+        assert ctl.state() == _safety.RUNNING          # default 3 not reached at 2
+        tg.notify("d3")
+        assert ctl.state() == _safety.HALTED           # reached at 3 -> the default IS 3
