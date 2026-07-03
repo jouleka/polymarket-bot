@@ -180,3 +180,55 @@ def test_compute_mac_depends_on_secret():
 def test_compute_mac_depends_on_message():
     # Kills: mutation ignoring the canonical arg (any message would verify under a known MAC).
     assert compute_mac(b"m1", b"k") != compute_mac(b"m2", b"k")
+
+
+from polybot.ers.telegram_auth import CommandAuth, compute_mac, canonical_message, RawMessage, SecretHolder
+from polybot.ers import telegram_auth as _auth
+
+
+# --- helpers (copied verbatim into A8..A13 gate tests) ---------------------------------------
+def _holder(secret=b"unit-secret"):
+    return SecretHolder(secret)
+
+
+def _auth_obj(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=_holder(secret))
+
+
+def _signed(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    """Build a RawMessage with a VALID signature over the NEUTRALIZED plumbing fields + raw
+    payload (mirrors CommandAuth's gate-4 canonical construction)."""
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate1_malformed_empty_chat_id_refuses(tmp_path):
+    # Kills: mutation removing the empty-nc_chat structure check (an empty id must never reach the allowlist).
+    auth = _auth_obj()
+    raw = _signed("", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+def test_gate1_malformed_non_integer_nonce_refuses(tmp_path):
+    # Kills: mutation removing the base-10-int nonce check (a non-numeric nonce would crash gate 5's int()).
+    auth = _auth_obj()
+    raw = _signed("c1", "KILL", "", "not-a-number")
+    result = auth.authenticate(raw)
+    assert result.ok is False and result.reason == _auth.REASON_MALFORMED
+
+
+def test_gate1_accept_shape_wellformed_message_passes_structure(tmp_path):
+    # Kills: over-tight gate 1 that rejects a legitimate well-formed message. Boundary PAIR to the two refuses.
+    auth = _auth_obj()
+    raw = _signed("c1", "KILL", "", "1")
+    result = auth.authenticate(raw)
+    assert result.ok is True and result.reason == "ok"
+    assert result.command == "KILL" and result.chat_id == "c1"
