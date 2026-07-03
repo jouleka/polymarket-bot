@@ -407,3 +407,57 @@ def test_gate4_uses_compare_digest_not_equality(monkeypatch, tmp_path):
     raw = _signed_ct("c1", "KILL", "", "1", secret=b"matching")
     auth.authenticate(raw)
     assert calls["n"] == 1
+
+
+def _auth_obj_g5(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator", "c2": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def _signed_g5(chat_id, command, payload, nonce, secret=b"unit-secret"):
+    from polybot.ingestion.sanitizer import neutralize
+    unsigned = RawMessage(
+        chat_id=neutralize(chat_id), command=neutralize(command),
+        payload=payload, nonce=neutralize(nonce), sig=b"",
+    )
+    sig = compute_mac(canonical_message(unsigned), secret)
+    return RawMessage(chat_id=chat_id, command=command, payload=payload, nonce=nonce, sig=sig)
+
+
+def test_gate5_equal_nonce_is_replay_refused(tmp_path):
+    # Kills: mutation using `<` instead of `<=` in the replay check (an exact-replay nonce would slip through).
+    auth = _auth_obj_g5()
+    first = auth.authenticate(_signed_g5("c1", "KILL", "", "5"))
+    assert first.ok is True
+    second = auth.authenticate(_signed_g5("c1", "KILL", "", "5"))   # same nonce 5
+    assert second.ok is False and second.reason == _auth.REASON_REPLAY
+
+
+def test_gate5_lower_nonce_is_replay_refused(tmp_path):
+    # Kills: mutation that records but does not compare (an out-of-order lower nonce would authenticate).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "10")).ok is True
+    down = auth.authenticate(_signed_g5("c1", "KILL", "", "9"))
+    assert down.ok is False and down.reason == _auth.REASON_REPLAY
+
+
+def test_gate5_strictly_greater_nonce_accepts(tmp_path):
+    # Kills: over-tight gate 5 rejecting a legitimately-advancing nonce. Boundary PAIR to the equal-refuse.
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "5")).ok is True
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "6")).ok is True
+
+
+def test_gate5_nonce_is_per_chat_id_independent(tmp_path):
+    # Kills: mutation using a single global last-nonce instead of per-chat-id (chat A's 9 must not gate chat B).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "9")).ok is True
+    # c2 has never sent -> its sentinel is -1, so nonce 1 must be accepted despite c1 being at 9.
+    assert auth.authenticate(_signed_g5("c2", "KILL", "", "1")).ok is True
+
+
+def test_gate5_first_nonce_zero_accepts(tmp_path):
+    # Kills: mutation setting the unseen sentinel to 0 instead of -1 (nonce 0 would falsely be a replay).
+    auth = _auth_obj_g5()
+    assert auth.authenticate(_signed_g5("c1", "KILL", "", "0")).ok is True
