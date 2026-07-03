@@ -831,3 +831,45 @@ def test_s4_6_whole_slice_e2e_kill_dominates_then_forgery_wrongchat_replay_all_r
         # No forgery applied a command: the ONLY l8_command row is cycle 1's legitimate KILL --
         # none of cycle 2's three refusals produced one.
         assert [r["kind"] for r in store.op_audit_log()].count("l8_command") == 1
+
+
+def test_s4_6_whole_slice_e2e_resume_lifts_the_halt_then_lower_caps_tightens_same_cycle_sizing(tmp_path):
+    # DESIGN-S4.6 §8.3 (part 2): from a HALTED loop, an authenticated RESUME lifts it back to
+    # RUNNING; then in a later cycle an authenticated LOWER_CAPS drains at the TOP and tightens
+    # active_caps().per_trade 12 -> 6 (step_weekly) which the SAME cycle's process_pending sizes
+    # against -- the intent ACCEPTs clamped to stake_usd == 6 (not 12). Kills: RESUME not
+    # reaching RUNNING; LOWER_CAPS not routing through swap_caps/active_caps; the drain landing
+    # a cycle late so the OLD caps (per_trade 12) size the intent.
+    from decimal import Decimal
+    from polybot.ers import safety as _safety
+    from polybot.ers.safety import SafetyController
+    from polybot.ers.caps import RiskCaps
+    from polybot.ers.service import PaperSigner
+    with _store_d(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot: HALTED
+        signer = PaperSigner()
+        transport = _FakeTransport_d()
+        tc = _tc_d(store, ctl, transport)
+        rc = _ERS_seam(store=store, book_for={"t1": _book_seam("0.50")}.get, caps=RiskCaps(),
+                       signer=signer, controller=ctl, telegram=tc, clock=lambda: 0)
+
+        # Cycle 1: RESUME lifts the boot-HALTED loop to RUNNING.
+        transport._inbound = [_signed_d("ops", "RESUME", "", "1")]
+        rc.run_cycle()
+        assert ctl.state() == _safety.RUNNING
+        assert ctl.active_caps().per_trade == Decimal("12")           # not yet tightened
+
+        # Cycle 2: LOWER_CAPS drains at the top -> per_trade 6; the SAME cycle sizes i1 to 6.
+        store.propose_trade("i1", **_P_seam)
+        transport._inbound = [_signed_d("ops", "LOWER_CAPS", "", "2")]
+        rc.run_cycle()
+        assert ctl.active_caps().per_trade == Decimal("6")            # step_weekly bit active_caps
+        assert ctl.active_caps().total_open_risk == Decimal("30")
+        assert store.get("i1").status == "ACCEPTED"
+        assert signer.placed[-1]["stake_usd"] == Decimal("6")        # clamped by the NEW caps
+
+        # A LOWER_CAPS audit row landed (caps_swap via swap_caps) alongside the l8_command row.
+        kinds = [r["kind"] for r in store.op_audit_log()]
+        assert kinds.count("caps_swap") == 1
+        assert ("l8_command", "l8_lower_caps") in [
+            (r["kind"], r["reason"]) for r in store.op_audit_log()]
