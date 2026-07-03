@@ -98,3 +98,43 @@ def canonical_message(raw) -> bytes:
 def compute_mac(canonical: bytes, secret: bytes) -> bytes:
     """HMAC-SHA256(secret, canonical) raw digest bytes (compared constant-time in gate 4)."""
     return hmac.new(secret, canonical, hashlib.sha256).digest()
+
+
+class CommandAuth:
+    """The five fail-closed gates (§3), IN ORDER. Every plumbing field is neutralize()d;
+    a refusal reports the FIRST failing gate. State: a per-chat-id in-memory monotonic
+    nonce dict (in-session; per-restart secret rotation defeats cross-restart replay)."""
+
+    def __init__(self, *, allowlist, secret_holder, command_set=_COMMAND_SET):
+        self._allow = allowlist                # {chat_id: role}; operator-curated, injected
+        self._secret_holder = secret_holder
+        self._command_set = command_set
+        self._seen = {}                        # {chat_id: last_nonce_int}
+
+    def authenticate(self, raw) -> AuthResult:
+        # Gate 1 -- structure. Neutralize the plumbing fields; the signature stays raw bytes.
+        nc_chat = neutralize(raw.chat_id)
+        nc_cmd = neutralize(raw.command)
+        nc_nonce = neutralize(raw.nonce)
+        nc_payload = neutralize(raw.payload)
+        if not nc_chat or not nc_cmd or not nc_nonce or not nc_nonce.isdigit():
+            return AuthResult(False, REASON_MALFORMED)
+        # Gate 2 -- chat-id allowlist (the FIRST semantic check).
+        if self._allow.get(nc_chat) is None:
+            return AuthResult(False, REASON_BAD_CHAT, chat_id=nc_chat)
+        # Gate 3 -- command set (structural: no open verb dispatches).
+        if nc_cmd not in self._command_set:
+            return AuthResult(False, REASON_UNKNOWN_CMD, chat_id=nc_chat)
+        # Gate 4 -- HMAC over the NEUTRALIZED plumbing fields + raw payload; constant-time.
+        canonical = canonical_message(
+            RawMessage(chat_id=nc_chat, command=nc_cmd, payload=raw.payload, nonce=nc_nonce, sig=b"")
+        )
+        mac = compute_mac(canonical, self._secret_holder.current())
+        if not hmac.compare_digest(mac, raw.sig):
+            return AuthResult(False, REASON_BAD_SIG, chat_id=nc_chat)
+        # Gate 5 -- monotonic per-chat-id nonce.
+        n = int(nc_nonce)
+        if n <= self._seen.get(nc_chat, -1):
+            return AuthResult(False, REASON_REPLAY, chat_id=nc_chat)
+        self._seen[nc_chat] = n
+        return AuthResult(True, "ok", command=nc_cmd, payload=nc_payload, chat_id=nc_chat)
