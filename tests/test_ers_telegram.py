@@ -274,3 +274,48 @@ def test_apply_flatten_from_running_sets_flattening_op_flatten(tmp_path):
             ("state_change", "op_flatten", "FLATTENING"),
             ("l8_command", "op_flatten", "FLATTEN"),
         ]
+
+
+def test_apply_lower_caps_tightens_per_trade_to_six_via_swap_caps(tmp_path):
+    # LOWER_CAPS -> swap_caps(step_weekly(active_caps()), reason=REASON_L8_LOWER_CAPS). Default
+    # RiskCaps per_trade 12 -> step_weekly -> 6; swap_caps writes a caps_swap audit row
+    # (reason=l8_lower_caps) BEFORE the l8_command row.
+    # Kills: LOWER_CAPS calling set_state; using step_daily (per_trade 9) instead of step_weekly;
+    # wrong swap_caps reason; bypassing swap_caps (no caps_swap audit row).
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        assert ctl.active_caps().per_trade == Decimal("12")
+        transport = _FakeTransport([_signed("chatA", "LOWER_CAPS", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.active_caps().per_trade == Decimal("6")
+        assert ctl.active_caps().total_open_risk == Decimal("30")
+        kinds_reasons = [(r["kind"], r["reason"]) for r in store.op_audit_log()]
+        assert kinds_reasons == [
+            ("state_change", "clean_reconcile"),
+            ("caps_swap", "l8_lower_caps"),          # swap_caps' own audit-before-mutate row
+            ("l8_command", "l8_lower_caps"),         # the drain's command row
+        ]
+
+
+def test_apply_lower_caps_a_second_time_is_a_hash_identical_no_op_no_caps_swap_row(tmp_path):
+    # The idempotent boundary (pair with the tighten case): step_weekly is idempotent, so a
+    # SECOND LOWER_CAPS produces a hash-identical caps -> swap_caps returns False -> NO second
+    # caps_swap row -- but the l8_command row IS still written (the command WAS authenticated +
+    # applied; the swap was simply a no-op). Two chat-ids so both messages pass the nonce gate.
+    # Kills: a compounding step (per_trade < 6 on the 2nd); a spurious 2nd caps_swap audit row;
+    # the drain skipping the l8_command row when swap_caps no-ops.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        allow = {"chatA": "operator", "chatB": "operator"}
+        first = _signed("chatA", "LOWER_CAPS", "", "1")
+        second = _signed("chatB", "LOWER_CAPS", "", "1")
+        transport = _FakeTransport([first, second])
+        TelegramController(ctl, store, transport, _auth(allowlist=allow)).drain()
+        assert ctl.active_caps().per_trade == Decimal("6")        # not compounded below 6
+        kinds_reasons = [(r["kind"], r["reason"]) for r in store.op_audit_log()]
+        assert kinds_reasons == [
+            ("state_change", "clean_reconcile"),
+            ("caps_swap", "l8_lower_caps"),      # only the FIRST swap writes a caps_swap row
+            ("l8_command", "l8_lower_caps"),     # first command
+            ("l8_command", "l8_lower_caps"),     # second command applied (swap no-op'd, still audited)
+        ]
