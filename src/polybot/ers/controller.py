@@ -63,6 +63,11 @@ class ERSController:
         """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
         process_pending(controller=...). Returns the updated portfolio (threaded for the
         next cycle)."""
+        # S4.6d: drain authenticated Telegram commands FIRST -- ahead of even the heartbeat
+        # beat / L5 anomaly / loss consults -- so an operator KILL dominates THIS cycle (the
+        # HALTED verdict then blocks every pending intent). telegram=None == today (no drain).
+        if self._telegram is not None:
+            self._telegram.drain()
         if self._heartbeat is not None:
             self._heartbeat.beat()
         if self._anomaly is not None:
