@@ -41,3 +41,14 @@ class AuthResult:
     command: str | None = None
     payload: str | None = None
     chat_id: str = ""
+
+
+@runtime_checkable
+class TelegramTransport(Protocol):
+    """Non-blocking inbound/outbound seam (the real Telegram bot is deploy-deferred; the
+    tests inject a fake). poll() returns pending RawMessages ([] when none); send() is
+    best-effort (True on success)."""
+
+    def poll(self) -> list: ...
+
+    def send(self, text) -> bool: ...
