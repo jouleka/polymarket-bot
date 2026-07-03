@@ -461,3 +461,36 @@ def test_gate5_first_nonce_zero_accepts(tmp_path):
     # Kills: mutation setting the unseen sentinel to 0 instead of -1 (nonce 0 would falsely be a replay).
     auth = _auth_obj_g5()
     assert auth.authenticate(_signed_g5("c1", "KILL", "", "0")).ok is True
+
+
+def _auth_obj_ord(allowlist=None, secret=b"unit-secret"):
+    if allowlist is None:
+        allowlist = {"c1": "operator"}
+    return CommandAuth(allowlist=allowlist, secret_holder=SecretHolder(secret))
+
+
+def test_order_bad_chat_before_bad_sig(tmp_path):
+    # Kills: mutation reordering the HMAC gate ahead of the allowlist gate. A message with BOTH a
+    # non-allowlisted chat-id AND a garbage sig must report l8_bad_chat (chat checked first), proving
+    # HMAC is never even computed for an unknown chat.
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="intruder", command="KILL", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.reason == _auth.REASON_BAD_CHAT     # NOT l8_bad_sig
+
+
+def test_order_unknown_cmd_before_bad_sig(tmp_path):
+    # Kills: mutation reordering HMAC ahead of the command-set gate. An unknown command with a bad sig
+    # must report l8_unknown_cmd (command checked before the crypto).
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="c1", command="NOPE", payload="", nonce="1", sig=b"garbage")
+    result = auth.authenticate(raw)
+    assert result.reason == _auth.REASON_UNKNOWN_CMD  # NOT l8_bad_sig
+
+
+def test_order_malformed_before_bad_chat(tmp_path):
+    # Kills: mutation reordering the allowlist gate ahead of the structure gate. An empty chat-id must
+    # report l8_malformed (structure first), not l8_bad_chat.
+    auth = _auth_obj_ord(allowlist={"c1": "operator"})
+    raw = RawMessage(chat_id="", command="KILL", payload="", nonce="1", sig=b"garbage")
+    assert auth.authenticate(raw).reason == _auth.REASON_MALFORMED
