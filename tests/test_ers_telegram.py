@@ -224,3 +224,53 @@ def test_apply_pause_from_running_pauses_via_set_state_l8_paused(tmp_path):
             ("state_change", "l8_paused", "PAUSED"),
             ("l8_command", "l8_paused", "PAUSE"),
         ]
+
+
+def test_apply_resume_lifts_a_paused_loop_to_running_l8_resume(tmp_path):
+    # RESUME (from PAUSED) -> set_state(RUNNING, reason=REASON_L8_RESUME). Half 1 of the Fork-1
+    # pair. Reach PAUSED via a direct set_state (operator PAUSE), THEN drain a RESUME.
+    # Kills: RESUME reason wrong; RESUME failing to reach RUNNING from PAUSED.
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        ctl.set_state(_safety.PAUSED, reason=_safety.REASON_L8_PAUSED)
+        transport = _FakeTransport([_signed("chatA", "RESUME", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.state() == _safety.RUNNING
+        assert store.op_audit_log()[-2:] == [
+            {"at": store.op_audit_log()[-2]["at"], "kind": "state_change",
+             "reason": "l8_resume", "detail": "RUNNING"},
+            {"at": store.op_audit_log()[-1]["at"], "kind": "l8_command",
+             "reason": "l8_resume", "detail": "RESUME"},
+        ]
+
+
+def test_apply_resume_lifts_a_halted_loop_to_running_l8_resume(tmp_path):
+    # RESUME (from HALTED) -> RUNNING. Half 2 of the Fork-1 pair: this IS the documented operator
+    # override that clears a sticky L5/loss HALT (the ONLY operator HALTED->RUNNING path). The
+    # controller boots HALTED (unclean_restart) -- no set_state needed to reach the source state.
+    # Kills: gating RESUME on the source being PAUSED only (a HALTED loop would stay stuck).
+    with _store(tmp_path) as store:
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)  # boot HALTED
+        assert ctl.state() == _safety.HALTED
+        transport = _FakeTransport([_signed("chatA", "RESUME", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.state() == _safety.RUNNING
+        assert store.op_audit_log()[-1] == {
+            "at": store.op_audit_log()[-1]["at"], "kind": "l8_command",
+            "reason": "l8_resume", "detail": "RESUME"}
+
+
+def test_apply_flatten_from_running_sets_flattening_op_flatten(tmp_path):
+    # FLATTEN -> set_state(FLATTENING, reason=REASON_OP_FLATTEN). It sets the op-state ONLY; the
+    # actual de-risk fires later in verdict() (unchanged S4.1 path), NOT in __apply.
+    # Kills: FLATTEN calling signer.flatten directly from __apply; wrong op-state/reason.
+    with _store(tmp_path) as store:
+        ctl = _running_ctl(store)
+        transport = _FakeTransport([_signed("chatA", "FLATTEN", "", "1")])
+        TelegramController(ctl, store, transport, _auth()).drain()
+        assert ctl.state() == _safety.FLATTENING
+        assert [(r["kind"], r["reason"], r["detail"]) for r in store.op_audit_log()] == [
+            ("state_change", "clean_reconcile", "RUNNING"),
+            ("state_change", "op_flatten", "FLATTENING"),
+            ("l8_command", "op_flatten", "FLATTEN"),
+        ]
