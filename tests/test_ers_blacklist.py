@@ -40,3 +40,20 @@ def test_record_blacklist_is_dumb_and_records_an_unknown_kind_verbatim(tmp_path)
         rows = store.blacklist_log()
         assert [(r["target_kind"], r["target_value"]) for r in rows] == [
             ("banana", "whatever")]
+
+
+def test_blacklist_persists_across_restart_and_new_rows_append_after(tmp_path):
+    # Append-only + committed: a blacklist row survives a process restart and a FRESH stamper,
+    # and a new row after restart appends AFTER the persisted one (bl_id ordering, not the
+    # per-process stamp clock). Mirrors test_op_audit_log_persists_across_restart.
+    # Kills: a missing commit, an in-memory-only set, or CREATE TABLE (without IF NOT EXISTS)
+    # nuking the persisted rows on reopen.
+    db = str(tmp_path / "i.db")
+    with _store(db) as store:
+        store.record_blacklist(target_kind="wallet", target_value="0xabc")
+    with _store(db) as reopened:            # process restart, new stamper
+        rows = reopened.blacklist_log()
+        assert len(rows) == 1 and rows[0]["target_value"] == "0xabc"
+        reopened.record_blacklist(target_kind="market", target_value="m-9")
+        assert [(r["target_kind"], r["target_value"]) for r in reopened.blacklist_log()] == [
+            ("wallet", "0xabc"), ("market", "m-9")]
