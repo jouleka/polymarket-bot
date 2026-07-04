@@ -317,3 +317,15 @@ def test_unknown_shadow_status_fails_loud(tmp_path):
     forecast = _forecast(tmp_path)
     with pytest.raises(ValueError, match="status"):
         _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+
+
+def test_family_size_below_one_fails_loud(tmp_path):
+    # DESIGN + PLAN annotate family_size >= 1. family_size=0 makes
+    #   required_margin = net_margin_min + mc_penalty*(0-1) = NEGATIVE, so a net-NEGATIVE OOS window
+    #   would clear the "positive-with-margin" oos_positive gate -- a doctrine inversion. Fail LOUD
+    #   at the top of evaluate_category instead of ever computing a negative required_margin.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    with pytest.raises(ValueError, match="family_size"):
+        _evaluate(shadow, forecast, k=Decimal("1"), go=True, family_size=0)
