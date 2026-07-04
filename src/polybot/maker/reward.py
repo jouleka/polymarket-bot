@@ -20,3 +20,16 @@ def spread_score(v, s, *, b):
         raise ValueError(f"b must be finite >= 0, got {b}")
     delta = v - s / v
     return delta * delta * b
+
+
+def reward_accrual(eligible_size, spread_from_mid, *, config):
+    """Decimal(0) if spread_from_mid > config.max_spread (resting too far from mid earns
+    NOTHING); else spread_score(eligible_size, spread_from_mid, b=config.reward_b). AT the
+    boundary is eligible -- the gate is strictly >."""
+    if not eligible_size.is_finite() or eligible_size <= 0:
+        raise ValueError(f"eligible_size must be finite > 0, got {eligible_size}")
+    if not spread_from_mid.is_finite() or spread_from_mid < 0:
+        raise ValueError(f"spread_from_mid must be finite >= 0, got {spread_from_mid}")
+    if spread_from_mid > config.max_spread:
+        return Decimal(0)
+    return spread_score(eligible_size, spread_from_mid, b=config.reward_b)
