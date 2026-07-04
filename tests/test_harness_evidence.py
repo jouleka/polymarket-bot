@@ -293,3 +293,27 @@ def test_disputed_and_void_are_counted_but_excluded_from_the_honest_sample(tmp_p
     assert rep.net_full == Decimal("29.00")
     assert rep.net_oos == Decimal("14.50")
     assert rep.n_oos == 2
+
+
+def test_unknown_shadow_status_fails_loud(tmp_path):
+    # Insert a corrupt status directly via raw sqlite (bypassing record_settlement's guard) to
+    # simulate DB corruption / an untaught 5th status. evaluate_category must fail LOUD, mirroring
+    # MakerTracker's exhaustive-status ValueError -- a status it cannot classify must never silently
+    # vanish from the honest/DISPUTED accounting.
+    import sqlite3
+
+    path = str(tmp_path / "corrupt.db")
+    shadow = ShadowLedger(path, MonotonicStamper())
+    _win(shadow, "w0", token="tw0")   # one legitimate settled row so the table + schema exist
+    shadow.record_trade("x1", token_id="tx1", condition_id="c", category="politics", side="BUY",
+                        shares=Decimal("10"), fill_price=Decimal("0.40"), fill_mid=Decimal("0.50"),
+                        reward_accrued=Decimal("0.25"))
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE shadow_trades SET status=?, settled_at=? WHERE trade_id=?",
+                 ("MAYBE", 999, "x1"))
+    conn.commit()
+    conn.close()
+
+    forecast = _forecast(tmp_path)
+    with pytest.raises(ValueError, match="status"):
+        _evaluate(shadow, forecast, k=Decimal("1"), go=True)
