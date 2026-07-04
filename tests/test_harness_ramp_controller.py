@@ -123,3 +123,42 @@ def test_promote_blocked_when_breaker_tripped():
     assert d.promote_recommended is False
     assert d.ramp_down is True
     assert d.reason == "ramp_down:breaker"
+
+
+def test_ramp_down_on_regression_from_a_live_stage():
+    # A previously-promoted category (current_stage TINY_LIVE) whose evidence flips un-ready is a
+    # REGRESSION -> ramp_down True (automatic; the flag ERSController hands the S4.7 ratchet),
+    # stage collapses to SHADOW, promote False, reason ramp_down:regression.
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=False, oos_positive=False),
+                 current_stage=TINY_LIVE, portfolio=_healthy_portfolio(),
+                 n_resolved_disputed=1, stress_episodes=1, breaker_tripped=False)
+    assert d.ramp_down is True
+    assert d.stage == SHADOW
+    assert d.promote_recommended is False
+    assert d.reason == "ramp_down:regression"
+
+
+def test_ramp_down_on_tripped_breaker_from_any_stage():
+    # A tripped breaker raises ramp_down regardless of stage or readiness (even a RAMP-stage,
+    # ready category). Breaker reason dominates.
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=RAMP,
+                 portfolio=_healthy_portfolio(), n_resolved_disputed=1, stress_episodes=1,
+                 breaker_tripped=True)
+    assert d.ramp_down is True
+    assert d.promote_recommended is False
+    assert d.reason == "ramp_down:breaker"
+    # ready True -> stage is NOT collapsed to SHADOW by readiness; it stays current_stage.
+    # (ramp_down is the automatic-tighten signal; the stage field tracks readiness only.)
+    assert d.stage == RAMP
+
+
+def test_no_ramp_down_in_healthy_shadow_ready_case():
+    # SHADOW + ready + no breaker -> NOT a regression: ramp_down False. (A not-ready WHILE in
+    # SHADOW is also not a regression -- guarded in D1's test_not_ready_*.)
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=SHADOW,
+                 portfolio=_healthy_portfolio(), n_resolved_disputed=1, stress_episodes=1,
+                 breaker_tripped=False)
+    assert d.ramp_down is False
