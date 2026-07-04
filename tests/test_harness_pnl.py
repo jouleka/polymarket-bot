@@ -1,0 +1,62 @@
+"""S9 / POL-11 — windowed net-of-everything PnL (the S8 identity over a settled-row window)."""
+
+from decimal import Decimal
+
+import pytest
+
+from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.harness.ledger import ShadowTradeRecord
+from polybot.harness.pnl import window_net
+
+
+def _cfg(**over):
+    # ACTIVE-fee config: rebate/fees/lockup/dispute all nonzero so every leg is exercised.
+    base = dict(fee_schedule=DEFAULT_FEE_SCHEDULE, rebate_fraction=Decimal("0.20"),
+                forced_taker_exit_p=Decimal("0.10"), lockup_rate=Decimal("0.01"),
+                dispute_p=Decimal("0.02"))
+    base.update(over)
+    return MakerConfig(**base)
+
+
+def _row(trade_id, *, token, category, side, shares, fill_price, fill_mid, reward,
+         status, resolution_value):
+    # settled ShadowTradeRecord (created_at/settled_at are irrelevant to window_net).
+    return ShadowTradeRecord(
+        trade_id=trade_id, token_id=token, condition_id="c", category=category, side=side,
+        shares=Decimal(shares), fill_price=Decimal(fill_price), fill_mid=Decimal(fill_mid),
+        reward_accrued=Decimal(reward), created_at=1, status=status,
+        resolution_value=None if resolution_value is None else Decimal(resolution_value),
+        settled_at=1)
+
+
+_SPORTS_WINDOW = [
+    _row("tA", token="tA", category="sports", side="BUY", shares="10", fill_price="0.40",
+         fill_mid="0.50", reward="0.25", status="WON", resolution_value="1"),
+    _row("tB", token="tB", category="sports", side="SELL", shares="20", fill_price="0.60",
+         fill_mid="0.55", reward="0.30", status="LOST", resolution_value="0"),
+    _row("tC", token="tC", category="sports", side="BUY", shares="8", fill_price="0.30",
+         fill_mid="0.33", reward="0.10", status="LOST", resolution_value="0"),
+]
+
+
+def test_window_net_equals_the_s8_identity_over_an_active_category_window():
+    # hand-computed above: reward .65 + rebate .05328 + spread 2.24 - adverse(-15.60)
+    #   - fees .02664 - lockup .184 - dispute .368 = 17.96464
+    assert window_net(_SPORTS_WINDOW, maker_config=_cfg()) == Decimal("17.96464000")
+
+
+def test_window_net_over_a_free_category_zeroes_rebate_and_fees():
+    # same rows on the FREE geopolitics category -> taker_fee 0 -> rebate 0, fees 0;
+    # lockup/dispute (keyed off notional) unchanged. net = 17.9380.
+    free_window = [
+        _row("gA", token="gA", category="geopolitics", side="BUY", shares="10",
+             fill_price="0.40", fill_mid="0.50", reward="0.25", status="WON",
+             resolution_value="1"),
+        _row("gB", token="gB", category="geopolitics", side="SELL", shares="20",
+             fill_price="0.60", fill_mid="0.55", reward="0.30", status="LOST",
+             resolution_value="0"),
+        _row("gC", token="gC", category="geopolitics", side="BUY", shares="8",
+             fill_price="0.30", fill_mid="0.33", reward="0.10", status="LOST",
+             resolution_value="0"),
+    ]
+    assert window_net(free_window, maker_config=_cfg()) == Decimal("17.9380")
