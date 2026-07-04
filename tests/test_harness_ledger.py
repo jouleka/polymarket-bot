@@ -106,3 +106,28 @@ def test_settled_tiebreaks_on_rowid_when_settled_at_is_equal(tmp_path):
         l.record_settlement("d1", status="LOST", resolution_value=Decimal("0"))
         assert [x.settled_at for x in l.settled()] == [700, 700]
         assert [x.trade_id for x in l.settled()] == ["d1", "d2"]  # rowid tiebreak
+
+
+def test_settlement_overwrites_on_a_dispute_flip(tmp_path):
+    # a whale-captured UMA dispute can flip an apparent WON to DISPUTED later; the flip
+    # must also CLEAR the stale resolution value.
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("d1", status="DISPUTED", resolution_value=None)
+        r = l.all()[0]
+        assert r.status == "DISPUTED" and r.resolution_value is None
+
+
+def test_dispute_reflip_to_won_requires_a_fresh_resolution_value(tmp_path):
+    # after a DISPUTED flip clears the stale value, a re-flip back to WON must supply a
+    # FRESH value -- None cannot silently leak the cleared stale one.
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("d1", status="DISPUTED", resolution_value=None)
+        with pytest.raises(ValueError, match="resolution_value"):
+            l.record_settlement("d1", status="WON", resolution_value=None)
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+        r = l.all()[0]
+        assert r.status == "WON" and r.resolution_value == Decimal("1")
