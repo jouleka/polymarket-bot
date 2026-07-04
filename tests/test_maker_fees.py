@@ -140,3 +140,14 @@ def test_rebate_rejects_a_negative_fee():
 def test_rebate_rejects_a_non_finite_fee():
     with pytest.raises(ValueError, match="taker_fee_paid"):
         rebate(Decimal("NaN"), fraction=Decimal("0.20"))
+
+
+def test_rebate_rejects_a_non_finite_fraction():
+    # a NaN fraction would propagate QUIETLY through the multiply — fail LOUD.
+    with pytest.raises(ValueError, match="fraction"):
+        rebate(Decimal("0.75"), fraction=Decimal("NaN"))
+
+
+def test_rebate_rejects_a_negative_fraction():
+    with pytest.raises(ValueError, match="fraction"):
+        rebate(Decimal("0.75"), fraction=Decimal("-0.1"))

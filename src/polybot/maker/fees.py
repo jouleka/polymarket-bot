@@ -34,4 +34,8 @@ def taker_fee(category, p, size, *, schedule) -> Decimal:
 def rebate(taker_fee_paid, *, fraction) -> Decimal:
     if not taker_fee_paid.is_finite() or taker_fee_paid < 0:
         raise ValueError(f"taker_fee_paid must be a finite Decimal >= 0, got {taker_fee_paid}")
+    # Only arithmetic nonsense is rejected here; the (0, 0.5] business ceiling
+    # is the CONFIG envelope's job (MakerConfig._verify), not this pure function's.
+    if not fraction.is_finite() or fraction < 0:
+        raise ValueError(f"fraction must be a finite non-negative Decimal, got {fraction}")
     return fraction * taker_fee_paid
