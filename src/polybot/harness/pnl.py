@@ -6,9 +6,10 @@ spine). Re-derives the exact same seven-leg fold as ``MakerTracker.report_for``
 (net = reward + rebate + spread_capture - adverse_selection - fees - lockup_cost -
 dispute_haircut) over a LIST of rows rather than the whole ledger, so S9 windows the OOS
 slice without refactoring (or importing the internals of) the S8 tracker. Honest by
-construction: DISPUTED/VOID rows are SKIPPED (whale-flip immunity), and an empty honest
-window is Decimal(0). Reuses the S8 primitives (taker_fee/rebate/adverse_selection/net_pnl)
-unchanged.
+construction: DISPUTED/VOID rows are SKIPPED (whale-flip immunity), an empty honest window
+is Decimal(0), and two honest rows on one token with divergent resolution marks fail LOUD
+(ledger corruption, mirroring the S8d divergent-marks pin). Reuses the S8 primitives
+(taker_fee/rebate/adverse_selection/net_pnl) unchanged.
 """
 
 from decimal import Decimal
@@ -35,7 +36,16 @@ def window_net(rows, *, maker_config):
     spread_capture = sum((_SGN[r.side] * r.shares * (r.fill_mid - r.fill_price)
                           for r in honest), Decimal(0))
     notional = sum((r.shares * r.fill_price for r in honest), Decimal(0))
-    marks = {r.token_id: r.resolution_value for r in honest}
+    marks = {}
+    for r in honest:
+        # A token resolves ONCE: two honest rows on one token_id with DISTINCT non-None
+        # resolution marks is corruption -- fail loud, never silently last-wins.
+        prior = marks.get(r.token_id)
+        if (prior is not None and r.resolution_value is not None
+                and prior != r.resolution_value):
+            raise ValueError(f"inconsistent resolution marks for token {r.token_id!r}: "
+                             f"{prior} vs {r.resolution_value}")
+        marks[r.token_id] = r.resolution_value
     fills = [MakerFill(token_id=r.token_id, condition_id=r.condition_id,
                        category=r.category, side=r.side, shares=r.shares,
                        price_exec=r.fill_price, fill_mid=r.fill_mid) for r in honest]

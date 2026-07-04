@@ -89,3 +89,31 @@ def test_window_net_of_an_all_disputed_window_is_zero():
              resolution_value=None),
     ]
     assert window_net(only_disputed, maker_config=_cfg()) == Decimal(0)
+
+
+def test_window_net_raises_on_divergent_resolution_marks_for_one_token():
+    # two honest rows on the SAME token with DISTINCT resolution values is ledger
+    # corruption -- fail loud, never silently last-wins (mirrors the S8d pin).
+    diverging = [
+        _row("x1", token="tSAME", category="sports", side="BUY", shares="10",
+             fill_price="0.40", fill_mid="0.50", reward="0.25", status="WON",
+             resolution_value="1"),
+        _row("x2", token="tSAME", category="sports", side="BUY", shares="10",
+             fill_price="0.40", fill_mid="0.50", reward="0.25", status="LOST",
+             resolution_value="0"),
+    ]
+    with pytest.raises(ValueError, match="inconsistent"):
+        window_net(diverging, maker_config=_cfg())
+
+
+def test_window_net_is_negative_when_adverse_selection_dominates():
+    # the "safe strategy bleeds invisibly" shape: a BUY at 0.40 that resolves LOST (mark 0)
+    # books a large adverse cost that swamps reward+spread -> net-NEGATIVE.
+    bleed = [
+        _row("nA", token="nA", category="sports", side="BUY", shares="100",
+             fill_price="0.40", fill_mid="0.41", reward="0.05", status="LOST",
+             resolution_value="0"),
+    ]
+    net = window_net(bleed, maker_config=_cfg())
+    assert net == Decimal("-40.07800000")
+    assert net < 0
