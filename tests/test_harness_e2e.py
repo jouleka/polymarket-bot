@@ -205,3 +205,74 @@ def test_ready_promotes_then_a_regression_ramps_down(tmp_path):
         assert d_reg.ramp_down is True
         assert d_reg.promote_recommended is False
         assert d_reg.reason == "ramp_down:breaker"
+
+
+from polybot.core.clock import MonotonicStamper as _Stamper  # already imported; alias for clarity
+from polybot.ers import safety as _safety
+from polybot.ers.controller import ERSController
+from polybot.ers.intent_store import IntentStore
+from polybot.ers.reconcile import ThreeWayReconciler
+from polybot.ers.restart import RestartReconciler
+from polybot.ers.safety import SafetyController
+from polybot.ers.service import PaperSigner
+from polybot.ers.validator import Decision
+from polybot.ingestion.orderbook import LocalBook
+from polybot.storage.market_memory import EventStore
+
+_BOOT_P = dict(token_id="t1", condition_id="m1", event_id="e1", side="BUY", target_price="0.50",
+               max_price="0.60", size_usd_suggestion="100", p="0.9", p_confidence="0.8",
+               resolution_summary="", thesis="", citations=())
+
+
+def _book2(ask, *, size="1000", bid="0.01"):
+    b = LocalBook()
+    b.apply_book({"bids": [{"price": bid, "size": size}], "asks": [{"price": ask, "size": size}]})
+    return b
+
+
+def _boot_accept_one(store):
+    store.propose_trade("i1", **_BOOT_P)
+    store.record_decision("i1", Decision("ACCEPT", Decimal("8"), Decimal("0.50"), "kelly"))
+    store.record_fill(intent_id="i1", token_id="t1", condition_id="m1", event_id="e1", side="BUY",
+                      shares=Decimal("16"), price_exec=Decimal("0.50"), worst_case_risk=Decimal("8"))
+
+
+def test_e2e_boot_seam_adopts_dormant_and_none_leaves_run_cycle_unchanged(tmp_path):
+    # Two controllers over identical stores. (A) reconciler=None: boot() is a no-op, the controller
+    # stays HALTED, and run_cycle REJECTS the pending intent under unclean_restart (today's behavior
+    # byte-for-byte). (B) a DORMANT RestartReconciler wired: boot() flips HALTED->RUNNING and adopts
+    # the rebuilt portfolio, so run_cycle proceeds on a RUNNING loop. This closes the §7.3 seam clause.
+    # (A) reconciler=None -> run_cycle unchanged (HALTED rejects).
+    store_a = IntentStore(str(tmp_path / "a.db"), _Stamper())
+    ctl_a = SafetyController(caps=RiskCaps(), store=store_a, clock=lambda: 0)
+    try:
+        store_a.propose_trade("i1", **_BOOT_P)
+        rc_a = ERSController(store=store_a, book_for={"t1": _book2("0.50")}.get, caps=RiskCaps(),
+                             signer=PaperSigner(), controller=ctl_a, clock=lambda: 0)  # no reconciler
+        assert rc_a.boot() is None
+        assert ctl_a.state() == _safety.HALTED
+        rc_a.run_cycle()
+        assert store_a.get("i1").status == "REJECTED"
+        assert store_a.get("i1").decision_reason == "unclean_restart"
+    finally:
+        store_a.close()
+
+    # (B) DORMANT reconciler wired -> boot() adopts DORMANT->RUNNING; run_cycle runs on RUNNING.
+    store_b = IntentStore(str(tmp_path / "b.db"), _Stamper())
+    events_b = EventStore(str(tmp_path / "eb.db"))
+    ctl_b = SafetyController(caps=RiskCaps(), store=store_b, clock=lambda: 0)
+    try:
+        _boot_accept_one(store_b)                        # one ACCEPTED row to rebuild from
+        rr = RestartReconciler(store=store_b, event_store=events_b,
+                               reconciler=ThreeWayReconciler(caps=RiskCaps()), controller=ctl_b,
+                               caps=RiskCaps(), clock=lambda: 0, wallet=None)
+        rc_b = ERSController(store=store_b, book_for={"t1": _book2("0.50")}.get, caps=RiskCaps(),
+                             signer=PaperSigner(), controller=ctl_b, reconciler=rr, clock=lambda: 0)
+        adopted = rc_b.boot()
+        assert ctl_b.state() == _safety.RUNNING          # the DORMANT->RUNNING adoption
+        assert [p.token_id for p in adopted.positions] == ["t1"]
+        final = rc_b.run_cycle()                         # RUNNING loop keeps the adopted position
+        assert [p.token_id for p in final.positions] == ["t1"]
+    finally:
+        store_b.close()
+        events_b.close()
