@@ -67,3 +67,59 @@ def test_not_ready_reason_distinguishes_calibration_and_maker():
                     current_stage=SHADOW, portfolio=_healthy_portfolio(),
                     n_resolved_disputed=1, stress_episodes=1, breaker_tripped=False)
     assert d_mk.stage == SHADOW and d_mk.reason == "not_ready:maker"
+
+
+def test_promote_recommended_true_only_when_all_four_hold():
+    # The healthy promotion: ready AND tail survived AND stress survives AND no breaker ->
+    # promote_recommended True, reason promote_ok, ramp_down False. stage stays current_stage
+    # (SHADOW here) -- promotion PAST it is the operator's human gate, not the controller's.
+    c = _controller()
+    ev = _evidence(ready=True)
+    d = c.decide("sports", evidence=ev, current_stage=SHADOW, portfolio=_healthy_portfolio(),
+                 n_resolved_disputed=1, stress_episodes=1, breaker_tripped=False)
+    assert d.promote_recommended is True
+    assert d.ramp_down is False
+    assert d.reason == "promote_ok"
+    assert d.stage == SHADOW
+
+
+def test_promote_blocked_when_tail_not_survived():
+    # ready but n_resolved_disputed 0 < min_resolved_disputed(1) -> tail_survived False ->
+    # promote False, reason blocked:tail. (RampConfig() defaults: min_resolved_disputed 1.)
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=SHADOW,
+                 portfolio=_healthy_portfolio(), n_resolved_disputed=0, stress_episodes=1,
+                 breaker_tripped=False)
+    assert d.promote_recommended is False
+    assert d.reason == "blocked:tail"
+    assert d.ramp_down is False          # still SHADOW + ready -> not a regression
+
+
+def test_promote_blocked_when_stress_does_not_survive():
+    # ready + tail, but a portfolio whose largest-cluster 100%-adverse freeze breaches the
+    # reserve floor -> dispute_freeze_stress.survives False -> promote False, reason blocked:stress.
+    # One $70 worst-case position (over the $60 ceiling, but the stress test is pure over the
+    # portfolio it is given): frozen markdown 70 -> reserve_after = 300 - 0 - 70 = 230 < 240.
+    c = _controller()
+    breach = Portfolio(nav=Decimal("300"), positions=(
+        OpenPosition(condition_id="m1", event_id="e1", resolution_source="uma1",
+                     cluster_id="c1", worst_case_risk=Decimal("70"), token_id="t1",
+                     entry_price=Decimal("0.50")),
+    ))
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=SHADOW,
+                 portfolio=breach, n_resolved_disputed=1, stress_episodes=1,
+                 breaker_tripped=False)
+    assert d.promote_recommended is False
+    assert d.reason == "blocked:stress"
+
+
+def test_promote_blocked_when_breaker_tripped():
+    # ready + tail + stress, but a tripped breaker -> promote False. A breaker ALSO raises
+    # ramp_down (D3), and the breaker reason dominates the string.
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=SHADOW,
+                 portfolio=_healthy_portfolio(), n_resolved_disputed=1, stress_episodes=1,
+                 breaker_tripped=True)
+    assert d.promote_recommended is False
+    assert d.ramp_down is True
+    assert d.reason == "ramp_down:breaker"
