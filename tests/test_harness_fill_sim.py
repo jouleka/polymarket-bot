@@ -120,3 +120,34 @@ def test_one_sided_book_fails_closed():
     fill = _fill(book=one_sided)
     assert fill.filled is False
     assert fill.reward_accrued == Decimal("0")
+
+
+def test_bad_side_raises():
+    with pytest.raises(ValueError, match="side"):
+        _fill(side="HOLD")
+
+
+def test_non_positive_shares_raises():
+    with pytest.raises(ValueError, match="shares"):
+        _fill(shares=Decimal("0"))
+
+
+def test_non_finite_shares_raises():
+    # is_finite() BEFORE the compare -> a named ValueError, not InvalidOperation.
+    with pytest.raises(ValueError, match="shares"):
+        _fill(shares=Decimal("NaN"))
+
+
+def test_resting_price_at_or_below_zero_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("0"))
+
+
+def test_resting_price_at_or_above_one_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("1"))
+
+
+def test_non_finite_resting_price_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("Infinity"))
