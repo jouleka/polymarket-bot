@@ -164,3 +164,45 @@ def test_disputed_and_void_require_resolution_value_none(tmp_path):
         for status in ("DISPUTED", "VOID"):
             with pytest.raises(ValueError, match="resolution_value"):
                 l.record_settlement("d1", status=status, resolution_value=Decimal("0.5"))
+
+
+def test_record_trade_rejects_a_bad_side(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        with pytest.raises(ValueError, match="side"):
+            _trade(l, "d1", side="HOLD")
+
+
+def test_record_trade_rejects_non_positive_or_non_finite_shares(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        for bad in ("0", "-5", "NaN", "Infinity"):
+            with pytest.raises(ValueError, match="shares"):
+                _trade(l, "d1", shares=bad)
+
+
+def test_record_trade_rejects_out_of_range_prices(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        with pytest.raises(ValueError, match="fill_price"):
+            _trade(l, "d1", fill_price="1.5")
+        with pytest.raises(ValueError, match="fill_price"):
+            _trade(l, "d1", fill_price="-0.1")
+        with pytest.raises(ValueError, match="fill_mid"):
+            _trade(l, "d1", fill_mid="NaN")
+
+
+def test_record_trade_rejects_negative_or_non_finite_reward_accrued(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        for bad in ("-0.01", "NaN"):
+            with pytest.raises(ValueError, match="reward_accrued"):
+                _trade(l, "d1", reward=bad)
+        assert l.all() == []  # nothing garbage entered the no-backfill store
+
+
+def test_persists_across_restart(tmp_path):
+    path = str(tmp_path / "s.db")
+    with _ledger(path) as l:
+        _trade(l, "d1")
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+    with _ledger(path) as l2:
+        r = l2.all()[0]
+        assert r.shares == Decimal("10") and r.fill_price == Decimal("0.48")
+        assert r.status == "WON" and r.resolution_value == Decimal("1")
