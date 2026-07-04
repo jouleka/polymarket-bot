@@ -38,3 +38,21 @@ class MakerFill:
 
 
 _SGN = {"BUY": Decimal(1), "SELL": Decimal(-1)}
+
+
+def net_inventory(fills):
+    """token_id -> (net_shares, avg_cost) folding BUY(+)/SELL(-).
+
+    net_shares = sum sgn*shares ; avg_cost = (sum sgn*shares*price_exec) / net_shares when
+    net_shares != 0 else Decimal(0) (a flattened token has no cost basis left).
+    """
+    net = {}
+    cost = {}
+    for fill in fills:
+        sgn = _SGN[fill.side]
+        net[fill.token_id] = net.get(fill.token_id, Decimal(0)) + sgn * fill.shares
+        cost[fill.token_id] = cost.get(fill.token_id, Decimal(0)) + sgn * fill.shares * fill.price_exec
+    return {
+        token_id: (shares, cost[token_id] / shares if shares != 0 else Decimal(0))
+        for token_id, shares in net.items()
+    }
