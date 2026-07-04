@@ -131,3 +131,36 @@ def test_dispute_reflip_to_won_requires_a_fresh_resolution_value(tmp_path):
         l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
         r = l.all()[0]
         assert r.status == "WON" and r.resolution_value == Decimal("1")
+
+
+def test_rejects_an_invalid_settlement_status(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        with pytest.raises(ValueError, match="status"):
+            l.record_settlement("d1", status="MAYBE", resolution_value=None)
+
+
+def test_settling_an_unknown_trade_fails_loud(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        with pytest.raises(KeyError):
+            l.record_settlement("nope", status="WON", resolution_value=Decimal("1"))
+
+
+def test_won_and_lost_require_a_finite_in_range_resolution_value(tmp_path):
+    # canonically 1/0 but any finite settle mark in [0,1] is accepted; None/NaN/1.5 are not.
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        for bad in (None, Decimal("NaN"), Decimal("1.5")):
+            with pytest.raises(ValueError, match="resolution_value"):
+                l.record_settlement("d1", status="WON", resolution_value=bad)
+        with pytest.raises(ValueError, match="resolution_value"):
+            l.record_settlement("d1", status="LOST", resolution_value=None)
+
+
+def test_disputed_and_void_require_resolution_value_none(tmp_path):
+    # DISPUTED/VOID are excluded from the net sample -- a value here is a caller bug.
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        for status in ("DISPUTED", "VOID"):
+            with pytest.raises(ValueError, match="resolution_value"):
+                l.record_settlement("d1", status=status, resolution_value=Decimal("0.5"))

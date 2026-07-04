@@ -15,6 +15,10 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+# Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
+# dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the shadow net-PnL.
+VALID_STATUSES = ("WON", "LOST", "DISPUTED", "VOID")
+
 _COLUMNS = ("trade_id, token_id, condition_id, category, side, shares, fill_price, "
             "fill_mid, reward_accrued, created_at, status, resolution_value, settled_at")
 
@@ -81,22 +85,32 @@ class ShadowLedger:
 
     def record_settlement(self, trade_id, *, status, resolution_value):
         """Set the trade's resolution (overwrites -- a UMA dispute can flip an apparent
-        WON to DISPUTED later; the flip clears the stale resolution value). WON/LOST
-        REQUIRE a finite Decimal in [0, 1] (canonically 1/0 but any settle mark accepted)
-        -- a re-flip after a dispute-clear cannot silently leak the stale None."""
+        WON to DISPUTED later; the flip clears the stale resolution value). Fails LOUD:
+        unknown status or trade_id; a resolution_value inconsistent with the status --
+        WON/LOST REQUIRE a finite Decimal in [0, 1] (canonically 1/0 but any settle mark
+        accepted); DISPUTED/VOID REQUIRE None (they are excluded from the net sample, so a
+        value here is a caller bug)."""
+        if status not in VALID_STATUSES:
+            raise ValueError(
+                f"invalid settlement status {status!r}; expected one of {VALID_STATUSES}")
         if status in ("WON", "LOST"):
             if (resolution_value is None or not resolution_value.is_finite()
                     or not (Decimal(0) <= resolution_value <= Decimal(1))):
                 raise ValueError(
                     f"resolution_value must be a finite Decimal in [0, 1] for {status}, "
                     f"got {resolution_value}")
-        self._conn.execute(
+        elif resolution_value is not None:
+            raise ValueError(
+                f"resolution_value must be None for {status}, got {resolution_value}")
+        cur = self._conn.execute(
             "UPDATE shadow_trades SET status=?, resolution_value=?, settled_at=? "
             "WHERE trade_id=?",
             (status, None if resolution_value is None else str(resolution_value),
              self._stamper.stamp(), trade_id),
         )
         self._conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(f"no shadow trade {trade_id!r} to settle")
 
     def settled(self, category=None):
         sql = f"SELECT {_COLUMNS} FROM shadow_trades WHERE status IS NOT NULL"
