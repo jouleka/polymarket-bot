@@ -62,3 +62,55 @@ def test_fee_category_is_frozen():
     entry = DEFAULT_FEE_SCHEDULE[0]
     with pytest.raises(dataclasses.FrozenInstanceError):
         entry.fee_rate = Decimal("0.05")
+
+
+def test_rejects_rebate_fraction_out_of_range():
+    # (0, 0.5]: 0 silently disables the rebate leg; > 0.5 is beyond any documented maker share.
+    with pytest.raises(ValueError, match="rebate_fraction"):
+        _config(rebate_fraction=Decimal("0"))
+    with pytest.raises(ValueError, match="rebate_fraction"):
+        _config(rebate_fraction=Decimal("0.6"))
+
+
+def test_rejects_max_spread_out_of_range():
+    # (0, 1): 0 makes nothing reward-eligible; 1 makes EVERYTHING eligible (gate toothless).
+    with pytest.raises(ValueError, match="max_spread"):
+        _config(max_spread=Decimal("0"))
+    with pytest.raises(ValueError, match="max_spread"):
+        _config(max_spread=Decimal("1"))
+
+
+def test_rejects_non_positive_min_samples():
+    with pytest.raises(ValueError, match="min_samples"):
+        _config(min_samples=0)
+
+
+def test_rejects_negative_net_margin_min():
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _config(net_margin_min=Decimal("-0.01"))
+
+
+def test_rejects_negative_lockup_rate():
+    with pytest.raises(ValueError, match="lockup_rate"):
+        _config(lockup_rate=Decimal("-0.01"))
+
+
+def test_rejects_forced_taker_exit_p_out_of_range():
+    with pytest.raises(ValueError, match="forced_taker_exit_p"):
+        _config(forced_taker_exit_p=Decimal("1.01"))
+    with pytest.raises(ValueError, match="forced_taker_exit_p"):
+        _config(forced_taker_exit_p=Decimal("-0.01"))
+
+
+def test_rejects_dispute_p_out_of_range():
+    with pytest.raises(ValueError, match="dispute_p"):
+        _config(dispute_p=Decimal("1.01"))
+    with pytest.raises(ValueError, match="dispute_p"):
+        _config(dispute_p=Decimal("-0.01"))
+
+
+def test_rejects_non_positive_reward_b():
+    with pytest.raises(ValueError, match="reward_b"):
+        _config(reward_b=Decimal("0"))
+    with pytest.raises(ValueError, match="reward_b"):
+        _config(reward_b=Decimal("-1"))
