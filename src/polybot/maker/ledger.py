@@ -79,6 +79,25 @@ class MakerLedger:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def record_settlement(self, fill_id, *, status, resolution_value):
+        """Set the fill's settlement (overwrites -- a UMA dispute can flip an apparent
+        WON to DISPUTED later; the flip clears the stale resolution value)."""
+        self._conn.execute(
+            "UPDATE maker_fills SET status=?, resolution_value=?, settled_at=? "
+            "WHERE fill_id=?",
+            (status, None if resolution_value is None else str(resolution_value),
+             self._stamper.stamp(), fill_id),
+        )
+        self._conn.commit()
+
+    def settled(self, category=None):
+        sql = f"SELECT {_COLUMNS} FROM maker_fills WHERE status IS NOT NULL"
+        params = ()
+        if category is not None:
+            sql += " AND category=?"
+            params = (category,)
+        return self._query(sql + " ORDER BY rowid", params)
+
     def all(self):
         return self._query(f"SELECT {_COLUMNS} FROM maker_fills ORDER BY rowid")
 
