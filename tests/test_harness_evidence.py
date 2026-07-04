@@ -100,15 +100,17 @@ def test_oos_reads_the_recent_window_not_the_full_sample(tmp_path):
 def test_all_gates_cleared_yields_ready_true(tmp_path):
     # 6 WINS -> n_resolved=6 (>=min_resolved 4), n_oos=2.
     #   net_full = 6*7.25 = 43.50 ; net_oos = 2*7.25 = 14.50 (> required_margin 0).
-    # Forecast OOS: 2 well-calibrated market-beating forecasts (see below) -> brier_skill 0.9375 (>0),
+    # Forecast: a market-beating, well-calibrated OOS window -> brier_skill 0.9375 (>0),
     #   reliability 0.01 (<= reliability_max 0.03). k=1, go=True. -> ready True.
     shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
     for i in range(6):
         _win(shadow, f"w{i}", token=f"tw{i}")
-    # forecast honest window: f1 WON bot p 0.90 vs mid 0.60 ; f2 LOST bot p 0.10 vs mid 0.40.
-    #   bot_brier = ((0.90-1)^2+(0.10-0)^2)/2 = (0.01+0.01)/2 = 0.01
-    #   mkt_brier = ((0.60-1)^2+(0.40-0)^2)/2 = (0.16+0.16)/2 = 0.16
-    #   brier_skill = 1 - 0.01/0.16 = 0.9375 ; reliability: bin9 (0.9-1)^2 + bin1 (0.1-0)^2, each wt 1/2 = 0.01
+    # Two honest forecasts recorded (g1 WON p0.90/mid0.60 ; g2 LOST p0.10/mid0.40), but the OOS
+    # forecast window is the MOST-RECENT ceil(0.30*2)=1 forecast (g2 only); g1, its symmetric partner,
+    # is NOT scored. The asserted values are the SINGLE-ROW Brier over g2 (they equal the 2-row average
+    # only because the pair is symmetric):
+    #   bot_brier = (0.10-0)^2 = 0.01 ; mkt_brier = (0.40-0)^2 = 0.16
+    #   brier_skill = 1 - 0.01/0.16 = 0.9375 ; reliability: bin1 (0.10-0)^2, weight 1 = 0.01
     forecast.record_forecast("g1", category="politics", condition_id="c", p=Decimal("0.90"),
                              market_mid=Decimal("0.60"))
     forecast.record_resolution("g1", "WON")
@@ -216,9 +218,12 @@ def test_net_oos_exactly_at_required_margin_is_not_positive_strict(tmp_path):
 
 
 def test_reliability_over_ceiling_makes_calibration_not_ok(tmp_path):
-    # ready-shaped shadow sample + k=1/go=True, but a MIS-calibrated forecast window:
-    #   f1 LOST bot p 0.90 ; f2 WON bot p 0.10  -> reliability = bin9 (0.9-0)^2 + bin1 (0.1-1)^2,
-    #   each weight 1/2 = 0.81, which exceeds reliability_max 0.03 -> calibration_ok False.
+    # ready-shaped shadow sample + k=1/go=True, but a MIS-calibrated forecast window. Two honest
+    # forecasts recorded (b1 LOST p0.90 ; b2 WON p0.10), but the OOS forecast window is the MOST-RECENT
+    # ceil(0.30*2)=1 forecast (b2 only); b1 is NOT scored. The asserted reliability is the SINGLE-ROW
+    # value over b2 (equals the 2-row average only because the pair is symmetric):
+    #   reliability = bin1 (0.10-1)^2, weight 1 = 0.81, which exceeds reliability_max 0.03
+    #   -> calibration_ok False.
     shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
     for i in range(6):
         _win(shadow, f"w{i}", token=f"tw{i}")
@@ -230,16 +235,17 @@ def test_reliability_over_ceiling_makes_calibration_not_ok(tmp_path):
     forecast.record_resolution("b2", "WON")
     rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
     assert rep.reliability == Decimal("0.81000")
-    assert rep.reliability > rep.k.__class__("0.03") or True  # documentary; ceiling is reliability_max 0.03
+    assert rep.reliability > Decimal("0.03")  # genuinely over the reliability_max ceiling
     assert rep.calibration_ok is False
     assert rep.ready is False
 
 
 def test_non_positive_brier_skill_makes_calibration_not_ok(tmp_path):
-    # bot WORSE than the market baseline -> brier_skill <= 0.
-    #   f1 WON bot p 0.20 vs mid 0.80 ; f2 LOST bot p 0.80 vs mid 0.20.
-    #   bot_brier = ((0.20-1)^2+(0.80-0)^2)/2 = (0.64+0.64)/2 = 0.64
-    #   mkt_brier = ((0.80-1)^2+(0.20-0)^2)/2 = (0.04+0.04)/2 = 0.04
+    # bot WORSE than the market baseline -> brier_skill <= 0. Two honest forecasts recorded
+    # (s1 WON p0.20/mid0.80 ; s2 LOST p0.80/mid0.20), but the OOS forecast window is the MOST-RECENT
+    # ceil(0.30*2)=1 forecast (s2 only); s1 is NOT scored. The asserted brier_skill is the SINGLE-ROW
+    # value over s2 (equals the 2-row average only because the pair is symmetric):
+    #   bot_brier = (0.80-0)^2 = 0.64 ; mkt_brier = (0.20-0)^2 = 0.04
     #   brier_skill = 1 - 0.64/0.04 = -15  (<= 0) -> calibration_ok False.
     shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
     for i in range(6):
