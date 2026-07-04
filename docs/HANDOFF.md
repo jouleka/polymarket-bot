@@ -70,7 +70,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
 | **POL-10** | S8 — Maker-rewards module | **DONE + pushed** (`origin/main` @ `17e0901`; branch `pol-10-s8-maker`; 853→1006 tests; honest net-of-adverse-selection ledger→calculators→binary GO/NO-GO gate→facade + quote-policy; shadow-only, data-gated dormant, purely additive) |
-| POL-11 | S9 — Shadow harness + ramp controller | Not started (the capstone — needs S8's gate + a deployed Hermes) |
+| **POL-11** | S9 — Shadow harness + ramp controller | **DONE** (local `main` @ merge pending push; branch `pol-11-s9-harness`; 1006→1113 tests; the earn-autonomy capstone — maker-fill simulator + net-of-everything shadow ledger + walk-forward/MC evidence + dispute-freeze stress + binary SHADOW/TINY_LIVE/RAMP controller + the RestartReconciler boot seam; shadow-only, data-gated dormant, additive but for one inert `ERSController(reconciler=None)` seam) |
 
 **Critical path:** `S0 → S2 → S3 → S4 → S6 → S9`, with `S1` feeding `S5`/`S7`. **No real money** until S4's
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
@@ -295,6 +295,50 @@ edge.
   `rate × total notional` — needs the real time-to-resolution feed) · `net_inventory` awaits its S9/position-reporter
   caller. **Every live NUMBER is a re-pullable seam, not a trusted constant — the gate is only as honest as the
   fee/reward/dispute/lockup inputs S9 supplies.** POL-10 comment posted.
+- **S9 shadow harness → earn-autonomy ramp controller (POL-11) — DONE (local `main` @ merge pending push; branch
+  `pol-11-s9-harness`; pytest 1006→1113; docs/DESIGN-S9-HARNESS.md + docs/PLAN-S9-HARNESS.md):** the CAPSTONE that
+  turns accrued shadow evidence into the earn-autonomy decision. A NEW package `src/polybot/harness/` mirroring
+  `maker/`/`calibration/`'s shape (self-verifying config → pure Decimal calculators → append-only ledger → evidence
+  evaluator → binary stage-machine controller). It COMPOSES the existing gates — S5 calibration `k`, S8 maker `go`,
+  the S8 `net_pnl` identity, S4.5 `RestartReconciler`, S4.7's ratchet — and adds the walk-forward OOS split, the
+  multiple-comparisons margin, the dispute-freeze stress, and the stage machine. **The honesty spine (mutation-pinned
+  end-to-end): the controller advances a category ONLY on `net_of_everything`, OUT-OF-SAMPLE (`net_oos`, never
+  `net_full`), positive-with-MC-margin PnL — never gross, never in-sample.** Modules: `config.py` (`RampConfig`
+  self-verifying — Stage-0 thresholds, OOS holdout, the MC penalty, tail-survival minimums, `oos_n_bins`) · `fill_sim.py`
+  (`simulate_fill` — maker-only resting entry from an intent + a LocalBook; crossed/stale/None-mid → `filled=False`
+  fail-closed; reward via S8's `reward_accrual`) · `ledger.py` (`ShadowLedger` append-only SQLite mirroring `MakerLedger`,
+  table `shadow_trades`, ordered by settled_at; fails loud) · `pnl.py` (`window_net` = the S8 seven-leg identity over a
+  time-window, DISPUTED/VOID excluded, fails LOUD on an unhandled status — exact `MakerTracker` parity) · `evidence.py`
+  (`evaluate_category` — the walk-forward OOS split, `required_margin = net_margin_min + mc_penalty·(family_size−1)`
+  with a `family_size ≥ 1` guard, Brier-beats-mid + reliability over the OOS forecast window, reads `k_for`/`go_for`;
+  `ready` = the AND of every gate; fail-closed cold/insufficient) · `stress.py` (`dispute_freeze_stress` — the
+  DECISIONS-S0 §4 invariant: `reserve_after = nav − non-frozen-encumbered − adverse_fraction·frozen-cluster-wcr ≥
+  reserve_floor`, inclusive at the $60 ceiling; `tail_survived`) · `ramp_controller.py` (`RampController.decide` →
+  `RampDecision{stage, promote_recommended, ramp_down, reason}`; **advisory ramp-UP — NO cap-mutation surface at all,
+  proven by an exact-`{decide}`-allowlist structural pin**; ramp-DOWN only raises a flag for the existing S4.7 ratchet;
+  the $60 ceiling is structurally non-loosenable). **The ONE existing-file edit in the whole slice** is the additive
+  `ERSController(reconciler=None)` boot seam + a `boot()` method (the DORMANT `wallet=None → RUNNING` shadow path,
+  finally wiring the standalone S4.5 `RestartReconciler` into boot); `reconciler=None` == today byte-for-byte,
+  `run_cycle` untouched. Built via subagent-driven strict-TDD, 4 sub-slices S9a–S9d, each spec-compliance +
+  pinned-opus MUTATION BATTERY (~45 mutations across the slice) + a final whole-slice opus review with an 8-mutation
+  cross-cutting battery (the `net_full`-for-`net_oos` doctrine-killer, the fail-open promote, the adverse sign-flip,
+  the phantom-reward, the family_size fail-open, the `swap_caps` no-cap-surface probe, the inert-boot-seam flip, the
+  stress cluster inversion) → **APPROVED FOR MERGE, no survivor**. Genuine catches fixed along the way: a `window_net`
+  fail-loud deviation (silently dropped an unhandled status vs the plan's exhaustive raise — restored to exact
+  MakerTracker parity), a **REAL fail-open — `evaluate_category` had no `family_size ≥ 1` guard, so `family_size=0`
+  made `required_margin` negative and would pass a net-NEGATIVE OOS window through the money gate** (closed + pinned),
+  two mutation-survivor coverage holes (the OOS-sample floor + the brier-skill sub-gate), a crossed-book fail-closed
+  coverage gap, and two plan-arithmetic errata (the drafters' figures, caught + corrected after independent
+  recomputation). **DATA-GATED / shadow-only:** `decide` returns `stage=SHADOW` until the sample clears every Stage-0
+  gate AND the tail is survived AND the stress passes AND no breaker is tripped; nothing quotes/signs/sends/widens a
+  cap. **DEFERRED (documented seams, not built):** actually RUNNING the shadow period to accrue ≥150 resolved/category
+  (needs a DEPLOYED Hermes feeding the propose-only facade + continuous ingestion — operational) · the live
+  fills-recorder feeding the harness · Stage-1+ LIVE cap-widening (the operator's human ramp-up gate + POL-4 signer) ·
+  the real resolution/dispute feed. **POL-4 handoff caveats (non-blocking for shadow):** (1) `boot()` adopts the
+  reconciler's rebuilt portfolio even on a DIVERGED status (it stays HALTED, so harmless in shadow) — when a live
+  wallet is wired, a human resolving a divergence must treat the adopted portfolio as PROVISIONAL, not authoritative;
+  (2) `mc_penalty`/`net_margin_min`/`reliability_max`/the fee schedule are conservative re-pullable deploy seams that
+  must be re-calibrated before the shadow GO is trusted. POL-11 comment posted.
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -331,8 +375,15 @@ edge.
   at deploy before any GO is trusted; inject `mark_for` = `LocalBook.midpoint()` live / resolution at settle (a
   missing feed fails closed = worst-case adverse, safe but pessimistic); `lockup_cost` = `rate × notional` until
   the real time-to-resolution feed lands; `net_inventory` awaits its S9 caller.
+- `docs/DESIGN-S9-HARNESS.md` + `docs/PLAN-S9-HARNESS.md` — the S9 shadow-harness → ramp-controller design (resolved
+  forks: one slice sub-sliced S9a–S9d, maker-primary fill reusing S8, walk-forward + multiple-comparisons OOS rigor,
+  the boot-wiring as an opt-in `reconciler=None` seam; the pinned §4 contract; §3 criteria table; the honesty spine)
+  + the executed 41-task TDD plan (4 sub-slices). NB for the shadow run / POL-4: the whole engine is dormant until a
+  real shadow period accrues ≥150 resolved/category (needs a deployed Hermes + continuous ingestion); the conservative
+  knobs (`mc_penalty`/`net_margin_min`/`reliability_max`/fee schedule) are re-pullable deploy seams; `boot()` adopts a
+  DIVERGED reconciler's rebuilt portfolio while staying HALTED (provisional, not authoritative, once a live wallet lands).
 - `docs/VERIFICATION-2026-06-24.md` — Phase-0 signing-path verification (rs-clob-client-v2).
-- The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-10, POL-12 YouTrack comments** — the detailed per-slice record.
+- The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-10, POL-11, POL-12 YouTrack comments** — the detailed per-slice record.
 
 ## 7. Your task — pick based on what's ready
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
@@ -344,25 +395,26 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
-- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, the S4/POL-6
-  ENVELOPE (S4.1–S4.7), AND S8/POL-10 are now DONE** (see §5). Recommended next, in order:
-  1. **The S4 safety envelope (POL-6) is COMPLETE — all seven sub-slices S4.1–S4.7 are DONE + pushed** (kill path,
-     reconcile, anomaly, Telegram, breakers; see the §5 build-log + the per-slice DESIGN docs). No S4 work remains.
-  2. **S8 / POL-10 — maker-rewards module — DONE + pushed** (`origin/main` @ `17e0901`; shadow, honest
-     net-of-adverse-selection; consumes the D1 `pull_quotes` seam; see the §5 build-log). Nothing consumes it yet.
-  3. **S9 / POL-11 — shadow harness → ramp controller (THE NEXT BUILD — the capstone):** paper-trade net of
-     fees/slippage/lockup/dispute haircut → the calibrated, net-positive, out-of-sample GO/NO-GO evidence. It
-     **ANDs S8's `MakerGate.go_for` with the calibration `k`** and must wire `RestartReconciler` into `ERSController`
-     boot (a standalone unit S4.5 left un-wired). NB: S9 needs proposals actually flowing — a DEPLOYED Hermes feeding
-     the propose-only facade + read-only ingestion running continuously to warm the data-gated machinery (both `k`
-     and S8's `go` stay dormant until ≥150 honest resolutions/category accrue, so nothing sizes live until then).
-     Feed S8 its live seams here: the fills-recorder, `mark_for` (midpoint/resolution), the re-pulled fee/reward
-     numbers, and the real P(dispute)/time-to-resolution inputs.
-  - **Smaller / feeding:** real latent-cluster assignment (S3 follow-up — makes `comove.py` bite cross-event
-    instead of the `event_id` placeholder) · GDELT slow-path · run the read-only ingestion continuously to
-    warm comove/priors · the S6 deferreds (live-Hermes MCP transport + an injection probe vs a real Hermes;
-    MarketRegistry: Gamma metadata → category/question/seconds; resolution-feedback to warm k; a true
-    before/after mid-diff for the same-source gate, DESIGN §10).
+- **If NOT funded → continue the no-funding work. ALL of S1–S9 (the entire deterministic build) is now DONE**
+  (S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, the S4/POL-6 ENVELOPE S4.1–S4.7, S8/POL-10, AND S9/POL-11 — see §5).
+  **There is no more pure-code slice to build — what remains is DEPLOYMENT + OPERATION, most of which is gated on
+  the operator.** Recommended next, in order:
+  1. **DEPLOY + RUN THE SHADOW PERIOD (the real remaining work, needs the operator).** The S9 engine is built and
+     dormant; to produce the earn-autonomy GO it must actually run: stand up a DEPLOYED Hermes feeding the
+     propose-only facade + continuous read-only ingestion on the clean VPS, wire S9's live seams (the fills-recorder
+     into the ShadowLedger, `mark_for` = `LocalBook.midpoint()`/resolution, the re-pulled fee/reward/dispute numbers),
+     and let it accrue ≥150 honest resolutions/category. Both the calibration `k` and S8's `go` and S9's `ready` stay
+     dormant until then. **No real money until S9 shadow proves a calibrated, net-positive, OUT-OF-SAMPLE edge; if
+     nothing clears its bar → DO NOT DEPLOY (inaction is free).**
+  2. **POL-4 (S2 signing) — still the critical path, still BLOCKED on the operator funding a deposit wallet on a
+     clean non-Windows box** (keys never touch this box). Unblocks Stage-1 TINY-LIVE execution. When it lands, honor
+     the S9 POL-4 caveats (the DIVERGED-reconciler-adopts-portfolio note; re-calibrate the deploy-seam numbers).
+  - **Smaller / feeding (buildable now):** real latent-cluster assignment (S3 follow-up — makes `comove.py` bite
+    cross-event instead of the `event_id` placeholder) · GDELT slow-path · run the read-only ingestion continuously
+    to warm comove/priors · the S6 deferreds (live-Hermes MCP transport + an injection probe vs a real Hermes;
+    MarketRegistry: Gamma metadata → category/question/seconds; resolution-feedback to warm k; a true before/after
+    mid-diff for the same-source gate, DESIGN §10) · the S9-consumer glue that ANDs `RampController.decide` with the
+    calibration `k` and turns a `promote_recommended` into an actual (ceiling-clamped) cap change via the human gate.
 
 ## 8. Landmines
 - Never let Hermes compute size or touch keys (`propose_trade` is its only write tool, INSERT-only). When S6
