@@ -71,7 +71,21 @@ class ShadowLedger:
                      fill_price, fill_mid, reward_accrued):
         """INSERT a simulated trade (idempotent on ``trade_id``). Returns True if newly
         inserted, False if a duplicate (original preserved). Decimals stored as exact
-        strings."""
+        strings.
+
+        Fail LOUD at the door (mirrors ``MakerLedger.record_fill``): the shadow net-PnL
+        substrate cannot be backfilled, so a bad side, a non-positive/non-finite size, an
+        out-of-[0,1] price, or a negative reward must never enter it."""
+        if side not in ("BUY", "SELL"):
+            raise ValueError(f"side must be 'BUY' or 'SELL', got {side!r}")
+        if not shares.is_finite() or shares <= 0:
+            raise ValueError(f"shares must be a finite Decimal > 0, got {shares}")
+        for name, value in (("fill_price", fill_price), ("fill_mid", fill_mid)):
+            if not value.is_finite() or not (Decimal(0) <= value <= Decimal(1)):
+                raise ValueError(f"{name} must be a finite price in [0, 1], got {value}")
+        if not reward_accrued.is_finite() or reward_accrued < 0:
+            raise ValueError(
+                f"reward_accrued must be a finite Decimal >= 0, got {reward_accrued}")
         cur = self._conn.execute(
             "INSERT OR IGNORE INTO shadow_trades "
             "(trade_id, token_id, condition_id, category, side, shares, fill_price, "
