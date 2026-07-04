@@ -70,7 +70,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
 | **POL-10** | S8 — Maker-rewards module | **DONE + pushed** (`origin/main` @ `17e0901`; branch `pol-10-s8-maker`; 853→1006 tests; honest net-of-adverse-selection ledger→calculators→binary GO/NO-GO gate→facade + quote-policy; shadow-only, data-gated dormant, purely additive) |
-| **POL-11** | S9 — Shadow harness + ramp controller | **DONE** (local `main` @ merge pending push; branch `pol-11-s9-harness`; 1006→1113 tests; the earn-autonomy capstone — maker-fill simulator + net-of-everything shadow ledger + walk-forward/MC evidence + dispute-freeze stress + binary SHADOW/TINY_LIVE/RAMP controller + the RestartReconciler boot seam; shadow-only, data-gated dormant, additive but for one inert `ERSController(reconciler=None)` seam) |
+| **POL-11** | S9 — Shadow harness + ramp controller | **DONE + pushed** (`origin/main` @ `826e210`; branch `pol-11-s9-harness`; 1006→1113 tests; the earn-autonomy capstone — maker-fill simulator + net-of-everything shadow ledger + walk-forward/MC evidence + dispute-freeze stress + binary SHADOW/TINY_LIVE/RAMP controller + the RestartReconciler boot seam; shadow-only, data-gated dormant, additive but for one inert `ERSController(reconciler=None)` seam) |
 
 **Critical path:** `S0 → S2 → S3 → S4 → S6 → S9`, with `S1` feeding `S5`/`S7`. **No real money** until S4's
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
@@ -295,7 +295,7 @@ edge.
   `rate × total notional` — needs the real time-to-resolution feed) · `net_inventory` awaits its S9/position-reporter
   caller. **Every live NUMBER is a re-pullable seam, not a trusted constant — the gate is only as honest as the
   fee/reward/dispute/lockup inputs S9 supplies.** POL-10 comment posted.
-- **S9 shadow harness → earn-autonomy ramp controller (POL-11) — DONE (local `main` @ merge pending push; branch
+- **S9 shadow harness → earn-autonomy ramp controller (POL-11) — DONE + pushed (`origin/main` @ `826e210`; branch
   `pol-11-s9-harness`; pytest 1006→1113; docs/DESIGN-S9-HARNESS.md + docs/PLAN-S9-HARNESS.md):** the CAPSTONE that
   turns accrued shadow evidence into the earn-autonomy decision. A NEW package `src/polybot/harness/` mirroring
   `maker/`/`calibration/`'s shape (self-verifying config → pure Decimal calculators → append-only ledger → evidence
