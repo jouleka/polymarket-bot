@@ -140,3 +140,68 @@ def test_full_sample_clears_but_oos_negative_stays_shadow(tmp_path):
         assert d.stage == SHADOW
         assert d.promote_recommended is False            # cannot advance on gross/in-sample edge
         assert d.reason == "not_ready:oos"
+
+
+def _winning_ledger(sl):
+    # 6 honest winners across a time span (BUY WON at low prices -> favorable mark-out) + 1 DISPUTED
+    # excluded. Recent OOS window (last 3 winners) ALSO clears margin > 0.
+    _record(sl, "e1", side="BUY", shares="100", price="0.40", mid="0.41", reward="0.05", status="WON")
+    _record(sl, "e2", side="BUY", shares="100", price="0.45", mid="0.46", reward="0.05", status="WON")
+    _record(sl, "e3", side="BUY", shares="100", price="0.50", mid="0.51", reward="0.05", status="WON")
+    _record(sl, "eD", side="BUY", shares="10", price="0.90", mid="0.90", reward="0.01", status="DISPUTED")
+    _record(sl, "e4", side="BUY", shares="100", price="0.40", mid="0.41", reward="0.05", status="WON")
+    _record(sl, "e5", side="BUY", shares="100", price="0.42", mid="0.43", reward="0.05", status="WON")
+    _record(sl, "e6", side="BUY", shares="100", price="0.44", mid="0.45", reward="0.05", status="WON")
+
+
+def test_ready_promotes_then_a_regression_ramps_down(tmp_path):
+    """The winning path: 6 honest winners -> the OOS window (recent 3) clears margin AND k/go pass
+    -> ready True. RampController.decide stays SHADOW (promotion past it is the human gate) but
+    emits promote_recommended True. Then a REGRESSION (a tripped breaker, from a previously-promoted
+    TINY_LIVE stage) -> ramp_down True. This is the full §7.3 arc.
+
+    Config: RampConfig(min_resolved=6, oos_holdout_fraction=0.5, min_oos_resolved=3).
+    Hand-computed OOS net (recent 3 winners e4/e5/e6, BUY WON marks 1; checked twice):
+      reward = 3*0.05 = 0.15
+      Σcf = 100*0.03*(0.40*0.60 + 0.42*0.58 + 0.44*0.56) = 100*0.03*(0.24+0.2436+0.2464)
+          = 100*0.03*0.7300 = 2.190000 ; rebate = 0.20*2.190000 = 0.43800000
+      spread = 100*0.01*3 = 3.00
+      adverse (BUY mark 1) = 100*(0.40-1)+100*(0.42-1)+100*(0.44-1) = -60-58-56 = -174.00
+      net_oos = 0.15 + 0.43800000 + 3.00 - (-174.00) = 177.58800000  (>0 -> clears margin 0)
+    """
+    rc_cfg = RampConfig(min_resolved=6, oos_holdout_fraction=Decimal("0.5"), min_oos_resolved=3)
+    mk_cfg = MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
+    with ShadowLedger(str(tmp_path / "shadow.db"), MonotonicStamper()) as sl:
+        _winning_ledger(sl)
+        ev = evaluate_category(
+            "sports", shadow_ledger=sl, forecast_ledger=_FakeForecastLedger(_good_forecasts()),
+            calibration_gate=_FakeCalibGate(), maker_gate=_FakeMakerGate(),
+            ramp_config=rc_cfg, maker_config=mk_cfg, family_size=1)
+        assert ev.n_resolved == 6 and ev.n_oos == 3
+        assert ev.net_oos == Decimal("177.58800000")    # OOS clears with margin
+        assert ev.oos_positive is True
+        assert ev.ready is True                          # every Stage-0 gate cleared
+
+        controller = RampController(ramp_config=rc_cfg, caps=RiskCaps())
+        healthy = Portfolio(nav=Decimal("300"), positions=(
+            OpenPosition(condition_id="m1", event_id="e1", resolution_source="uma1",
+                         cluster_id="c1", worst_case_risk=Decimal("8"), token_id="t1",
+                         entry_price=Decimal("0.50")),))
+
+        # Ready + tail (2 disputed >= 1, 1 episode >= 1) + stress survives + no breaker -> promote,
+        # but the stage stays SHADOW (the operator's human ramp-up gate advances it, not decide()).
+        d_ok = controller.decide("sports", evidence=ev, current_stage=SHADOW, portfolio=healthy,
+                                 n_resolved_disputed=2, stress_episodes=1, breaker_tripped=False)
+        assert d_ok.promote_recommended is True
+        assert d_ok.stage == SHADOW
+        assert d_ok.ramp_down is False
+        assert d_ok.reason == "promote_ok"
+
+        # A subsequent REGRESSION: the category had been promoted to TINY_LIVE out-of-band, and now
+        # a breaker trips -> ramp_down True (the automatic-tighten signal for the S4.7 ratchet).
+        d_reg = controller.decide("sports", evidence=ev, current_stage="TINY_LIVE",
+                                  portfolio=healthy, n_resolved_disputed=2, stress_episodes=1,
+                                  breaker_tripped=True)
+        assert d_reg.ramp_down is True
+        assert d_reg.promote_recommended is False
+        assert d_reg.reason == "ramp_down:breaker"
