@@ -1,0 +1,72 @@
+"""S9 / POL-11 — dispute-freeze stress + tail-survival (DECISIONS-S0 §4 reserve-floor invariant)."""
+
+from decimal import Decimal
+
+import pytest
+
+from polybot.ers.caps import RiskCaps
+from polybot.ers.validator import OpenPosition, Portfolio
+from polybot.harness.config import RampConfig
+
+
+def _pos(*, wcr, source, token):
+    # only worst_case_risk / resolution_source / token_id are load-bearing for the stress test;
+    # the other OpenPosition fields take their defaults.
+    return OpenPosition(condition_id="c", event_id="e", resolution_source=source,
+                        cluster_id="k", worst_case_risk=Decimal(wcr), token_id=token)
+
+
+def _stress(portfolio, **kw):
+    from polybot.harness.stress import dispute_freeze_stress
+    return dispute_freeze_stress(portfolio, caps=RiskCaps(), **kw)
+
+
+def test_reserve_floor_holds_under_100pct_adverse_freeze_survives(tmp_path):
+    # ONE resolution_source, cluster worst_case_risk = 30, adverse_fraction default 1.
+    #   worst_case_markdown = 1 * 30 = 30 ; non_frozen_encumbered = 0.
+    #   reserve_after = nav(300) - 0 - 30 = 270 >= reserve_floor(240) -> survives True.
+    port = Portfolio(nav=Decimal("300"), positions=(
+        _pos(wcr="10", source="uma", token="t0"),
+        _pos(wcr="20", source="uma", token="t1"),
+    ))
+    res = _stress(port)
+    assert res.worst_case_markdown == Decimal("30")
+    assert res.reserve_after == Decimal("270")
+    assert res.reserve_floor == Decimal("240")
+    assert res.survives is True
+
+
+def test_reserve_floor_breach_does_not_survive(tmp_path):
+    # frozen cluster (srcA) wcr = 45 ; non-frozen (srcB) wcr = 20.
+    #   markdown = 45 ; reserve_after = 300 - 20 - 45 = 235 < 240 -> survives False.
+    port = Portfolio(nav=Decimal("300"), positions=(
+        _pos(wcr="45", source="srcA", token="ta"),
+        _pos(wcr="20", source="srcB", token="tb"),
+    ))
+    res = _stress(port)
+    assert res.worst_case_markdown == Decimal("45")
+    assert res.reserve_after == Decimal("235")
+    assert res.survives is False
+
+
+def test_boundary_at_the_60_at_risk_ceiling_survives_inclusive(tmp_path):
+    # THE $60 ceiling: one source, total at-risk = 60, adverse_fraction 1 (all frozen, no non-frozen).
+    #   markdown = 60 ; reserve_after = 300 - 0 - 60 = 240 == reserve_floor -> survives (>= inclusive).
+    port = Portfolio(nav=Decimal("300"), positions=(
+        _pos(wcr="36", source="uma", token="t0"),
+        _pos(wcr="24", source="uma", token="t1"),
+    ))
+    res = _stress(port)
+    assert res.worst_case_markdown == Decimal("60")
+    assert res.reserve_after == Decimal("240")
+    assert res.reserve_after == res.reserve_floor
+    assert res.survives is True   # inclusive >=
+
+
+def test_empty_portfolio_survives_with_reserve_after_equal_nav(tmp_path):
+    # no positions -> markdown 0, non_frozen 0 -> reserve_after = nav = 300 >= 240 -> survives True.
+    port = Portfolio(nav=Decimal("300"), positions=())
+    res = _stress(port)
+    assert res.worst_case_markdown == Decimal("0")
+    assert res.reserve_after == Decimal("300")
+    assert res.survives is True
