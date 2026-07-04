@@ -81,14 +81,32 @@ class MakerLedger:
 
     def record_settlement(self, fill_id, *, status, resolution_value):
         """Set the fill's settlement (overwrites -- a UMA dispute can flip an apparent
-        WON to DISPUTED later; the flip clears the stale resolution value)."""
-        self._conn.execute(
+        WON to DISPUTED later; the flip clears the stale resolution value). Fails LOUD:
+        unknown status or fill_id; a resolution_value inconsistent with the status --
+        WON/LOST REQUIRE a finite Decimal in [0, 1] (canonically 1/0 but any settle mark
+        accepted); DISPUTED/VOID REQUIRE None (they are excluded from the net sample, so
+        a value here is a caller bug)."""
+        if status not in VALID_STATUSES:
+            raise ValueError(
+                f"invalid settlement status {status!r}; expected one of {VALID_STATUSES}")
+        if status in ("WON", "LOST"):
+            if (resolution_value is None or not resolution_value.is_finite()
+                    or not (Decimal(0) <= resolution_value <= Decimal(1))):
+                raise ValueError(
+                    f"resolution_value must be a finite Decimal in [0, 1] for {status}, "
+                    f"got {resolution_value}")
+        elif resolution_value is not None:
+            raise ValueError(
+                f"resolution_value must be None for {status}, got {resolution_value}")
+        cur = self._conn.execute(
             "UPDATE maker_fills SET status=?, resolution_value=?, settled_at=? "
             "WHERE fill_id=?",
             (status, None if resolution_value is None else str(resolution_value),
              self._stamper.stamp(), fill_id),
         )
         self._conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(f"no maker fill {fill_id!r} to settle")
 
     def settled(self, category=None):
         sql = f"SELECT {_COLUMNS} FROM maker_fills WHERE status IS NOT NULL"
