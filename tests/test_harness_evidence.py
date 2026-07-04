@@ -153,3 +153,63 @@ def test_mc_penalty_inflates_required_margin_by_family_size(tmp_path):
     assert rep3.net_oos == Decimal("14.50")
     assert rep3.oos_positive is False
     assert rep3.ready is False
+
+
+def test_below_min_resolved_is_not_ready(tmp_path):
+    # 3 WINS -> n_resolved=3 < min_resolved 4. (n_oos=ceil(0.30*3)=1 < min_oos_resolved 2 too.)
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(3):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.n_resolved == 3
+    assert rep.ready is False
+
+
+def test_k_zero_makes_calibration_not_ok_and_not_ready(tmp_path):
+    # ready-shaped 6-win sample + a passing forecast window, but k=0 (calibration gate NO-GO).
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    forecast.record_forecast("g1", category="politics", condition_id="c", p=Decimal("0.90"),
+                             market_mid=Decimal("0.60"))
+    forecast.record_resolution("g1", "WON")
+    forecast.record_forecast("g2", category="politics", condition_id="c", p=Decimal("0.10"),
+                             market_mid=Decimal("0.40"))
+    forecast.record_resolution("g2", "LOST")
+    rep = _evaluate(shadow, forecast, k=Decimal("0"), go=True)
+    assert rep.k == Decimal("0")
+    assert rep.oos_positive is True         # the OOS net still clears
+    assert rep.calibration_ok is False      # k==0 zeroes it
+    assert rep.ready is False
+
+
+def test_go_false_makes_maker_not_ok_and_not_ready(tmp_path):
+    # ready-shaped sample + passing forecasts + k=1, but the maker gate says NO-GO.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    forecast.record_forecast("g1", category="politics", condition_id="c", p=Decimal("0.90"),
+                             market_mid=Decimal("0.60"))
+    forecast.record_resolution("g1", "WON")
+    forecast.record_forecast("g2", category="politics", condition_id="c", p=Decimal("0.10"),
+                             market_mid=Decimal("0.40"))
+    forecast.record_resolution("g2", "LOST")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=False)
+    assert rep.maker_go is False
+    assert rep.maker_ok is False
+    assert rep.calibration_ok is True
+    assert rep.ready is False
+
+
+def test_net_oos_exactly_at_required_margin_is_not_positive_strict(tmp_path):
+    # STRICT >. net_oos = 14.50 (2 wins); set net_margin_min = 14.50 so required_margin == 14.50.
+    #   oos_positive = 14.50 > 14.50 = False -> ready False.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    ramp = _ramp_config(net_margin_min=Decimal("14.50"))
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True, ramp=ramp)
+    assert rep.net_oos == Decimal("14.50")
+    assert rep.required_margin == Decimal("14.50")
+    assert rep.oos_positive is False
+    assert rep.ready is False
