@@ -159,3 +159,45 @@ def test_two_sided_book_hand_computed():
 
 def test_no_fills_zero_adverse():
     assert adverse_selection([], lambda token_id: Decimal("0.50")) == Decimal(0)
+
+
+def test_none_mark_buy_fails_closed_to_full_cost():
+    # mark_for -> None: BUY worst case is mark 0 -> shares * price_exec = 10 * 0.50 = 5.00
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: None) == Decimal("5.00")
+
+
+def test_none_mark_sell_fails_closed_to_one_minus_price():
+    # SELL worst case is mark 1 -> shares * (1 - price_exec) = 10 * 0.40 = 4.00
+    fills = [_fill(side="SELL", shares=Decimal("10"), price_exec=Decimal("0.60"))]
+    assert adverse_selection(fills, lambda token_id: None) == Decimal("4.00")
+
+
+def test_nan_mark_fails_closed():
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("NaN")) == Decimal("5.00")
+
+
+def test_mark_above_one_fails_closed_never_phantom_gain():
+    # A naive signed mark-out with mark=1.5 would book +1*10*(0.50-1.5) = -10 (a phantom GAIN).
+    # Fail-closed books the worst case instead: +5.00.
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("1.5")) == Decimal("5.00")
+
+
+def test_mark_below_zero_fails_closed_never_phantom_gain():
+    # Naive with mark=-0.2 on a SELL: -1*10*(0.60-(-0.2)) = -8 (phantom gain). Fail-closed: +4.00.
+    fills = [_fill(side="SELL", shares=Decimal("10"), price_exec=Decimal("0.60"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("-0.2")) == Decimal("4.00")
+
+
+def test_bad_mark_folds_worst_case_alongside_good_marks():
+    # Good BUY 10 @ 0.50 marked 0.55: +1 * 10 * (0.50 - 0.55) = -0.50 (a real gain, kept)
+    # SELL 2 @ 0.30 with a None mark: worst case 2 * (1 - 0.30) = +1.40
+    # total = 0.90
+    fills = [
+        _fill(token_id="tok-good", side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50")),
+        _fill(token_id="tok-bad", side="SELL", shares=Decimal("2"), price_exec=Decimal("0.30")),
+    ]
+    marks = {"tok-good": Decimal("0.55"), "tok-bad": None}
+    assert adverse_selection(fills, lambda token_id: marks[token_id]) == Decimal("0.90")
