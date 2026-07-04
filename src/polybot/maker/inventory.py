@@ -45,6 +45,8 @@ def net_inventory(fills):
 
     net_shares = sum sgn*shares ; avg_cost = (sum sgn*shares*price_exec) / net_shares when
     net_shares != 0 else Decimal(0) (a flattened token has no cost basis left).
+    For a net-short book (net_shares < 0) avg_cost is the positive volume-weighted exit
+    price (numerator and denominator both negative).
     """
     net = {}
     cost = {}

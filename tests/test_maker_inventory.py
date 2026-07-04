@@ -201,3 +201,17 @@ def test_bad_mark_folds_worst_case_alongside_good_marks():
     ]
     marks = {"tok-good": Decimal("0.55"), "tok-bad": None}
     assert adverse_selection(fills, lambda token_id: marks[token_id]) == Decimal("0.90")
+
+
+def test_none_mark_sell_at_price_one_fails_closed_to_exact_zero():
+    # The genuine zero-adverse worst case: SELL @ 1 with a bad mark -> shares * (1 - 1) = 0.
+    # Fail-closed never goes NEGATIVE even at the price extremes.
+    fills = [_fill(side="SELL", shares=Decimal("10"), price_exec=Decimal("1"))]
+    assert adverse_selection(fills, lambda token_id: None) == Decimal("0")
+
+
+def test_none_mark_buy_at_price_zero_fails_closed_to_exact_zero():
+    # The genuine zero-adverse worst case: BUY @ 0 with a bad mark -> shares * 0 = 0.
+    # Fail-closed never goes NEGATIVE even at the price extremes.
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0"))]
+    assert adverse_selection(fills, lambda token_id: None) == Decimal("0")
