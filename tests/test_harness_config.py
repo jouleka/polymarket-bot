@@ -24,3 +24,9 @@ def test_defaults_are_valid_and_match_the_pinned_contract():
     assert c.min_resolved_disputed == 1
     assert c.min_stress_episodes == 1
     assert c.ramp_step_fraction == Decimal("0.5")
+
+
+def test_config_is_frozen():
+    c = _cfg()
+    with pytest.raises(Exception):  # FrozenInstanceError (a dataclasses subclass); construction-time immutability
+        c.min_resolved = 200
