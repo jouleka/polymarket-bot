@@ -125,3 +125,31 @@ def test_all_gates_cleared_yields_ready_true(tmp_path):
     assert rep.calibration_ok is True
     assert rep.maker_ok is True
     assert rep.ready is True
+
+
+def test_mc_penalty_inflates_required_margin_by_family_size(tmp_path):
+    # required_margin = net_margin_min + mc_penalty*(family_size - 1).
+    # mc_penalty=10, net_margin_min=0. net_oos = 14.50 (2 wins in the OOS window of a 6-win sample).
+    #   family_size=1 -> required 0  -> 14.50 > 0  True  -> oos_positive True.
+    #   family_size=3 -> required 20 -> 14.50 > 20 False -> oos_positive False (MC discipline bites).
+    def build():
+        shadow, forecast = _shadow(tmp_path, f"s{build.n}.db"), _forecast(tmp_path, f"f{build.n}.db")
+        build.n += 1
+        for i in range(6):
+            _win(shadow, f"w{i}", token=f"tw{i}")
+        return shadow, forecast
+    build.n = 0
+    ramp = _ramp_config(mc_penalty=Decimal("10"))
+
+    s1, f1 = build()
+    rep1 = _evaluate(s1, f1, ramp=ramp, family_size=1)
+    assert rep1.required_margin == Decimal("0")
+    assert rep1.net_oos == Decimal("14.50")
+    assert rep1.oos_positive is True
+
+    s3, f3 = build()
+    rep3 = _evaluate(s3, f3, ramp=ramp, family_size=3)
+    assert rep3.required_margin == Decimal("20")
+    assert rep3.net_oos == Decimal("14.50")
+    assert rep3.oos_positive is False
+    assert rep3.ready is False
