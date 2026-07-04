@@ -24,6 +24,10 @@ def taker_fee(category, p, size, *, schedule) -> Decimal:
         raise ValueError(f"unknown fee category {category!r} -- config gap, refusing to price as free")
     if entry.free or not entry.active:
         return Decimal(0)
+    if entry.exponent == 0:
+        # flat-fee model: (1-p)**0 == 1 everywhere INCLUDING p=1, but
+        # Decimal(0)**Decimal(0) raises InvalidOperation — skip the power term.
+        return size * entry.fee_rate * p
     return size * entry.fee_rate * p * (Decimal(1) - p) ** entry.exponent
 
 
