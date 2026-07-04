@@ -53,22 +53,25 @@ class MakerConfig:
         self._verify()
 
     def _verify(self):
-        if not (Decimal(0) < self.rebate_fraction <= Decimal("0.5")):
-            raise ValueError(f"rebate_fraction must be in (0, 0.5], got {self.rebate_fraction}")
-        if self.reward_b <= 0:
-            raise ValueError(f"reward_b must be > 0, got {self.reward_b}")
-        if not (Decimal(0) < self.max_spread < Decimal(1)):
-            raise ValueError(f"max_spread must be in (0, 1), got {self.max_spread}")
+        # is_finite() FIRST on every scalar Decimal knob (the fees.py guard-order
+        # discipline): a NaN ordered-compare raises InvalidOperation, and Infinity
+        # sails through one-sided compares — both must fail LOUD by field name.
+        if not self.rebate_fraction.is_finite() or not (Decimal(0) < self.rebate_fraction <= Decimal("0.5")):
+            raise ValueError(f"rebate_fraction must be finite and in (0, 0.5], got {self.rebate_fraction}")
+        if not self.reward_b.is_finite() or self.reward_b <= 0:
+            raise ValueError(f"reward_b must be finite and > 0, got {self.reward_b}")
+        if not self.max_spread.is_finite() or not (Decimal(0) < self.max_spread < Decimal(1)):
+            raise ValueError(f"max_spread must be finite and in (0, 1), got {self.max_spread}")
         if self.min_samples <= 0:
             raise ValueError(f"min_samples must be > 0, got {self.min_samples}")
-        if self.net_margin_min < 0:
-            raise ValueError(f"net_margin_min must be >= 0, got {self.net_margin_min}")
-        if self.lockup_rate < 0:
-            raise ValueError(f"lockup_rate must be >= 0, got {self.lockup_rate}")
-        if not (Decimal(0) <= self.forced_taker_exit_p <= Decimal(1)):
-            raise ValueError(f"forced_taker_exit_p must be in [0, 1], got {self.forced_taker_exit_p}")
-        if not (Decimal(0) <= self.dispute_p <= Decimal(1)):
-            raise ValueError(f"dispute_p must be in [0, 1], got {self.dispute_p}")
+        if not self.net_margin_min.is_finite() or self.net_margin_min < 0:
+            raise ValueError(f"net_margin_min must be finite and >= 0, got {self.net_margin_min}")
+        if not self.lockup_rate.is_finite() or self.lockup_rate < 0:
+            raise ValueError(f"lockup_rate must be finite and >= 0, got {self.lockup_rate}")
+        if not self.forced_taker_exit_p.is_finite() or not (Decimal(0) <= self.forced_taker_exit_p <= Decimal(1)):
+            raise ValueError(f"forced_taker_exit_p must be finite and in [0, 1], got {self.forced_taker_exit_p}")
+        if not self.dispute_p.is_finite() or not (Decimal(0) <= self.dispute_p <= Decimal(1)):
+            raise ValueError(f"dispute_p must be finite and in [0, 1], got {self.dispute_p}")
         self._verify_schedule()
 
     def _verify_schedule(self):

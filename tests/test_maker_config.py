@@ -116,6 +116,28 @@ def test_rejects_non_positive_reward_b():
         _config(reward_b=Decimal("-1"))
 
 
+def test_rejects_infinity_on_the_unbounded_knobs():
+    # One-sided range compares don't catch Infinity — the finiteness guard must
+    # run FIRST (the fees.py guard-order discipline) and fail LOUD by field name.
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _config(net_margin_min=Decimal("Infinity"))
+    with pytest.raises(ValueError, match="lockup_rate"):
+        _config(lockup_rate=Decimal("Infinity"))
+    with pytest.raises(ValueError, match="reward_b"):
+        _config(reward_b=Decimal("Infinity"))
+
+
+def test_rejects_nan_as_a_named_valueerror_not_invalidoperation():
+    # A Decimal NaN in an ordered compare raises decimal.InvalidOperation — the
+    # doctrine demands the named ValueError instead (is_finite BEFORE any compare).
+    with pytest.raises(ValueError, match="rebate_fraction"):
+        _config(rebate_fraction=Decimal("NaN"))
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _config(net_margin_min=Decimal("NaN"))
+    with pytest.raises(ValueError, match="lockup_rate"):
+        _config(lockup_rate=Decimal("NaN"))
+
+
 def _cat(name="sports", fee_rate="0.03", exponent="1", active=True, free=False):
     return FeeCategory(
         name=name, fee_rate=Decimal(fee_rate), exponent=Decimal(exponent),
