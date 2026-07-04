@@ -69,7 +69,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
-| **POL-10** | S8 — Maker-rewards module | **DONE** (local `main` @ merge pending push; branch `pol-10-s8-maker`; 853→1006 tests; honest net-of-adverse-selection ledger→calculators→binary GO/NO-GO gate→facade + quote-policy; shadow-only, data-gated dormant, purely additive) |
+| **POL-10** | S8 — Maker-rewards module | **DONE + pushed** (`origin/main` @ `17e0901`; branch `pol-10-s8-maker`; 853→1006 tests; honest net-of-adverse-selection ledger→calculators→binary GO/NO-GO gate→facade + quote-policy; shadow-only, data-gated dormant, purely additive) |
 | POL-11 | S9 — Shadow harness + ramp controller | Not started (the capstone — needs S8's gate + a deployed Hermes) |
 
 **Critical path:** `S0 → S2 → S3 → S4 → S6 → S9`, with `S1` feeding `S5`/`S7`. **No real money** until S4's
@@ -252,7 +252,7 @@ edge.
   in the sizing path (Fork 2 consumer hard-off) · a durable nonce table · the heartbeat-stop dead-man tie-in ·
   a `max(1, alerts_down_threshold)` clamp when a deploy passes the kwarg (alerting knob, not a signed cap) · an
   optional RESUME+anomaly same-cycle composition test. **THIS CLOSES THE S4 SAFETY ENVELOPE** — S4.1–S4.7 all done.
-- **S8 maker-rewards module (POL-10) — DONE (local `main` @ merge pending push; branch `pol-10-s8-maker`;
+- **S8 maker-rewards module (POL-10) — DONE + pushed (`origin/main` @ `17e0901`; branch `pol-10-s8-maker`;
   pytest 853→1006; docs/DESIGN-S8-MAKER.md + docs/PLAN-S8-MAKER.md):** the honest net-of-adverse-selection
   maker economics, as a NEW self-contained shadow-analytics package `src/polybot/maker/` mirroring
   `calibration/`'s shape (append-only ledger → pure exact-Decimal calculators → binary GO/NO-GO tracker → thin
@@ -348,7 +348,7 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   ENVELOPE (S4.1–S4.7), AND S8/POL-10 are now DONE** (see §5). Recommended next, in order:
   1. **The S4 safety envelope (POL-6) is COMPLETE — all seven sub-slices S4.1–S4.7 are DONE + pushed** (kill path,
      reconcile, anomaly, Telegram, breakers; see the §5 build-log + the per-slice DESIGN docs). No S4 work remains.
-  2. **S8 / POL-10 — maker-rewards module — DONE** (local `main` @ merge pending push; shadow, honest
+  2. **S8 / POL-10 — maker-rewards module — DONE + pushed** (`origin/main` @ `17e0901`; shadow, honest
      net-of-adverse-selection; consumes the D1 `pull_quotes` seam; see the §5 build-log). Nothing consumes it yet.
   3. **S9 / POL-11 — shadow harness → ramp controller (THE NEXT BUILD — the capstone):** paper-trade net of
      fees/slippage/lockup/dispute haircut → the calibrated, net-positive, out-of-sample GO/NO-GO evidence. It
