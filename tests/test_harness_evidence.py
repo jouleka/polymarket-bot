@@ -350,3 +350,32 @@ def test_oos_floor_gate_in_isolation_below_min_oos_resolved_is_not_ready(tmp_pat
     assert rep.net_oos == Decimal("7.25")  # a hugely positive OOS net -- not why it fails
     assert rep.oos_positive is False       # the OOS-floor gate alone blocks it
     assert rep.ready is False
+
+
+def test_brier_skill_subgate_in_isolation_reliability_passing(tmp_path):
+    # ISOLATE the brier_skill > 0 sub-gate: the bot is UNINFORMATIVE-BUT-CALIBRATED (p=0.50 on a
+    # balanced WON/LOST pair -> reliability 0, well within reliability_max) while a SHARP correct
+    # market (mid 0.95 on the WON, 0.05 on the LOST) crushes it on Brier:
+    #   bot_brier = ((0.50-1)^2+(0.50-0)^2)/2 = 0.25 ; mkt_brier = ((0.95-1)^2+(0.05-0)^2)/2 = 0.0025
+    #   brier_skill = 1 - 0.25/0.0025 = -99  (<= 0)   ; reliability = bin5 (0.50-0.50)^2 = 0
+    # oos_holdout_fraction=0.60 so the OOS forecast window is BOTH rows (ceil(0.60*2)=2), scoring the
+    # balanced pair. calibration_ok must be False DRIVEN BY brier_skill (reliability 0 passes). The
+    # shadow side is ready-shaped (6 wins) so calibration_ok is the ONLY failing gate.
+    #   Dropping the `brier_skill > 0` conjunct would flip calibration_ok True (reliability already ok).
+    ramp = _ramp_config(oos_holdout_fraction=Decimal("0.60"))
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    forecast.record_forecast("u1", category="politics", condition_id="c", p=Decimal("0.50"),
+                             market_mid=Decimal("0.95"))
+    forecast.record_resolution("u1", "WON")
+    forecast.record_forecast("u2", category="politics", condition_id="c", p=Decimal("0.50"),
+                             market_mid=Decimal("0.05"))
+    forecast.record_resolution("u2", "LOST")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True, ramp=ramp)
+    assert rep.brier_skill == Decimal("-99")           # <= 0: the sub-gate that fails
+    assert rep.reliability == Decimal("0")             # <= reliability_max 0.03: PASSES
+    assert rep.reliability <= Decimal("0.03")
+    assert rep.oos_positive is True                    # shadow side clears -> not why it fails
+    assert rep.calibration_ok is False                 # driven by brier_skill alone
+    assert rep.ready is False
