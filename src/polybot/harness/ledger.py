@@ -81,7 +81,15 @@ class ShadowLedger:
 
     def record_settlement(self, trade_id, *, status, resolution_value):
         """Set the trade's resolution (overwrites -- a UMA dispute can flip an apparent
-        WON to DISPUTED later; the flip clears the stale resolution value)."""
+        WON to DISPUTED later; the flip clears the stale resolution value). WON/LOST
+        REQUIRE a finite Decimal in [0, 1] (canonically 1/0 but any settle mark accepted)
+        -- a re-flip after a dispute-clear cannot silently leak the stale None."""
+        if status in ("WON", "LOST"):
+            if (resolution_value is None or not resolution_value.is_finite()
+                    or not (Decimal(0) <= resolution_value <= Decimal(1))):
+                raise ValueError(
+                    f"resolution_value must be a finite Decimal in [0, 1] for {status}, "
+                    f"got {resolution_value}")
         self._conn.execute(
             "UPDATE shadow_trades SET status=?, resolution_value=?, settled_at=? "
             "WHERE trade_id=?",
