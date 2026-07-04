@@ -27,3 +27,18 @@ class RampConfig:
     min_resolved_disputed: int = 1                    # tail-survival: >= this many resolved DISPUTED; >= 0
     min_stress_episodes: int = 1                      # tail-survival: >= this many stress episodes; >= 0
     ramp_step_fraction: Decimal = Decimal("0.5")     # advisory widen step (reported only); 0 < s <= 1
+
+    def __post_init__(self):
+        self._verify()
+
+    def _verify(self):
+        if self.min_resolved <= 0:
+            raise ValueError(f"min_resolved must be > 0, got {self.min_resolved}")
+        if self.min_oos_resolved <= 0:
+            raise ValueError(f"min_oos_resolved must be > 0, got {self.min_oos_resolved}")
+        if self.oos_n_bins <= 0:
+            raise ValueError(f"oos_n_bins must be > 0, got {self.oos_n_bins}")
+        if self.min_resolved_disputed < 0:
+            raise ValueError(f"min_resolved_disputed must be >= 0, got {self.min_resolved_disputed}")
+        if self.min_stress_episodes < 0:
+            raise ValueError(f"min_stress_episodes must be >= 0, got {self.min_stress_episodes}")
