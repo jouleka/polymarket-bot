@@ -72,5 +72,18 @@ class MakerConfig:
         self._verify_schedule()
 
     def _verify_schedule(self):
-        # Schedule-envelope checks pinned RED-first by the A3 cycle.
-        pass
+        if not isinstance(self.fee_schedule, tuple) or not self.fee_schedule:
+            raise ValueError(f"fee_schedule must be a non-empty tuple, got {self.fee_schedule!r}")
+        seen = set()
+        for entry in self.fee_schedule:
+            if not isinstance(entry, FeeCategory):
+                raise ValueError(f"fee_schedule entry must be a FeeCategory, got {entry!r}")
+            if not entry.name:
+                raise ValueError(f"fee_schedule entry name must be non-empty, got {entry!r}")
+            if entry.name in seen:
+                raise ValueError(f"fee_schedule entry names must be unique, got duplicate {entry.name!r}")
+            seen.add(entry.name)
+            if not entry.fee_rate.is_finite() or entry.fee_rate < 0:
+                raise ValueError(f"fee_rate must be finite and >= 0, got {entry.fee_rate} for {entry.name!r}")
+            if not entry.exponent.is_finite() or entry.exponent < 0:
+                raise ValueError(f"exponent must be finite and >= 0, got {entry.exponent} for {entry.name!r}")
