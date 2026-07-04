@@ -42,16 +42,25 @@ class RampController:
 
     def decide(self, category, *, evidence, current_stage, portfolio, n_resolved_disputed,
                stress_episodes, breaker_tripped):
-        promote_recommended = evidence.ready
-        ramp_down = current_stage != SHADOW and not evidence.ready
+        tail = stress.tail_survived(
+            n_resolved_disputed=n_resolved_disputed, stress_episodes=stress_episodes,
+            ramp_config=self._ramp_config)
+        st = stress.dispute_freeze_stress(portfolio, caps=self._caps)
+        promote_recommended = (evidence.ready and tail and st.survives
+                               and not breaker_tripped)
+        ramp_down = breaker_tripped or (current_stage != SHADOW and not evidence.ready)
         stage = SHADOW if not evidence.ready else current_stage
-        reason = self._reason(evidence, ramp_down=ramp_down)
+        reason = self._reason(evidence, tail=tail, stress_survives=st.survives,
+                              breaker_tripped=breaker_tripped, ramp_down=ramp_down)
         return RampDecision(category=category, stage=stage,
                             promote_recommended=promote_recommended, ramp_down=ramp_down,
                             reason=reason, evidence=evidence)
 
     @staticmethod
-    def _reason(evidence, *, ramp_down):
+    def _reason(evidence, *, tail, stress_survives, breaker_tripped, ramp_down):
+        # Ramp-DOWN reasons take precedence in the string (a regression is the loudest signal).
+        if breaker_tripped:
+            return "ramp_down:breaker"
         if ramp_down:                       # current_stage != SHADOW and not ready
             return "ramp_down:regression"
         if not evidence.ready:
@@ -63,4 +72,8 @@ class RampController:
             if not evidence.maker_ok:
                 return "not_ready:maker"
             return "not_ready:sample"       # n_resolved below the floor (all sub-gates ok)
+        if not tail:
+            return "blocked:tail"
+        if not stress_survives:
+            return "blocked:stress"
         return "promote_ok"
