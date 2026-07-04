@@ -23,7 +23,7 @@ from polybot.ers.service import process_pending
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
                  heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
-                 telegram=None, clock):
+                 telegram=None, reconciler=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -50,10 +50,26 @@ class ERSController:
         # run_cycle (ahead of even beat/anomaly) so an operator KILL dominates the cycle.
         # telegram=None (the default) == pre-S4.6 byte-for-byte.
         self._telegram = telegram
+        # reconciler (S9d / POL-11 seam): the opt-in RestartReconciler adopted ONCE at boot() —
+        # NOT per-cycle. reconciler=None (the default) == today byte-for-byte: boot() is a no-op,
+        # the controller stays HALTED with the empty construction portfolio, and run_cycle is
+        # untouched. The DORMANT wallet=None shadow path flips HALTED->RUNNING on boot() (D6).
+        self._reconciler = reconciler
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
         self._portfolio = self._empty_portfolio()
+
+    def boot(self):
+        """Adopt the RestartReconciler ONCE before the run loop (deploy calls this once). When
+        wired, reconcile_on_boot() drives the (only automatic) HALTED->RUNNING transition and
+        returns the rebuilt Portfolio, which becomes the threaded working portfolio. reconciler=
+        None -> no-op (returns None; stays HALTED, empty portfolio == today). run_cycle is not
+        touched by this seam."""
+        if self._reconciler is not None:
+            self._portfolio = self._reconciler.reconcile_on_boot()
+            return self._portfolio
+        return None
 
     def _empty_portfolio(self):
         from polybot.ers.validator import Portfolio
