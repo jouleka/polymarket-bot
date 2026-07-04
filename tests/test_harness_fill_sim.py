@@ -122,6 +122,21 @@ def test_one_sided_book_fails_closed():
     assert fill.reward_accrued == Decimal("0")
 
 
+def test_crossed_book_with_both_sides_present_fails_closed():
+    # A CROSSED book: bid 0.55 >= ask 0.45 -> BOTH sides present but midpoint() None
+    # (LocalBook.midpoint gates on bid >= ask). This is the case a one-sided/stale book
+    # does NOT cover: best_bid() is not None here, so the `mid is None` disjunct in
+    # simulate_fill's `crosses` predicate is the ONLY thing that fails it closed.
+    # SELL resting 0.60 is > best_bid 0.55 -> does NOT cross on the resting side, so
+    # dropping the `mid is None` guard would fall through to abs(0.60 - None) / filled=True.
+    crossed = _book([("0.55", "100")], [("0.45", "100")])
+    assert crossed.midpoint() is None and crossed.best_bid() is not None
+    fill = _fill(side="SELL", resting_price=Decimal("0.60"), book=crossed)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.fill_mid == Decimal("0")
+
+
 def test_bad_side_raises():
     with pytest.raises(ValueError, match="side"):
         _fill(side="HOLD")
