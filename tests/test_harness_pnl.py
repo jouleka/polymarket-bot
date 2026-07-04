@@ -63,8 +63,8 @@ def test_window_net_over_a_free_category_zeroes_rebate_and_fees():
 
 
 def test_window_net_excludes_disputed_and_void_rows():
-    # a DISPUTED row whose inclusion WOULD change the net (big reward) must be skipped:
-    # the net must equal the honest-only 17.96464000, not the leaked 2.24214000.
+    # a DISPUTED/VOID row whose inclusion WOULD change the net (big reward) must be skipped:
+    # the net must equal the honest-only 17.96464000, not the naive-include -6.18536000.
     disputed = _row("tD", token="tD", category="sports", side="BUY", shares="50",
                     fill_price="0.50", fill_mid="0.50", reward="9.99", status="DISPUTED",
                     resolution_value=None)
@@ -104,6 +104,21 @@ def test_window_net_raises_on_divergent_resolution_marks_for_one_token():
     ]
     with pytest.raises(ValueError, match="inconsistent"):
         window_net(diverging, maker_config=_cfg())
+
+
+def test_window_net_fails_loud_on_an_unhandled_status():
+    # a status outside {WON,LOST,DISPUTED,VOID} is corruption -- fail loud, never silently
+    # drop it from the accounting (exact MakerTracker.report_for parity).
+    window = [
+        _row("h1", token="h1", category="sports", side="BUY", shares="10",
+             fill_price="0.40", fill_mid="0.50", reward="0.25", status="WON",
+             resolution_value="1"),
+        _row("w1", token="w1", category="sports", side="BUY", shares="10",
+             fill_price="0.40", fill_mid="0.50", reward="0.25", status="WEIRD",
+             resolution_value=None),
+    ]
+    with pytest.raises(ValueError, match="unhandled"):
+        window_net(window, maker_config=_cfg())
 
 
 def test_window_net_is_negative_when_adverse_selection_dominates():

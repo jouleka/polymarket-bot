@@ -23,9 +23,19 @@ _HONEST = ("WON", "LOST")
 
 def window_net(rows, *, maker_config):
     """The S8 net identity over ``rows`` (a list of settled ShadowTradeRecords). Honest
-    WON/LOST only -- DISPUTED/VOID skipped. Empty honest window -> Decimal(0)."""
+    WON/LOST only -- DISPUTED/VOID skipped. Empty honest window -> Decimal(0). Fails LOUD on
+    an unhandled status or on divergent resolution marks for one token."""
     c = maker_config
-    honest = [r for r in rows if r.status in _HONEST]
+    honest = []
+    for r in rows:
+        if r.status in _HONEST:
+            honest.append(r)
+        elif r.status in ("DISPUTED", "VOID"):
+            continue
+        else:
+            # Exhaustive: a status outside {WON,LOST,DISPUTED,VOID} is corruption -- fail
+            # loud, never silently vanish from the accounting (mirrors MakerTracker).
+            raise ValueError(f"unhandled settlement status {r.status!r}")
 
     if not honest:  # no honest settled sample in this window
         return Decimal(0)
