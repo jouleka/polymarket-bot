@@ -1,0 +1,74 @@
+"""Walk-forward earn-autonomy evidence evaluator (S9 / POL-11).
+
+The honesty spine: a category is Stage-0 ready ONLY on net-of-everything shadow PnL that is
+positive-WITH-margin AND out-of-sample -- never gross edge, never the full in-sample net. The OOS
+gate reads net_OOS (the most-recent ceil(oos_holdout_fraction*n) honest rows by settled_at), and the
+required margin is inflated by a multiple-comparisons family-size penalty (certifying 1-of-N
+categories demands a proportionally stronger edge). DISPUTED/VOID are excluded from the honest net
+sample (whale-flip immunity) but COUNTED in n_disputed. Fail CLOSED: cold / insufficient sample /
+None stats -> ready False, never a phantom GO. Fail LOUD only on an unknown shadow status (mirrors
+MakerTracker's exhaustive-status raise).
+"""
+
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_CEILING
+
+from polybot.harness import pnl
+
+_HONEST_SHADOW = ("WON", "LOST")
+
+
+@dataclass(frozen=True)
+class EvidenceReport:
+    category: str
+    n_resolved: int
+    n_oos: int
+    n_disputed: int
+    net_full: Decimal | None
+    net_oos: Decimal | None
+    brier_skill: Decimal | None
+    reliability: Decimal | None
+    k: Decimal
+    maker_go: bool
+    required_margin: Decimal
+    oos_positive: bool
+    calibration_ok: bool
+    maker_ok: bool
+    ready: bool
+
+
+def _ceil_frac(n, fraction):
+    """ceil(fraction * n) via exact Decimal rounding -> int (>= 0)."""
+    return int((Decimal(n) * fraction).to_integral_value(rounding=ROUND_CEILING))
+
+
+def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_gate, maker_gate,
+                      ramp_config, maker_config, family_size):
+    rc = ramp_config
+    # --- SHADOW side: honest WON/LOST; net over the OOS window (the most-recent slice) ---
+    honest = [r for r in shadow_ledger.settled(category) if r.status in _HONEST_SHADOW]
+    n_disputed = 0
+
+    n_resolved = len(honest)
+    required_margin = rc.net_margin_min + rc.mc_penalty * (Decimal(family_size) - Decimal(1))
+
+    n_oos = _ceil_frac(n_resolved, rc.oos_holdout_fraction)
+    oos_rows = honest[-n_oos:]
+    net_oos = pnl.window_net(oos_rows, maker_config=maker_config)
+    net_full = pnl.window_net(honest, maker_config=maker_config)
+    oos_positive = (n_oos >= rc.min_oos_resolved) and (net_oos > required_margin)
+
+    # --- CALIBRATION + MAKER gates: computed in C2; stubbed fail-closed here (honesty pin only) ---
+    brier_skill_v = reliability_v = None
+    k = Decimal(0)
+    calibration_ok = False
+    maker_go = False
+
+    ready = (n_resolved >= rc.min_resolved) and oos_positive and calibration_ok and maker_go
+
+    return EvidenceReport(category=category, n_resolved=n_resolved, n_oos=n_oos,
+                          n_disputed=n_disputed, net_full=net_full, net_oos=net_oos,
+                          brier_skill=brier_skill_v, reliability=reliability_v, k=k,
+                          maker_go=maker_go, required_margin=required_margin,
+                          oos_positive=oos_positive, calibration_ok=calibration_ok,
+                          maker_ok=maker_go, ready=ready)
