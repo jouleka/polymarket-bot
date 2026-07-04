@@ -138,6 +138,26 @@ def test_rejects_nan_as_a_named_valueerror_not_invalidoperation():
         _config(lockup_rate=Decimal("NaN"))
 
 
+def test_accepts_the_rebate_fraction_inclusive_ceiling():
+    # (0, 0.5] — the 0.5 edge is IN the envelope; pin it so a guard tweak
+    # can never silently tighten the legal boundary.
+    assert _config(rebate_fraction=Decimal("0.5")).rebate_fraction == Decimal("0.5")
+
+
+def test_accepts_the_probability_knobs_at_both_inclusive_edges():
+    # [0, 1] — both edges legal for the probability knobs.
+    assert _config(forced_taker_exit_p=Decimal("0")).forced_taker_exit_p == Decimal("0")
+    assert _config(forced_taker_exit_p=Decimal("1")).forced_taker_exit_p == Decimal("1")
+    assert _config(dispute_p=Decimal("0")).dispute_p == Decimal("0")
+    assert _config(dispute_p=Decimal("1")).dispute_p == Decimal("1")
+
+
+def test_accepts_the_zero_floors_explicitly():
+    # >= 0 knobs at exactly 0 (the defaults, but pinned as an explicit construction).
+    assert _config(net_margin_min=Decimal("0")).net_margin_min == Decimal("0")
+    assert _config(lockup_rate=Decimal("0")).lockup_rate == Decimal("0")
+
+
 def _cat(name="sports", fee_rate="0.03", exponent="1", active=True, free=False):
     return FeeCategory(
         name=name, fee_rate=Decimal(fee_rate), exponent=Decimal(exponent),
