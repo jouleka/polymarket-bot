@@ -263,3 +263,21 @@ def test_gate_decide_quote_injects_its_own_config_object(tmp_path, monkeypatch):
         g.decide_quote(pull_quotes=False, recent_adverse=Decimal("0"), break_even=Decimal("1"),
                        locked_effective=Decimal("0"), locked_cap=Decimal("1"))
     assert captured["config"] is g._config  # the gate's own config, by identity
+
+
+def test_divergent_resolution_marks_for_one_token_fails_loud(tmp_path):
+    """A token resolves ONCE. Two honest fills on the SAME token_id settled with DISTINCT
+    resolution_values is ledger corruption -- the last-wins marks dict would silently mark the
+    earlier fill against the wrong value. Symmetric with the unknown-status raise: fail loud."""
+    with _ledger(tmp_path / "m.db") as l:
+        # Same token_id "shared", two fills, settled WON (mark 1) and LOST (mark 0).
+        l.record_fill("k1", token_id="shared", condition_id="c", category="geopolitics",
+                      side="BUY", shares=Decimal("10"), price_exec=Decimal("0.40"),
+                      fill_mid=Decimal("0.40"), reward_accrued=Decimal("0.05"))
+        l.record_fill("k2", token_id="shared", condition_id="c", category="geopolitics",
+                      side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"),
+                      fill_mid=Decimal("0.50"), reward_accrued=Decimal("0.05"))
+        l.record_settlement("k1", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("k2", status="LOST", resolution_value=Decimal("0"))
+        with pytest.raises(ValueError, match="inconsistent"):
+            MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")
