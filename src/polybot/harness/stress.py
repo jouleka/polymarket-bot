@@ -53,3 +53,8 @@ def dispute_freeze_stress(portfolio, *, caps, adverse_fraction=Decimal("1")):
     worst_case_markdown = adverse_fraction * frozen_cluster_wcr
     reserve_after = caps.nav - non_frozen_encumbered - worst_case_markdown
     return StressResult(reserve_after >= floor, reserve_after, floor, worst_case_markdown)
+
+
+def tail_survived(*, n_resolved_disputed, stress_episodes, ramp_config):
+    return (n_resolved_disputed >= ramp_config.min_resolved_disputed
+            and stress_episodes >= ramp_config.min_stress_episodes)

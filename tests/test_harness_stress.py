@@ -98,3 +98,33 @@ def test_non_finite_worst_case_risk_fails_closed(tmp_path):
     ))
     res = _stress(port)
     assert res.survives is False
+
+
+def _ramp(**over):
+    base = dict(min_resolved_disputed=2, min_stress_episodes=3)
+    base.update(over)
+    return RampConfig(**base)
+
+
+def _tail(n_disputed, episodes, ramp):
+    from polybot.harness.stress import tail_survived
+    return tail_survived(n_resolved_disputed=n_disputed, stress_episodes=episodes, ramp_config=ramp)
+
+
+def test_tail_survived_requires_both_minimums_inclusive(tmp_path):
+    ramp = _ramp(min_resolved_disputed=2, min_stress_episodes=3)
+    # AT both minimums (inclusive >=) -> True.
+    assert _tail(2, 3, ramp) is True
+    # disputed BELOW min (1 < 2) -> False even with episodes clearing.
+    assert _tail(1, 3, ramp) is False
+    # episodes BELOW min (2 < 3) -> False even with disputes clearing.
+    assert _tail(2, 2, ramp) is False
+    # ABOVE both minimums -> True.
+    assert _tail(5, 9, ramp) is True
+
+
+def test_tail_survived_below_either_minimum_alone_fails(tmp_path):
+    ramp = _ramp(min_resolved_disputed=1, min_stress_episodes=1)
+    assert _tail(0, 5, ramp) is False   # zero disputes -> you dodged, did not survive
+    assert _tail(5, 0, ramp) is False   # zero stress episodes
+    assert _tail(1, 1, ramp) is True    # exactly one of each clears the default-shaped gate
