@@ -54,3 +54,12 @@ def test_zero_adverse_quotes_even_at_zero_break_even():
 
 def test_locked_exactly_at_cap_is_not_pull():
     assert _decide(locked_effective=Decimal("100"), locked_cap=Decimal("100")) == QUOTE
+
+
+@pytest.mark.parametrize("bad", [None, Decimal("NaN")], ids=["none", "nan"])
+@pytest.mark.parametrize("field",
+                         ["recent_adverse", "break_even", "locked_effective", "locked_cap"])
+def test_fail_safe_pull_on_missing_or_nan_numeric_input(field, bad):
+    # a quoting loop must NEVER crash on a bad feed, and ambiguity is never a reason to keep
+    # quoting: any of the four numeric inputs missing (None) or NaN -> the conservative PULL.
+    assert _decide(**{field: bad}) == PULL
