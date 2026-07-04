@@ -1333,7 +1333,7 @@ def test_negative_net_when_adverse_selection_dominates():
 
 def test_negative_adverse_selection_increases_net():
     # favorable marks = negative adverse cost; subtracting a negative adds.
-    assert _pnl(adverse_selection=Decimal("-1")).net == Decimal("5.75")
+    assert _pnl(adverse_selection=Decimal("-1")).net == Decimal("5.00")
 
 
 def test_zero_legs_net_to_zero():
@@ -1443,7 +1443,7 @@ def test_rejects_negative_one_signed_legs():
 def test_allows_negative_two_signed_legs():
     # spread_capture and adverse_selection may be either sign by nature.
     assert _pnl(spread_capture=Decimal("-1")).net == Decimal("-0.25")
-    assert _pnl(adverse_selection=Decimal("-2")).net == Decimal("6.75")
+    assert _pnl(adverse_selection=Decimal("-2")).net == Decimal("6.00")
 ```
 
 - [ ] **2. Run it — RED for the right reason:** `./.venv/bin/pytest tests/test_maker_netpnl.py -o addopts="" -q` → 2 failures: `Failed: DID NOT RAISE <class 'ValueError'>` in `test_rejects_a_non_finite_leg` and `test_rejects_negative_one_signed_legs` (`test_allows_negative_two_signed_legs` already passes — allowed behavior existed)
