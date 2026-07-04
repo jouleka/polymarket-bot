@@ -80,3 +80,48 @@ def test_lifecycle_go_progression_and_honest_breakdown(tmp_path):
         assert r4.lockup_cost == Decimal("0") and r4.dispute_haircut == Decimal("0")
         assert r4.net == Decimal("14.328476")
         assert r4.go is True and g.go_for("sports") is True
+
+
+def test_toxic_pull_quotes_cycle_pulls(tmp_path):
+    # the D1 toxicity seam through the facade: a toxic cycle PULLs regardless of economics.
+    with MakerLedger(str(tmp_path / "e2e.db"), MonotonicStamper()) as l:
+        g = MakerGate(l, MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE))
+        assert g.decide_quote(pull_quotes=True, recent_adverse=Decimal("0"),
+                              break_even=Decimal("0.05"), locked_effective=Decimal("0"),
+                              locked_cap=Decimal("100")) == PULL
+
+
+def test_bleeds_invisibly_category_is_caught(tmp_path):
+    """Design §7.3: a category whose adverse selection exceeds reward+rebate+spread reports
+    net < 0 and go False -- the "safe" reward-gross illusion is caught by construction.
+
+    Config: min_samples 4, forced_taker_exit_p 0.10 (rebate 0.20, margin 0 -- defaults).
+    Fills (sports; heavy reward accrual, but the flow is toxic -- mostly LOST longs):
+      b1 BUY 10 @ 0.60, mid 0.62, reward 0.30, LOST: spread 0.20, adverse +6.0
+      b2 BUY 10 @ 0.55, mid 0.56, reward 0.30, LOST: spread 0.10, adverse +5.5
+      b3 BUY 10 @ 0.50, mid 0.51, reward 0.30, WON : spread 0.10, adverse 10*(0.50-1) = -5.0
+      b4 BUY 10 @ 0.65, mid 0.66, reward 0.30, LOST: spread 0.10, adverse +6.5
+    Hand-computed (checked twice):
+      reward = 1.20 ; spread = 0.50 ; adverse = 6.0 + 5.5 - 5.0 + 6.5 = 13.0
+      cf = 10*0.03*(0.60*0.40 + 0.55*0.45 + 0.50*0.50 + 0.65*0.35)
+         = 0.072 + 0.07425 + 0.075 + 0.06825                          = 0.2895
+      rebate = 0.20*0.2895 = 0.0579 ; fees = 0.10*0.2895              = 0.02895
+      gross  = 1.20 + 0.0579 + 0.50                                   = 1.7579  (looks GREAT)
+      net    = 1.7579 - 13.0 - 0.02895                                = -11.27105
+    """
+    cfg = MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE, min_samples=4,
+                      forced_taker_exit_p=Decimal("0.10"))
+    with MakerLedger(str(tmp_path / "e2e.db"), MonotonicStamper()) as l:
+        _fill(l, "b1", category="sports", side="BUY", shares="10", price="0.60", mid="0.62",
+              reward="0.30", status="LOST")
+        _fill(l, "b2", category="sports", side="BUY", shares="10", price="0.55", mid="0.56",
+              reward="0.30", status="LOST")
+        _fill(l, "b3", category="sports", side="BUY", shares="10", price="0.50", mid="0.51",
+              reward="0.30", status="WON")
+        _fill(l, "b4", category="sports", side="BUY", shares="10", price="0.65", mid="0.66",
+              reward="0.30", status="LOST")
+        r = MakerGate(l, cfg).report_for("sports")
+    assert r.n_settled == 4  # the sample floor IS met -- only the net stops this one
+    assert r.reward + r.rebate + r.spread_capture == Decimal("1.7579")  # reward-gross positive
+    assert r.net == Decimal("-11.27105") and r.net < 0
+    assert r.go is False
