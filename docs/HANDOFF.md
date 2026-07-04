@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-03)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-04)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -69,8 +69,8 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 | POL-7 | S5 — Calibration + base-rate prior + Anchor Gate | **DONE + pushed** (`origin/main` @ `1ad52f5`; calibration tracker + prior + Anchor Gate; deep ERS wiring deferred to S6) |
 | **POL-8** | S6 — Hermes integration + signal fusion + truth-gate | **DONE + pushed** (`pol-8-hermes-s6` → main; 448 tests; §4.1 fusion + ERS-side citation truth-gate + propose-only facade + `process_pending` wiring; built as pure units, runs end-to-end on PaperSigner; 3 Opus deep-dives — caught + fixed a CRITICAL corroboration bypass (C1) and an orphan-forecast edge; live-Hermes MCP transport + adaptive fusion + MarketRegistry + resolution-feedback DEFERRED) |
 | POL-9 | S7 — Smart-money / insider detectors (defensive) | **DONE + pushed** (`origin/main` @ `a6d91dc`; PnL + luck filter + D1–D6 + composite + policy; FOLLOW hard-off; live wiring deferred) |
-| POL-10 | S8 — Maker-rewards module | Not started |
-| POL-11 | S9 — Shadow harness + ramp controller | Not started |
+| **POL-10** | S8 — Maker-rewards module | **DONE** (local `main` @ merge pending push; branch `pol-10-s8-maker`; 853→1006 tests; honest net-of-adverse-selection ledger→calculators→binary GO/NO-GO gate→facade + quote-policy; shadow-only, data-gated dormant, purely additive) |
+| POL-11 | S9 — Shadow harness + ramp controller | Not started (the capstone — needs S8's gate + a deployed Hermes) |
 
 **Critical path:** `S0 → S2 → S3 → S4 → S6 → S9`, with `S1` feeding `S5`/`S7`. **No real money** until S4's
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
@@ -252,6 +252,49 @@ edge.
   in the sizing path (Fork 2 consumer hard-off) · a durable nonce table · the heartbeat-stop dead-man tie-in ·
   a `max(1, alerts_down_threshold)` clamp when a deploy passes the kwarg (alerting knob, not a signed cap) · an
   optional RESUME+anomaly same-cycle composition test. **THIS CLOSES THE S4 SAFETY ENVELOPE** — S4.1–S4.7 all done.
+- **S8 maker-rewards module (POL-10) — DONE (local `main` @ merge pending push; branch `pol-10-s8-maker`;
+  pytest 853→1006; docs/DESIGN-S8-MAKER.md + docs/PLAN-S8-MAKER.md):** the honest net-of-adverse-selection
+  maker economics, as a NEW self-contained shadow-analytics package `src/polybot/maker/` mirroring
+  `calibration/`'s shape (append-only ledger → pure exact-Decimal calculators → binary GO/NO-GO tracker → thin
+  facade + a quote-policy). **Purely ADDITIVE — imports NOTHING from `ers/`/`detectors/`/`calibration/`/`ingestion/`
+  at module load; nothing consumes it yet (S9 is the first consumer), so the pre-S8 suite stayed green trivially.**
+  The load-bearing identity, honest by construction: `net = reward + rebate + spread_capture − adverse_selection
+  − fees − lockup_cost − dispute_haircut`; **the gate reads `MakerNetPnL.net` ONLY, never a gross leg.** Modules:
+  `config.py` (`MakerConfig`/`FeeCategory`/`DEFAULT_FEE_SCHEDULE`, self-verifying, `is_finite()` before every range
+  compare — Infinity/NaN fail LOUD as named ValueError; Fork 3 parameterized dossier-corrected fee schedule =
+  sports active 0.03/exp-1, other cats planned-inactive→0, geopolitics free) · `fees.py` (`taker_fee` per-category
+  `C·feeRate·p·(1−p)^exp` with the exponent-0 flat-fee path, `rebate`) · `inventory.py` (`MakerFill`, `net_inventory`
+  BUY/SELL folding, `adverse_selection` = SIGNED `Σ sgn·shares·(price_exec − mark)`, sgn(BUY)=+1/sgn(SELL)=−1;
+  **fail-CLOSED marks** — None/NaN/out-of-[0,1] → worst-case adverse, never a phantom gain) · `reward.py`
+  (`spread_score` = the documented `S(v,s)=(v−s/v)²·b`, `reward_accrual` with the max_spread eligibility gate) ·
+  `netpnl.py` (`MakerNetPnL` frozen breakdown + `net_pnl` — the identity computed IN net_pnl, no gross accessor;
+  one-signed legs reject negatives, two-signed legs may be either sign) · `ledger.py` (`MakerLedger` append-only
+  SQLite mirroring `ForecastLedger` EXACTLY — WAL, exact-string Decimals, idempotent `record_fill`, `record_settlement`
+  WON/LOST-require-value / DISPUTED/VOID-require-None, dispute-flip overwrite clears the stale value, restart-stable) ·
+  `quote_policy.py` (`decide_quote` QUOTE/WIDEN/PULL — CONSUMES the D1 `pull_quotes` seam; **fail-safe PULL** on
+  any trigger {pull_quotes / recent_adverse>break_even / locked_effective>locked_cap} AND on any None/non-finite
+  numeric — the quoting loop never crashes, never quotes into ambiguity) · `gate.py` (`MakerTracker` = the binary
+  `go` over the honest net-of-cost sample per the pinned leg-derivations; **DISPUTED/VOID counted separately +
+  EXCLUDED from every leg** (whale-flip immunity), unknown status → ValueError fail-loud; `go = n_settled ≥
+  min_samples AND net > net_margin_min`, strict; `MakerGate` facade = the SINGLE seam S9 wires into, ANDs with the
+  calibration `k`). Built via subagent-driven strict-TDD, 4 sub-slices (S8a–S8d), each spec-compliance +
+  pinned-opus MUTATION BATTERY reviewed (~40 mutations across the slice, every one killed by a named test) + a
+  final whole-slice opus review with a 7-mutation cross-cutting battery (the reward-gross doctrine-killer, the
+  DISPUTED-inclusion leak, the adverse sign-flip, the `_SGN` ripple, active-fee zeroing, `settled()` leaking
+  unsettled rows, the quote fail-safe) → **APPROVED FOR MERGE**. Genuine catches fixed along the way: an
+  Infinity-accepted config knob (would poison the net identity), an `exponent=0`/`p=1` `0**0` crash, an unguarded
+  rebate fraction, a plan-arithmetic errata (two negative-adverse net expectations dropped the fixed debits —
+  implementer caught it, refused to bend the test, escalated; corrected 5.75→5.00 / 6.75→6.00 after independent
+  verification), the sole config-injection mutation survivor pinned, and a fail-loud guard on divergent resolution
+  marks for one token_id. **DATA-GATED / shadow-only:** `go_for(cat)` returns False until `n_settled ≥ min_samples`
+  (default 150) AND the net-of-cost margin clears; cold → all-None stats, go False; nothing quotes/signs/sends.
+  **DEFERRED seams (documented, not built):** live order placement/queue-position (POL-4) · real reward-pool data
+  + the exact `S(v,s)`→pool mapping + `b` (deploy calibration) · the resolution feed flipping fills to WON/LOST→$1/$0
+  (S6/S9) · a true aggressor-flow VPIN adverse measure (Fork 2 uses mark-out instead) · the live fills-recorder +
+  `mark_for` = `LocalBook.midpoint()`/resolution wiring (S9) · the per-day×days `lockup_cost` folding (currently
+  `rate × total notional` — needs the real time-to-resolution feed) · `net_inventory` awaits its S9/position-reporter
+  caller. **Every live NUMBER is a re-pullable seam, not a trusted constant — the gate is only as honest as the
+  fee/reward/dispute/lockup inputs S9 supplies.** POL-10 comment posted.
 
 ## 6. Docs to read (in the repo)
 - `docs/CONTEXT.md` — onboarding; verified Polymarket/Hermes facts; landmines. **Read first.**
@@ -280,8 +323,16 @@ edge.
   re-consult per-intent when live); a frozen position masks ALL realized flow on its token_id (per-position
   attribution needs a fill/position journal linkage); optional defense-in-depth: a composition test co-wiring
   anomaly= AND lossbreakers= on one controller.
+- `docs/DESIGN-S8-MAKER.md` + `docs/PLAN-S8-MAKER.md` — the S8 maker-rewards design (resolved forks: full
+  accounting+quote-policy+gate scope, mark-to-resolution adverse selection, parameterized dossier-corrected fee
+  schedule; the pinned §4 contract; §3 net-identity legs; the pinned tracker leg-derivations) + the executed
+  28-task TDD plan (4 sub-slices). NB for S9/live wiring: every live number (fee schedule, `reward_b`, pool→`S(v,s)`
+  mapping, P(dispute)/lockup/forced-taker-exit) is a re-pullable seam, NOT a trusted constant — re-pull/calibrate
+  at deploy before any GO is trusted; inject `mark_for` = `LocalBook.midpoint()` live / resolution at settle (a
+  missing feed fails closed = worst-case adverse, safe but pessimistic); `lockup_cost` = `rate × notional` until
+  the real time-to-resolution feed lands; `net_inventory` awaits its S9 caller.
 - `docs/VERIFICATION-2026-06-24.md` — Phase-0 signing-path verification (rs-clob-client-v2).
-- The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-12 YouTrack comments** — the detailed per-slice record.
+- The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-10, POL-12 YouTrack comments** — the detailed per-slice record.
 
 ## 7. Your task — pick based on what's ready
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
@@ -293,19 +344,20 @@ malware vector). You CANNOT do POL-4 from this machine. So:
   SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
   prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
 
-- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, AND the
-  S4/POL-6 KILL PATH (S4.1–S4.3) are now DONE + pushed** (see §5). Recommended next, in order:
+- **If NOT funded → continue the no-funding work.** **S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, the S4/POL-6
+  ENVELOPE (S4.1–S4.7), AND S8/POL-10 are now DONE** (see §5). Recommended next, in order:
   1. **The S4 safety envelope (POL-6) is COMPLETE — all seven sub-slices S4.1–S4.7 are DONE + pushed** (kill path,
-     reconcile, anomaly, Telegram, breakers; see the §5 build-log + the per-slice DESIGN docs). This satisfies the
-     master design's pre-live-capital safety gate (kill path tested vs a wedged process; the full L0–L8 envelope
-     stands, shadow-only). No S4 work remains.
-  2. **S8 / POL-10 — maker-rewards module** (shadow, honest net-of-adverse-selection; consumes the D1
-     `pull_quotes` seam).
-  3. **S9 / POL-11 — shadow harness → ramp controller** (the capstone: paper-trade net of
-     fees/slippage/lockup/dispute haircut → the calibrated, net-positive, out-of-sample GO/NO-GO evidence).
-     NB: S9 needs proposals actually flowing — i.e. a DEPLOYED Hermes feeding the propose-only facade + the
-     read-only ingestion running continuously to warm the data-gated machinery (k stays 0 until ≥150 honest
-     resolutions accrue, so nothing sizes live until then).
+     reconcile, anomaly, Telegram, breakers; see the §5 build-log + the per-slice DESIGN docs). No S4 work remains.
+  2. **S8 / POL-10 — maker-rewards module — DONE** (local `main` @ merge pending push; shadow, honest
+     net-of-adverse-selection; consumes the D1 `pull_quotes` seam; see the §5 build-log). Nothing consumes it yet.
+  3. **S9 / POL-11 — shadow harness → ramp controller (THE NEXT BUILD — the capstone):** paper-trade net of
+     fees/slippage/lockup/dispute haircut → the calibrated, net-positive, out-of-sample GO/NO-GO evidence. It
+     **ANDs S8's `MakerGate.go_for` with the calibration `k`** and must wire `RestartReconciler` into `ERSController`
+     boot (a standalone unit S4.5 left un-wired). NB: S9 needs proposals actually flowing — a DEPLOYED Hermes feeding
+     the propose-only facade + read-only ingestion running continuously to warm the data-gated machinery (both `k`
+     and S8's `go` stay dormant until ≥150 honest resolutions/category accrue, so nothing sizes live until then).
+     Feed S8 its live seams here: the fills-recorder, `mark_for` (midpoint/resolution), the re-pulled fee/reward
+     numbers, and the real P(dispute)/time-to-resolution inputs.
   - **Smaller / feeding:** real latent-cluster assignment (S3 follow-up — makes `comove.py` bite cross-event
     instead of the `event_id` placeholder) · GDELT slow-path · run the read-only ingestion continuously to
     warm comove/priors · the S6 deferreds (live-Hermes MCP transport + an injection probe vs a real Hermes;
