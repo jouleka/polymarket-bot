@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+import pytest
+
 from polybot.maker.netpnl import MakerNetPnL, net_pnl
 
 
@@ -58,3 +60,24 @@ def test_net_is_computed_by_net_pnl_not_caller_supplied():
                     - legs["adverse_selection"] - legs["fees"]
                     - legs["lockup_cost"] - legs["dispute_haircut"])
         assert net_pnl(**legs).net == expected
+
+
+def test_rejects_a_non_finite_leg():
+    for name in ("reward", "rebate", "spread_capture", "adverse_selection",
+                 "fees", "lockup_cost", "dispute_haircut"):
+        with pytest.raises(ValueError, match=name):
+            _pnl(**{name: Decimal("NaN")})
+    with pytest.raises(ValueError, match="reward"):
+        _pnl(reward=Decimal("Infinity"))
+
+
+def test_rejects_negative_one_signed_legs():
+    for name in ("reward", "rebate", "fees", "lockup_cost", "dispute_haircut"):
+        with pytest.raises(ValueError, match=name):
+            _pnl(**{name: Decimal("-0.01")})
+
+
+def test_allows_negative_two_signed_legs():
+    # spread_capture and adverse_selection may be either sign by nature.
+    assert _pnl(spread_capture=Decimal("-1")).net == Decimal("-0.25")
+    assert _pnl(adverse_selection=Decimal("-2")).net == Decimal("6.00")

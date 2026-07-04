@@ -26,8 +26,19 @@ class MakerNetPnL:
 def net_pnl(*, reward, rebate, spread_capture, adverse_selection, fees, lockup_cost,
             dispute_haircut):
     """net = reward + rebate + spread_capture − adverse_selection − fees − lockup_cost
-    − dispute_haircut. adverse_selection may be negative (favorable marks) — subtracting
-    a negative INCREASES net; spread_capture likewise two-signed."""
+    − dispute_haircut. Fail LOUD ValueError: any non-finite leg; a negative one-signed
+    leg (reward/rebate/fees/lockup_cost/dispute_haircut). spread_capture and
+    adverse_selection may be either sign — a favorable mark is a negative adverse cost,
+    and subtracting it INCREASES net."""
+    legs = (("reward", reward), ("rebate", rebate), ("spread_capture", spread_capture),
+            ("adverse_selection", adverse_selection), ("fees", fees),
+            ("lockup_cost", lockup_cost), ("dispute_haircut", dispute_haircut))
+    for name, value in legs:
+        if not value.is_finite():
+            raise ValueError(f"{name} must be a finite Decimal, got {value}")
+    for name, value in legs:
+        if name not in ("spread_capture", "adverse_selection") and value < 0:
+            raise ValueError(f"{name} must be >= 0, got {value}")
     net = (reward + rebate + spread_capture
            - adverse_selection - fees - lockup_cost - dispute_haircut)
     return MakerNetPnL(reward=reward, rebate=rebate, spread_capture=spread_capture,
