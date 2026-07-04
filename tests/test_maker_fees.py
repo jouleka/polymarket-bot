@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, FeeCategory
-from polybot.maker.fees import taker_fee
+from polybot.maker.fees import rebate, taker_fee
 
 
 def _fee(p, size="100", category="sports", schedule=DEFAULT_FEE_SCHEDULE):
@@ -100,3 +100,23 @@ def test_rejects_a_non_finite_size():
 def test_zero_size_is_a_zero_fee():
     # size 0 is a valid boundary, not an error.
     assert _fee("0.5", size="0") == Decimal("0")
+
+
+def test_rebate_is_fraction_times_fee():
+    # 20% of the hand-computed USD 0.75 sports fee = USD 0.15, exact.
+    fee = _fee("0.5")
+    assert rebate(fee, fraction=Decimal("0.20")) == Decimal("0.15")
+
+
+def test_rebate_of_a_zero_fee_is_zero():
+    assert rebate(Decimal("0"), fraction=Decimal("0.20")) == Decimal("0")
+
+
+def test_rebate_rejects_a_negative_fee():
+    with pytest.raises(ValueError, match="taker_fee_paid"):
+        rebate(Decimal("-0.01"), fraction=Decimal("0.20"))
+
+
+def test_rebate_rejects_a_non_finite_fee():
+    with pytest.raises(ValueError, match="taker_fee_paid"):
+        rebate(Decimal("NaN"), fraction=Decimal("0.20"))
