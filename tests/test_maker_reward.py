@@ -58,6 +58,15 @@ def test_spread_score_rejects_non_finite_b():
         spread_score(Decimal("10"), Decimal("0.5"), b=Decimal("NaN"))
 
 
+def test_spread_score_non_terminating_division_pins_default_context():
+    # s/v = 1/3 does NOT terminate: the result rounds at the ambient decimal context
+    # (28 significant digits by default). Pins default-context determinism:
+    # (3 - 1/3)^2 * 1 = (8/3)^2 = 64/9 = 7.111... at 28 digits.
+    assert spread_score(Decimal("3"), Decimal("1"), b=Decimal("1")) == Decimal(
+        "7.111111111111111111111111113"
+    )
+
+
 def _config(**over):
     return MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE, **over)
 
