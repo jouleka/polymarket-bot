@@ -55,6 +55,10 @@ def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_g
             honest.append(r)
         elif r.status in ("DISPUTED", "VOID"):
             n_disputed += 1
+        else:
+            # Exhaustive: a status outside VALID_STATUSES (DB corruption / an untaught 5th status)
+            # must fail loud, never silently vanish from the accounting (mirrors MakerTracker).
+            raise ValueError(f"unhandled shadow status {r.status!r}")
 
     n_resolved = len(honest)
     required_margin = rc.net_margin_min + rc.mc_penalty * (Decimal(family_size) - Decimal(1))
