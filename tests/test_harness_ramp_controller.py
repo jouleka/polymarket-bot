@@ -162,3 +162,39 @@ def test_no_ramp_down_in_healthy_shadow_ready_case():
                  portfolio=_healthy_portfolio(), n_resolved_disputed=1, stress_episodes=1,
                  breaker_tripped=False)
     assert d.ramp_down is False
+
+
+import dataclasses
+
+
+def test_controller_has_no_cap_mutation_surface():
+    # THE STRUCTURAL PIN (design §5 invariant 2): RampController exposes NO method/attribute that
+    # could widen or loosen a cap or sign/place an order. The intersection of its surface with the
+    # forbidden names is EMPTY -- so "ramp-up mutated a cap" is unrepresentable, not merely
+    # untested. Kills the mutation that gives the controller a swap_caps / set_state / signer path.
+    forbidden = {"swap_caps", "set_state", "place", "widen", "loosen", "signer",
+                 "active_caps", "cancel_all", "flatten", "sign"}
+    surface = set(dir(RampController))
+    assert surface & forbidden == set(), f"forbidden cap/exec surface leaked: {surface & forbidden}"
+    # The only public entry point is decide(); the only stored state is the config + caps refs
+    # (read-only advisory), never a mutator.
+    c = _controller()
+    instance_surface = {n for n in dir(c) if not n.startswith("_")}
+    assert instance_surface == {"decide"}, f"unexpected public surface: {instance_surface}"
+
+
+def test_decide_returns_only_a_rampdecision_never_a_loosened_cap():
+    # decide's return is a RampDecision and NOTHING else -- there is no caps/envelope/widened field
+    # anywhere on it. A mutation that smuggled a loosened cap into the decision is killed: the
+    # RampDecision field set is EXACTLY the pinned six, none of them a RiskCaps.
+    c = _controller()
+    d = c.decide("sports", evidence=_evidence(ready=True), current_stage=SHADOW,
+                 portfolio=_healthy_portfolio(), n_resolved_disputed=1, stress_episodes=1,
+                 breaker_tripped=False)
+    assert isinstance(d, RampDecision)
+    field_names = {f.name for f in dataclasses.fields(d)}
+    assert field_names == {"category", "stage", "promote_recommended", "ramp_down",
+                           "reason", "evidence"}
+    # No field on the decision is a RiskCaps (the controller cannot hand back a widened ceiling).
+    for f in dataclasses.fields(d):
+        assert not isinstance(getattr(d, f.name), RiskCaps)
