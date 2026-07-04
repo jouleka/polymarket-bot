@@ -65,9 +65,11 @@ class ShadowLedger:
 
     def record_trade(self, trade_id, *, token_id, condition_id, category, side, shares,
                      fill_price, fill_mid, reward_accrued):
-        """INSERT a simulated trade. Decimals stored as exact strings."""
-        self._conn.execute(
-            "INSERT INTO shadow_trades "
+        """INSERT a simulated trade (idempotent on ``trade_id``). Returns True if newly
+        inserted, False if a duplicate (original preserved). Decimals stored as exact
+        strings."""
+        cur = self._conn.execute(
+            "INSERT OR IGNORE INTO shadow_trades "
             "(trade_id, token_id, condition_id, category, side, shares, fill_price, "
             "fill_mid, reward_accrued, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -75,7 +77,7 @@ class ShadowLedger:
              str(fill_price), str(fill_mid), str(reward_accrued), self._stamper.stamp()),
         )
         self._conn.commit()
-        return True
+        return cur.rowcount > 0
 
     def all(self):
         return self._query(f"SELECT {_COLUMNS} FROM shadow_trades ORDER BY rowid")

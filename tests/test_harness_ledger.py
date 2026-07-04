@@ -33,3 +33,10 @@ def test_record_trade_round_trips_every_field_via_all(tmp_path):
         assert r.fill_mid == Decimal("0.50") and r.reward_accrued == Decimal("0.25")
         assert r.created_at is not None
         assert r.status is None and r.resolution_value is None and r.settled_at is None
+
+
+def test_record_trade_is_idempotent_on_trade_id(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        assert _trade(l, "d1") is True
+        assert _trade(l, "d1", fill_price="0.99") is False  # duplicate ignored
+        assert l.all()[0].fill_price == Decimal("0.48")     # original preserved
