@@ -67,7 +67,8 @@ class ERSController:
         None -> no-op (returns None; stays HALTED, empty portfolio == today). run_cycle is not
         touched by this seam."""
         if self._reconciler is not None:
-            pass
+            self._portfolio = self._reconciler.reconcile_on_boot()
+            return self._portfolio
         return None
 
     def _empty_portfolio(self):
