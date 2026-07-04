@@ -12,6 +12,7 @@ per-day x days-to-resolution folding is deferred deploy calibration.
 from dataclasses import dataclass
 from decimal import Decimal
 
+from polybot.maker import quote_policy
 from polybot.maker.fees import rebate, taker_fee
 from polybot.maker.inventory import _SGN, MakerFill, adverse_selection
 from polybot.maker.netpnl import net_pnl
@@ -85,3 +86,27 @@ class MakerTracker:
         return MakerReport(category, n, n_disputed, n_void, pnl.reward, pnl.rebate,
                            pnl.spread_capture, pnl.adverse_selection, pnl.fees,
                            pnl.lockup_cost, pnl.dispute_haircut, pnl.net, go)
+
+
+class MakerGate:
+    """The thin facade -- the single seam S9 wires into (ANDed with the calibration ``k``).
+
+    Mirrors ``CalibrationGate``: composes the tracker and exposes exactly what the harness
+    needs -- the binary ``go_for``, the honest ``report_for`` breakdown, and ``decide_quote``
+    with the gate's own config injected (a caller may NOT supply ``config``)."""
+
+    def __init__(self, ledger, config):
+        self._tracker = MakerTracker(ledger, config)
+        self._config = config
+
+    def go_for(self, category):
+        """The binary GO/NO-GO for a category: True only when the honest net sample clears."""
+        return self._tracker.report_for(category).go
+
+    def report_for(self, category):
+        return self._tracker.report_for(category)
+
+    def decide_quote(self, **kw):
+        """Delegates to ``quote_policy.decide_quote`` injecting this gate's config; a caller
+        passing ``config`` raises TypeError (duplicate keyword) -- never a silent override."""
+        return quote_policy.decide_quote(**kw, config=self._config)

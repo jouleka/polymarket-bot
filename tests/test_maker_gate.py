@@ -6,8 +6,9 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
-from polybot.maker.gate import MakerTracker
+from polybot.maker.gate import MakerGate, MakerTracker
 from polybot.maker.ledger import MakerLedger
+from polybot.maker.quote_policy import PULL, QUOTE
 
 
 def _ledger(path):
@@ -212,3 +213,33 @@ def test_an_unhandled_settlement_status_fails_loud(tmp_path):
         l._conn.commit()
         with pytest.raises(ValueError, match="status"):
             MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")
+
+
+def test_gate_go_for_matches_report(tmp_path):
+    with _ledger(tmp_path / "m.db") as l:
+        _seed_passing(l)
+        g = MakerGate(l, _cfg(min_samples=3))
+        assert g.go_for("geopolitics") is True
+        assert g.go_for("geopolitics") == g.report_for("geopolitics").go
+        assert g.report_for("geopolitics").net == Decimal("7.96")
+        assert g.go_for("sports") is False  # cold category through the facade
+
+
+def test_gate_decide_quote_delegates_with_injected_config(tmp_path):
+    with _ledger(tmp_path / "m.db") as l:
+        g = MakerGate(l, _cfg())
+        kw = dict(pull_quotes=False, recent_adverse=Decimal("0"), break_even=Decimal("0.05"),
+                  locked_effective=Decimal("0"), locked_cap=Decimal("100"))
+        assert g.decide_quote(**kw) == QUOTE
+        assert g.decide_quote(**{**kw, "pull_quotes": True}) == PULL
+
+
+def test_gate_caller_cannot_pass_config(tmp_path):
+    # the gate injects its OWN config; a caller supplying one is a bug -> TypeError
+    # (duplicate keyword), never a silent override.
+    with _ledger(tmp_path / "m.db") as l:
+        g = MakerGate(l, _cfg())
+        with pytest.raises(TypeError):
+            g.decide_quote(pull_quotes=False, recent_adverse=Decimal("0"),
+                           break_even=Decimal("0.05"), locked_effective=Decimal("0"),
+                           locked_cap=Decimal("100"), config=_cfg())
