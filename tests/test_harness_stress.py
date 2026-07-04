@@ -70,3 +70,31 @@ def test_empty_portfolio_survives_with_reserve_after_equal_nav(tmp_path):
     assert res.worst_case_markdown == Decimal("0")
     assert res.reserve_after == Decimal("300")
     assert res.survives is True
+
+
+def test_largest_cluster_is_frozen_selection_flips_survival(tmp_path):
+    # adverse_fraction=0.5 makes WHICH cluster is frozen load-bearing.
+    #   srcBIG wcr=56 (one position), srcSMALL wcr=9 (one position).
+    #   CORRECT (freeze srcBIG): markdown = 0.5*56 = 28 ; non_frozen = 9 ;
+    #     reserve_after = 300 - 9 - 28 = 263 >= 240 -> survives True.
+    #   A mutation freezing srcSMALL instead: markdown = 0.5*9 = 4.5 ; non_frozen = 56 ;
+    #     reserve_after = 300 - 56 - 4.5 = 239.5 < 240 -> would be survives False.
+    #   Asserting survives True + markdown 28 kills the wrong-cluster mutation.
+    port = Portfolio(nav=Decimal("300"), positions=(
+        _pos(wcr="9", source="srcSMALL", token="tsmall"),   # smaller listed FIRST to defeat
+        _pos(wcr="56", source="srcBIG", token="tbig"),      #   an "always freeze the first source" bug
+    ))
+    res = _stress(port, adverse_fraction=Decimal("0.5"))
+    assert res.worst_case_markdown == Decimal("28.0")
+    assert res.reserve_after == Decimal("263.0")
+    assert res.survives is True
+
+
+def test_non_finite_worst_case_risk_fails_closed(tmp_path):
+    # a NaN worst_case_risk (corrupt/mis-marked position) -> survives False (never a phantom survival).
+    port = Portfolio(nav=Decimal("300"), positions=(
+        _pos(wcr="10", source="uma", token="t0"),
+        _pos(wcr="NaN", source="uma", token="t1"),
+    ))
+    res = _stress(port)
+    assert res.survives is False

@@ -22,8 +22,15 @@ class StressResult:
 
 def dispute_freeze_stress(portfolio, *, caps, adverse_fraction=Decimal("1")):
     floor = caps.reserve_floor
+    # Fail CLOSED on a non-finite adverse_fraction or any non-finite position risk.
+    if not adverse_fraction.is_finite():
+        return StressResult(False, caps.nav, floor, Decimal(0))
+    for p in portfolio.positions:
+        if not p.worst_case_risk.is_finite():
+            return StressResult(False, caps.nav, floor, Decimal(0))
 
-    # Group by resolution_source; the frozen cluster is chosen in C9 (max summed worst_case_risk).
+    # Group by resolution_source; the frozen cluster is the source with the MAX summed worst_case_risk
+    # (ties -> the first by iteration; positions is an ordered tuple, so deterministic).
     sums = {}
     order = []
     for p in portfolio.positions:
@@ -37,6 +44,9 @@ def dispute_freeze_stress(portfolio, *, caps, adverse_fraction=Decimal("1")):
         return StressResult(caps.nav >= floor, caps.nav, floor, Decimal(0))
 
     frozen_src = order[0]
+    for src in order:
+        if sums[src] > sums[frozen_src]:
+            frozen_src = src
 
     frozen_cluster_wcr = sums[frozen_src]
     non_frozen_encumbered = sum((sums[src] for src in order if src != frozen_src), Decimal(0))
