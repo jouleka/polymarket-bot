@@ -40,3 +40,69 @@ def test_record_trade_is_idempotent_on_trade_id(tmp_path):
         assert _trade(l, "d1") is True
         assert _trade(l, "d1", fill_price="0.99") is False  # duplicate ignored
         assert l.all()[0].fill_price == Decimal("0.48")     # original preserved
+
+
+class _FixedClock:
+    """A non-monotonic clock stub: returns the SAME tick every call so the stamper's
+    strict-monotonic bump is bypassed only across DISTINCT stampers -- used to force two
+    settlements onto the SAME settled_at and expose the rowid tiebreak in settled()."""
+    def __init__(self, tick):
+        self._tick = tick
+    def __call__(self):
+        return self._tick
+
+
+def test_settlement_sets_status_value_and_settled_at(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+        r = l.all()[0]
+        assert r.status == "WON"
+        assert r.resolution_value == Decimal("1")
+        assert r.settled_at is not None
+        assert [x.trade_id for x in l.settled()] == ["d1"]
+
+
+def test_unsettled_trades_are_excluded_from_settled(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        _trade(l, "d2")
+        l.record_settlement("d1", status="LOST", resolution_value=Decimal("0"))
+        assert [x.trade_id for x in l.settled()] == ["d1"]
+
+
+def test_settled_filters_by_category(tmp_path):
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1", category="politics")
+        _trade(l, "d2", category="sports")
+        l.record_settlement("d1", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("d2", status="LOST", resolution_value=Decimal("0"))
+        assert [x.trade_id for x in l.settled(category="sports")] == ["d2"]
+
+
+def test_settled_orders_by_settled_at_then_rowid(tmp_path):
+    # settle d2 (inserted second) BEFORE d1 -> d2 gets the earlier settled_at, so
+    # settled() must return d2 first even though d1 has the lower rowid.
+    with _ledger(str(tmp_path / "s.db")) as l:
+        _trade(l, "d1")
+        _trade(l, "d2")
+        l.record_settlement("d2", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("d1", status="LOST", resolution_value=Decimal("0"))
+        assert [x.trade_id for x in l.settled()] == ["d2", "d1"]
+
+
+def test_settled_tiebreaks_on_rowid_when_settled_at_is_equal(tmp_path):
+    # a fixed clock -> both settlements share the SAME settled_at; the tiebreak is rowid,
+    # so insertion order (d1 then d2) wins even though d2 was settled first.
+    stamper = MonotonicStamper(clock=_FixedClock(500))
+    with _ledger(str(tmp_path / "s.db"), stamper=stamper) as l:
+        # NB: MonotonicStamper still bumps on <=, so drive the two settlements through two
+        # separate stampers pinned to the same tick to guarantee equal settled_at.
+        _trade(l, "d1")
+        _trade(l, "d2")
+        l._stamper = MonotonicStamper(clock=_FixedClock(700))
+        l.record_settlement("d2", status="WON", resolution_value=Decimal("1"))
+        l._stamper = MonotonicStamper(clock=_FixedClock(700))
+        l.record_settlement("d1", status="LOST", resolution_value=Decimal("0"))
+        assert [x.settled_at for x in l.settled()] == [700, 700]
+        assert [x.trade_id for x in l.settled()] == ["d1", "d2"]  # rowid tiebreak
