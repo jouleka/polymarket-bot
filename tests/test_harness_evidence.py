@@ -95,3 +95,33 @@ def test_oos_reads_the_recent_window_not_the_full_sample(tmp_path):
     assert rep.net_oos == Decimal("-5.50")
     assert rep.oos_positive is False   # reads net_oos, not net_full
     assert rep.ready is False
+
+
+def test_all_gates_cleared_yields_ready_true(tmp_path):
+    # 6 WINS -> n_resolved=6 (>=min_resolved 4), n_oos=2.
+    #   net_full = 6*7.25 = 43.50 ; net_oos = 2*7.25 = 14.50 (> required_margin 0).
+    # Forecast OOS: 2 well-calibrated market-beating forecasts (see below) -> brier_skill 0.9375 (>0),
+    #   reliability 0.01 (<= reliability_max 0.03). k=1, go=True. -> ready True.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    # forecast honest window: f1 WON bot p 0.90 vs mid 0.60 ; f2 LOST bot p 0.10 vs mid 0.40.
+    #   bot_brier = ((0.90-1)^2+(0.10-0)^2)/2 = (0.01+0.01)/2 = 0.01
+    #   mkt_brier = ((0.60-1)^2+(0.40-0)^2)/2 = (0.16+0.16)/2 = 0.16
+    #   brier_skill = 1 - 0.01/0.16 = 0.9375 ; reliability: bin9 (0.9-1)^2 + bin1 (0.1-0)^2, each wt 1/2 = 0.01
+    forecast.record_forecast("g1", category="politics", condition_id="c", p=Decimal("0.90"),
+                             market_mid=Decimal("0.60"))
+    forecast.record_resolution("g1", "WON")
+    forecast.record_forecast("g2", category="politics", condition_id="c", p=Decimal("0.10"),
+                             market_mid=Decimal("0.40"))
+    forecast.record_resolution("g2", "LOST")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.n_resolved == 6 and rep.n_oos == 2
+    assert rep.net_full == Decimal("43.50")
+    assert rep.net_oos == Decimal("14.50")
+    assert rep.brier_skill == Decimal("0.9375")
+    assert rep.reliability == Decimal("0.01000")
+    assert rep.oos_positive is True
+    assert rep.calibration_ok is True
+    assert rep.maker_ok is True
+    assert rep.ready is True
