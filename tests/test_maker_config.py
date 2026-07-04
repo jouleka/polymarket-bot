@@ -114,3 +114,52 @@ def test_rejects_non_positive_reward_b():
         _config(reward_b=Decimal("0"))
     with pytest.raises(ValueError, match="reward_b"):
         _config(reward_b=Decimal("-1"))
+
+
+def _cat(name="sports", fee_rate="0.03", exponent="1", active=True, free=False):
+    return FeeCategory(
+        name=name, fee_rate=Decimal(fee_rate), exponent=Decimal(exponent),
+        active=active, free=free,
+    )
+
+
+def test_rejects_an_empty_fee_schedule():
+    with pytest.raises(ValueError, match="fee_schedule"):
+        MakerConfig(fee_schedule=())
+
+
+def test_rejects_a_non_tuple_fee_schedule():
+    # a mutable schedule invites in-place edits behind the frozen config's back.
+    with pytest.raises(ValueError, match="fee_schedule"):
+        MakerConfig(fee_schedule=[_cat()])
+
+
+def test_rejects_a_non_feecategory_entry():
+    with pytest.raises(ValueError, match="FeeCategory"):
+        MakerConfig(fee_schedule=(_cat(), "sports"))
+
+
+def test_rejects_duplicate_category_names():
+    # two entries for one name = ambiguous lookup -> which fee applies is undefined.
+    with pytest.raises(ValueError, match="unique"):
+        MakerConfig(fee_schedule=(_cat(name="sports"), _cat(name="sports", free=True)))
+
+
+def test_rejects_an_empty_category_name():
+    with pytest.raises(ValueError, match="name"):
+        MakerConfig(fee_schedule=(_cat(name=""),))
+
+
+def test_rejects_a_negative_fee_rate_entry():
+    with pytest.raises(ValueError, match="fee_rate"):
+        MakerConfig(fee_schedule=(_cat(fee_rate="-0.01"),))
+
+
+def test_rejects_a_non_finite_fee_rate_entry():
+    with pytest.raises(ValueError, match="fee_rate"):
+        MakerConfig(fee_schedule=(_cat(fee_rate="NaN"),))
+
+
+def test_rejects_a_negative_exponent_entry():
+    with pytest.raises(ValueError, match="exponent"):
+        MakerConfig(fee_schedule=(_cat(exponent="-1"),))
