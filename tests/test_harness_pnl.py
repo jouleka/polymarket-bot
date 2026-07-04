@@ -60,3 +60,32 @@ def test_window_net_over_a_free_category_zeroes_rebate_and_fees():
              resolution_value="0"),
     ]
     assert window_net(free_window, maker_config=_cfg()) == Decimal("17.9380")
+
+
+def test_window_net_excludes_disputed_and_void_rows():
+    # a DISPUTED row whose inclusion WOULD change the net (big reward) must be skipped:
+    # the net must equal the honest-only 17.96464000, not the leaked 2.24214000.
+    disputed = _row("tD", token="tD", category="sports", side="BUY", shares="50",
+                    fill_price="0.50", fill_mid="0.50", reward="9.99", status="DISPUTED",
+                    resolution_value=None)
+    void = _row("tE", token="tE", category="sports", side="SELL", shares="30",
+                fill_price="0.50", fill_mid="0.50", reward="7.00", status="VOID",
+                resolution_value=None)
+    window = _SPORTS_WINDOW + [disputed, void]
+    assert window_net(window, maker_config=_cfg()) == Decimal("17.96464000")
+
+
+def test_window_net_of_an_empty_window_is_zero():
+    assert window_net([], maker_config=_cfg()) == Decimal(0)
+
+
+def test_window_net_of_an_all_disputed_window_is_zero():
+    only_disputed = [
+        _row("tD", token="tD", category="sports", side="BUY", shares="50",
+             fill_price="0.50", fill_mid="0.50", reward="9.99", status="DISPUTED",
+             resolution_value=None),
+        _row("tE", token="tE", category="sports", side="SELL", shares="30",
+             fill_price="0.50", fill_mid="0.50", reward="7.00", status="VOID",
+             resolution_value=None),
+    ]
+    assert window_net(only_disputed, maker_config=_cfg()) == Decimal(0)
