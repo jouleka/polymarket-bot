@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+import pytest
+
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, FeeCategory
 from polybot.maker.fees import taker_fee
 
@@ -42,3 +44,28 @@ def test_exponent_is_applied_via_decimal_power():
     )
     # 100 * 0.03 * 0.5 * (0.5)**2 = 0.375
     assert _fee("0.5", schedule=quadratic) == Decimal("0.375")
+
+
+def test_free_category_pays_zero():
+    # geopolitics is FREE by flag — its rate/exponent fields are irrelevant.
+    assert _fee("0.5", category="geopolitics") == Decimal("0")
+
+
+def test_planned_inactive_categories_pay_zero():
+    for planned in ("politics", "finance", "tech", "econ", "culture", "weather", "crypto"):
+        assert _fee("0.5", category=planned) == Decimal("0")
+
+
+def test_free_wins_over_active():
+    # the free flag short-circuits even an active entry with a nonzero rate.
+    schedule = (
+        FeeCategory(name="promo", fee_rate=Decimal("0.03"), exponent=Decimal("1"),
+                    active=True, free=True),
+    )
+    assert _fee("0.5", category="promo", schedule=schedule) == Decimal("0")
+
+
+def test_unknown_category_fails_loud():
+    # a config gap must never silently price as free (fail LOUD, design Fork 3).
+    with pytest.raises(ValueError, match="category"):
+        _fee("0.5", category="esports")

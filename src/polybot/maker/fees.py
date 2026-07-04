@@ -16,6 +16,9 @@ def taker_fee(category, p, size, *, schedule) -> Decimal:
         if candidate.name == category:
             entry = candidate
             break
-    # Unknown-category / free / inactive dispositions pinned RED-first by the A5 cycle;
-    # p/size input guards by A6.
+    if entry is None:
+        raise ValueError(f"unknown fee category {category!r} -- config gap, refusing to price as free")
+    if entry.free or not entry.active:
+        return Decimal(0)
+    # p/size input guards pinned RED-first by the A6 cycle.
     return size * entry.fee_rate * p * (Decimal(1) - p) ** entry.exponent
