@@ -47,6 +47,11 @@ def _ceil_frac(n, fraction):
 def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_gate, maker_gate,
                       ramp_config, maker_config, family_size):
     rc = ramp_config
+    # family_size is the multiple-comparisons family (>= 1 -- certifying 1-of-N categories). A
+    # family_size < 1 makes required_margin = net_margin_min + mc_penalty*(family_size-1) NEGATIVE,
+    # which would let a net-NEGATIVE OOS window clear the positive-with-margin gate. Fail LOUD.
+    if family_size < 1:
+        raise ValueError(f"family_size must be >= 1, got {family_size}")
     # --- SHADOW side: honest WON/LOST kept; DISPUTED/VOID counted; net over the OOS window ---
     honest = []
     n_disputed = 0
