@@ -63,9 +63,18 @@ def adverse_selection(fills, mark_for):
 
     Positive = adverse cost (the identity SUBTRACTS it); may be negative overall (favorable
     marks). mark = LocalBook.midpoint() interim / the resolution value at settle -- injected.
+    A None / non-finite / out-of-[0,1] mark FAILS CLOSED to that fill's worst-case adverse:
+    BUY -> shares * price_exec (mark 0); SELL -> shares * (1 - price_exec) (mark 1). A bad
+    feed must never book a phantom gain (design §5.4).
     """
     total = Decimal(0)
     for fill in fills:
         mark = mark_for(fill.token_id)
+        if mark is None or not mark.is_finite() or mark < 0 or mark > 1:
+            if fill.side == "BUY":
+                total += fill.shares * fill.price_exec
+            else:
+                total += fill.shares * (Decimal(1) - fill.price_exec)
+            continue
         total += _SGN[fill.side] * fill.shares * (fill.price_exec - mark)
     return total
