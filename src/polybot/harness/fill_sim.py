@@ -35,8 +35,30 @@ class SimulatedFill:
 
 
 def simulate_fill(*, token_id, condition_id, category, side, shares, resting_price, book, maker_config):
-    """A single resting-maker fill decision (A5 happy-path cut: always fills)."""
-    mid = book.midpoint()
+    """A single resting-maker fill decision. Fails CLOSED (filled=False, reward 0)
+    on a crossing price or a stale/one-sided/None-mid book (A6)."""
+    mid = book.midpoint()  # None when stale / empty side / crossed
+    best_bid = book.best_bid()
+    best_ask = book.best_ask()
+
+    crosses = (
+        mid is None
+        or (side == "BUY" and (best_ask is None or resting_price >= best_ask))
+        or (side == "SELL" and (best_bid is None or resting_price <= best_bid))
+    )
+    if crosses:
+        return SimulatedFill(
+            token_id=token_id,
+            condition_id=condition_id,
+            category=category,
+            side=side,
+            shares=shares,
+            fill_price=resting_price,
+            fill_mid=mid if mid is not None else Decimal(0),
+            spread_from_mid=Decimal(0),
+            filled=False,
+            reward_accrued=Decimal(0),
+        )
 
     spread_from_mid = abs(resting_price - mid)
     reward = reward_accrual(shares, spread_from_mid, config=maker_config)

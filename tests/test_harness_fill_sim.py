@@ -84,3 +84,39 @@ def test_filled_but_outside_max_spread_earns_no_reward():
     assert fill.fill_mid == Decimal("0.50")
     assert fill.spread_from_mid == Decimal("0.10")
     assert fill.reward_accrued == Decimal("0")
+
+
+def test_crossing_buy_does_not_fill_and_earns_nothing():
+    # BUY resting 0.52 == best_ask 0.52 -> would cross -> fail closed.
+    fill = _fill(resting_price=Decimal("0.52"))
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+    assert fill.fill_mid == Decimal("0.50")  # mid still reported when the book is live
+
+
+def test_crossing_sell_does_not_fill_and_earns_nothing():
+    # SELL resting 0.48 == best_bid 0.48 -> would cross -> fail closed.
+    fill = _fill(side="SELL", resting_price=Decimal("0.48"))
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+
+
+def test_stale_book_with_no_midpoint_fails_closed():
+    # A fresh LocalBook has never had a snapshot -> _stale=True -> midpoint() is None.
+    stale = LocalBook()
+    assert stale.midpoint() is None
+    fill = _fill(book=stale)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+    assert fill.fill_mid == Decimal("0")  # mid or Decimal(0) when None
+
+
+def test_one_sided_book_fails_closed():
+    # Bids only (no ask) -> midpoint() None (empty side) -> fail closed even for a BUY.
+    one_sided = _book([("0.48", "100")], [])
+    fill = _fill(book=one_sided)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
