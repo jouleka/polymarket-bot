@@ -213,3 +213,44 @@ def test_net_oos_exactly_at_required_margin_is_not_positive_strict(tmp_path):
     assert rep.required_margin == Decimal("14.50")
     assert rep.oos_positive is False
     assert rep.ready is False
+
+
+def test_reliability_over_ceiling_makes_calibration_not_ok(tmp_path):
+    # ready-shaped shadow sample + k=1/go=True, but a MIS-calibrated forecast window:
+    #   f1 LOST bot p 0.90 ; f2 WON bot p 0.10  -> reliability = bin9 (0.9-0)^2 + bin1 (0.1-1)^2,
+    #   each weight 1/2 = 0.81, which exceeds reliability_max 0.03 -> calibration_ok False.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    forecast.record_forecast("b1", category="politics", condition_id="c", p=Decimal("0.90"),
+                             market_mid=Decimal("0.40"))
+    forecast.record_resolution("b1", "LOST")
+    forecast.record_forecast("b2", category="politics", condition_id="c", p=Decimal("0.10"),
+                             market_mid=Decimal("0.60"))
+    forecast.record_resolution("b2", "WON")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.reliability == Decimal("0.81000")
+    assert rep.reliability > rep.k.__class__("0.03") or True  # documentary; ceiling is reliability_max 0.03
+    assert rep.calibration_ok is False
+    assert rep.ready is False
+
+
+def test_non_positive_brier_skill_makes_calibration_not_ok(tmp_path):
+    # bot WORSE than the market baseline -> brier_skill <= 0.
+    #   f1 WON bot p 0.20 vs mid 0.80 ; f2 LOST bot p 0.80 vs mid 0.20.
+    #   bot_brier = ((0.20-1)^2+(0.80-0)^2)/2 = (0.64+0.64)/2 = 0.64
+    #   mkt_brier = ((0.80-1)^2+(0.20-0)^2)/2 = (0.04+0.04)/2 = 0.04
+    #   brier_skill = 1 - 0.64/0.04 = -15  (<= 0) -> calibration_ok False.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(6):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    forecast.record_forecast("s1", category="politics", condition_id="c", p=Decimal("0.20"),
+                             market_mid=Decimal("0.80"))
+    forecast.record_resolution("s1", "WON")
+    forecast.record_forecast("s2", category="politics", condition_id="c", p=Decimal("0.80"),
+                             market_mid=Decimal("0.20"))
+    forecast.record_resolution("s2", "LOST")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.brier_skill == Decimal("-15")
+    assert rep.calibration_ok is False
+    assert rep.ready is False
