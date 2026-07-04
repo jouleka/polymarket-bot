@@ -329,3 +329,24 @@ def test_family_size_below_one_fails_loud(tmp_path):
         _win(shadow, f"w{i}", token=f"tw{i}")
     with pytest.raises(ValueError, match="family_size"):
         _evaluate(shadow, forecast, k=Decimal("1"), go=True, family_size=0)
+
+
+def test_oos_floor_gate_in_isolation_below_min_oos_resolved_is_not_ready(tmp_path):
+    # ISOLATE the n_oos >= min_oos_resolved floor from the n_resolved gate. A config where
+    # oos_holdout_fraction*min_resolved < min_oos_resolved decouples them:
+    #   min_resolved=10, oos_holdout_fraction=0.10, min_oos_resolved=5.
+    # 10 honest WON rows -> n_resolved=10 (>= min_resolved 10, so the n_resolved gate PASSES) but
+    #   n_oos = ceil(0.10*10) = 1 < min_oos_resolved 5, so the OOS-floor gate ALONE must keep
+    #   oos_positive/ready False -- even though net_oos (a lone winner) is hugely positive (+7.25).
+    # Deleting the `n_oos >= min_oos_resolved` conjunct would flip oos_positive/ready to True.
+    ramp = _ramp_config(min_resolved=10, oos_holdout_fraction=Decimal("0.10"), min_oos_resolved=5)
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(10):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True, ramp=ramp)
+    assert rep.n_resolved == 10           # the n_resolved gate is satisfied
+    assert rep.n_oos == 1
+    assert rep.n_oos < 5                   # below min_oos_resolved
+    assert rep.net_oos == Decimal("7.25")  # a hugely positive OOS net -- not why it fails
+    assert rep.oos_positive is False       # the OOS-floor gate alone blocks it
+    assert rep.ready is False
