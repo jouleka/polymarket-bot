@@ -159,3 +159,56 @@ def test_go_reads_net_only_not_reward_gross(tmp_path):
     assert r.reward + r.rebate + r.spread_capture == Decimal("5.144")  # gross is positive...
     assert r.net == Decimal("-54.856")                                 # ...the net is not
     assert r.go is False
+
+
+def test_disputed_counted_and_excluded_from_every_leg(tmp_path):
+    """Whale-flip immunity, proven by the NET VALUE: were the DISPUTED row scored (its mark is
+    None, so fail-closed worst-case adverse would be 20*0.90 = 18), net would flip
+    6.05 -> 6.05 - 18 = -11.95 and go would flip to False. Exclusion keeps net at 6.05."""
+    # honest: h1 BUY 10 @ 0.40, mid 0.40, reward 0.05, WON (mark 1)
+    #   spread 0 ; adverse 10*(0.40-1) = -6 ; free category -> other legs 0
+    #   net = 0.05 + 0 + 0 - (-6) = 6.05
+    with _ledger(tmp_path / "m.db") as l:
+        _fill(l, "h1", category="geopolitics", side="BUY", shares="10", price="0.40",
+              mid="0.40", reward="0.05", status="WON")
+        _fill(l, "d1", category="geopolitics", side="BUY", shares="20", price="0.90",
+              mid="0.90", reward="0", status="DISPUTED")
+        r = MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")
+    assert r.n_settled == 1 and r.n_disputed == 1 and r.n_void == 0
+    assert r.net == Decimal("6.05") and r.go is True
+
+
+def test_void_counted_and_excluded(tmp_path):
+    with _ledger(tmp_path / "m.db") as l:
+        _fill(l, "h1", category="geopolitics", side="BUY", shares="10", price="0.40",
+              mid="0.40", reward="0.05", status="WON")
+        _fill(l, "v1", category="geopolitics", side="BUY", shares="20", price="0.90",
+              mid="0.90", reward="0", status="VOID")
+        r = MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")
+    assert r.n_settled == 1 and r.n_disputed == 0 and r.n_void == 1
+    assert r.net == Decimal("6.05")
+
+
+def test_only_disputed_and_void_rows_is_cold(tmp_path):
+    with _ledger(tmp_path / "m.db") as l:
+        _fill(l, "d1", category="geopolitics", side="BUY", shares="20", price="0.90",
+              mid="0.90", reward="0", status="DISPUTED")
+        _fill(l, "v1", category="geopolitics", side="BUY", shares="20", price="0.90",
+              mid="0.90", reward="0", status="VOID")
+        r = MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")
+    assert r.n_settled == 0 and r.n_disputed == 1 and r.n_void == 1
+    assert r.net is None and r.go is False
+
+
+def test_an_unhandled_settlement_status_fails_loud(tmp_path):
+    # A status neither honest nor DISPUTED/VOID (DB corruption, or a future 5th VALID_STATUSES
+    # not taught to the tracker) must NOT silently vanish from the accounting. The ledger's own
+    # guard blocks writing it, so corrupt the row through the raw sqlite3 connection underneath
+    # (mirrors test_calibration_tracker.test_an_unhandled_resolution_status_fails_loud).
+    with _ledger(tmp_path / "m.db") as l:
+        _fill(l, "h1", category="geopolitics", side="BUY", shares="10", price="0.40",
+              mid="0.40", reward="0.05", status="WON")
+        l._conn.execute("UPDATE maker_fills SET status='WEIRD' WHERE fill_id='h1'")
+        l._conn.commit()
+        with pytest.raises(ValueError, match="status"):
+            MakerTracker(l, _cfg(min_samples=1)).report_for("geopolitics")

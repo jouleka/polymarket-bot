@@ -43,10 +43,24 @@ class MakerTracker:
 
     def report_for(self, category):
         c = self._config
-        honest = [r for r in self._ledger.settled(category) if r.status in _HONEST]
+        honest = []
+        n_disputed = n_void = 0
+        for r in self._ledger.settled(category):
+            if r.status in _HONEST:
+                honest.append(r)
+            elif r.status == "DISPUTED":
+                n_disputed += 1
+            elif r.status == "VOID":
+                n_void += 1
+            else:
+                # Exhaustive: a status outside {WON,LOST,DISPUTED,VOID} (DB corruption, or a
+                # future 5th VALID_STATUSES not taught here) must fail loud, never silently
+                # vanish from the accounting.
+                raise ValueError(f"unhandled settlement status {r.status!r}")
+
         n = len(honest)
         if n == 0:  # cold -- no honest settled sample yet (shadow-only, data-gated dormant)
-            return MakerReport(category, 0, 0, 0,
+            return MakerReport(category, 0, n_disputed, n_void,
                                None, None, None, None, None, None, None, None, False)
 
         reward = sum((r.reward_accrued for r in honest), Decimal(0))
@@ -68,6 +82,6 @@ class MakerTracker:
                       dispute_haircut=c.dispute_p * notional)
         # GO reads .net ONLY (never a gross leg): enough sample AND net STRICTLY over the margin.
         go = n >= c.min_samples and pnl.net > c.net_margin_min
-        return MakerReport(category, n, 0, 0, pnl.reward, pnl.rebate, pnl.spread_capture,
-                           pnl.adverse_selection, pnl.fees, pnl.lockup_cost,
-                           pnl.dispute_haircut, pnl.net, go)
+        return MakerReport(category, n, n_disputed, n_void, pnl.reward, pnl.rebate,
+                           pnl.spread_capture, pnl.adverse_selection, pnl.fees,
+                           pnl.lockup_cost, pnl.dispute_haircut, pnl.net, go)
