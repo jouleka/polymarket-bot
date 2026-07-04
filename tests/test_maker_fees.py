@@ -69,3 +69,34 @@ def test_unknown_category_fails_loud():
     # a config gap must never silently price as free (fail LOUD, design Fork 3).
     with pytest.raises(ValueError, match="category"):
         _fee("0.5", category="esports")
+
+
+def test_rejects_p_out_of_range():
+    with pytest.raises(ValueError, match="p must"):
+        _fee("-0.01")
+    with pytest.raises(ValueError, match="p must"):
+        _fee("1.01")
+
+
+def test_rejects_a_non_finite_p():
+    # NaN propagates QUIETLY through Decimal arithmetic — without the guard the fee
+    # would silently come back NaN. Fail LOUD instead (constructor/pure-fn doctrine).
+    with pytest.raises(ValueError, match="p must"):
+        _fee("NaN")
+    with pytest.raises(ValueError, match="p must"):
+        _fee("Infinity")
+
+
+def test_rejects_a_negative_size():
+    with pytest.raises(ValueError, match="size"):
+        _fee("0.5", size="-1")
+
+
+def test_rejects_a_non_finite_size():
+    with pytest.raises(ValueError, match="size"):
+        _fee("0.5", size="NaN")
+
+
+def test_zero_size_is_a_zero_fee():
+    # size 0 is a valid boundary, not an error.
+    assert _fee("0.5", size="0") == Decimal("0")

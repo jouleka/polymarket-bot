@@ -11,6 +11,10 @@ from decimal import Decimal
 
 
 def taker_fee(category, p, size, *, schedule) -> Decimal:
+    if not p.is_finite() or not (Decimal(0) <= p <= Decimal(1)):
+        raise ValueError(f"p must be a finite Decimal in [0, 1], got {p}")
+    if not size.is_finite() or size < 0:
+        raise ValueError(f"size must be a finite Decimal >= 0, got {size}")
     entry = None
     for candidate in schedule:
         if candidate.name == category:
@@ -20,5 +24,4 @@ def taker_fee(category, p, size, *, schedule) -> Decimal:
         raise ValueError(f"unknown fee category {category!r} -- config gap, refusing to price as free")
     if entry.free or not entry.active:
         return Decimal(0)
-    # p/size input guards pinned RED-first by the A6 cycle.
     return size * entry.fee_rate * p * (Decimal(1) - p) ** entry.exponent
