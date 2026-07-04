@@ -70,7 +70,16 @@ class MakerTracker:
         spread_capture = sum((_SGN[r.side] * r.shares * (r.fill_mid - r.price_exec)
                               for r in honest), Decimal(0))
         notional = sum((r.shares * r.price_exec for r in honest), Decimal(0))
-        marks = {r.token_id: r.resolution_value for r in honest}
+        marks = {}
+        for r in honest:
+            # A token resolves ONCE: two honest fills on one token_id with DISTINCT non-None
+            # resolution marks is ledger corruption -- fail loud, never silently last-wins.
+            prior = marks.get(r.token_id)
+            if (prior is not None and r.resolution_value is not None
+                    and prior != r.resolution_value):
+                raise ValueError(f"inconsistent resolution marks for token {r.token_id!r}: "
+                                 f"{prior} vs {r.resolution_value}")
+            marks[r.token_id] = r.resolution_value
         fills = [MakerFill(token_id=r.token_id, condition_id=r.condition_id,
                            category=r.category, side=r.side, shares=r.shares,
                            price_exec=r.price_exec, fill_mid=r.fill_mid) for r in honest]
