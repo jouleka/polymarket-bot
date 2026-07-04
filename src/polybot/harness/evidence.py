@@ -47,18 +47,28 @@ def _ceil_frac(n, fraction):
 def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_gate, maker_gate,
                       ramp_config, maker_config, family_size):
     rc = ramp_config
-    # --- SHADOW side: honest WON/LOST; net over the OOS window (the most-recent slice) ---
-    honest = [r for r in shadow_ledger.settled(category) if r.status in _HONEST_SHADOW]
+    # --- SHADOW side: honest WON/LOST kept; DISPUTED/VOID counted; net over the OOS window ---
+    honest = []
     n_disputed = 0
+    for r in shadow_ledger.settled(category):
+        if r.status in _HONEST_SHADOW:
+            honest.append(r)
+        elif r.status in ("DISPUTED", "VOID"):
+            n_disputed += 1
 
     n_resolved = len(honest)
     required_margin = rc.net_margin_min + rc.mc_penalty * (Decimal(family_size) - Decimal(1))
 
-    n_oos = _ceil_frac(n_resolved, rc.oos_holdout_fraction)
-    oos_rows = honest[-n_oos:]
-    net_oos = pnl.window_net(oos_rows, maker_config=maker_config)
-    net_full = pnl.window_net(honest, maker_config=maker_config)
-    oos_positive = (n_oos >= rc.min_oos_resolved) and (net_oos > required_margin)
+    if n_resolved == 0:  # cold -> fail-closed, None stats
+        n_oos = 0
+        net_full = net_oos = None
+        oos_positive = False
+    else:
+        n_oos = _ceil_frac(n_resolved, rc.oos_holdout_fraction)
+        oos_rows = honest[-n_oos:]
+        net_oos = pnl.window_net(oos_rows, maker_config=maker_config)
+        net_full = pnl.window_net(honest, maker_config=maker_config)
+        oos_positive = (n_oos >= rc.min_oos_resolved) and (net_oos > required_margin)
 
     # --- CALIBRATION side: Brier-beats-mid + reliability over the OOS forecast window ---
     fhonest = [f for f in forecast_ledger.resolved(category)

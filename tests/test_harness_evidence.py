@@ -254,3 +254,42 @@ def test_non_positive_brier_skill_makes_calibration_not_ok(tmp_path):
     assert rep.brier_skill == Decimal("-15")
     assert rep.calibration_ok is False
     assert rep.ready is False
+
+
+def test_cold_ledger_is_not_ready_with_none_stats(tmp_path):
+    # no settled shadow rows AND no resolved forecasts -> fail-closed.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.n_resolved == 0
+    assert rep.n_oos == 0
+    assert rep.net_full is None
+    assert rep.net_oos is None
+    assert rep.brier_skill is None
+    assert rep.reliability is None
+    assert rep.oos_positive is False
+    assert rep.calibration_ok is False   # None brier_skill/reliability -> not ok
+    assert rep.ready is False
+
+
+def test_disputed_and_void_are_counted_but_excluded_from_the_honest_sample(tmp_path):
+    # 4 WINS (honest) + 1 DISPUTED + 1 VOID (shadow ledger uses "DISPUTED", NOT "DISPUTED_LOST").
+    #   n_resolved counts only the 4 honest wins; n_disputed = 2 (DISPUTED + VOID).
+    #   net_full = 4*7.25 = 29.00 (the DISPUTED/VOID rows contribute NOTHING to net).
+    #   n_oos = ceil(0.30*4)=2 ; net_oos = 2*7.25 = 14.50.
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    for i in range(4):
+        _win(shadow, f"w{i}", token=f"tw{i}")
+    shadow.record_trade("d1", token_id="td1", condition_id="c", category="politics", side="BUY",
+                        shares=Decimal("10"), fill_price=Decimal("0.40"), fill_mid=Decimal("0.50"),
+                        reward_accrued=Decimal("0.25"))
+    shadow.record_settlement("d1", status="DISPUTED", resolution_value=None)
+    shadow.record_trade("v1", token_id="tv1", condition_id="c", category="politics", side="BUY",
+                        shares=Decimal("10"), fill_price=Decimal("0.40"), fill_mid=Decimal("0.50"),
+                        reward_accrued=Decimal("0.25"))
+    shadow.record_settlement("v1", status="VOID", resolution_value=None)
+    rep = _evaluate(shadow, forecast, k=Decimal("1"), go=True)
+    assert rep.n_resolved == 4
+    assert rep.n_disputed == 2
+    assert rep.net_full == Decimal("29.00")
+    assert rep.net_oos == Decimal("14.50")
+    assert rep.n_oos == 2
