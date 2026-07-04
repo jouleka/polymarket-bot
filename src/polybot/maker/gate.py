@@ -66,6 +66,8 @@ class MakerTracker:
                       fees=c.forced_taker_exit_p * cf_total,
                       lockup_cost=c.lockup_rate * notional,
                       dispute_haircut=c.dispute_p * notional)
+        # GO reads .net ONLY (never a gross leg): enough sample AND net STRICTLY over the margin.
+        go = n >= c.min_samples and pnl.net > c.net_margin_min
         return MakerReport(category, n, 0, 0, pnl.reward, pnl.rebate, pnl.spread_capture,
                            pnl.adverse_selection, pnl.fees, pnl.lockup_cost,
-                           pnl.dispute_haircut, pnl.net, False)
+                           pnl.dispute_haircut, pnl.net, go)
