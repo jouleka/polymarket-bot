@@ -56,3 +56,16 @@ def net_inventory(fills):
         token_id: (shares, cost[token_id] / shares if shares != 0 else Decimal(0))
         for token_id, shares in net.items()
     }
+
+
+def adverse_selection(fills, mark_for):
+    """Signed mark-out: sum over fills of sgn(side) * shares * (price_exec - mark_for(token_id)).
+
+    Positive = adverse cost (the identity SUBTRACTS it); may be negative overall (favorable
+    marks). mark = LocalBook.midpoint() interim / the resolution value at settle -- injected.
+    """
+    total = Decimal(0)
+    for fill in fills:
+        mark = mark_for(fill.token_id)
+        total += _SGN[fill.side] * fill.shares * (fill.price_exec - mark)
+    return total
