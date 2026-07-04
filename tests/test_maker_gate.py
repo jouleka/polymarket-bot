@@ -5,6 +5,7 @@ from decimal import Decimal
 import pytest
 
 from polybot.core.clock import MonotonicStamper
+from polybot.maker import quote_policy
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
 from polybot.maker.gate import MakerGate, MakerTracker
 from polybot.maker.ledger import MakerLedger
@@ -243,3 +244,22 @@ def test_gate_caller_cannot_pass_config(tmp_path):
             g.decide_quote(pull_quotes=False, recent_adverse=Decimal("0"),
                            break_even=Decimal("0.05"), locked_effective=Decimal("0"),
                            locked_cap=Decimal("100"), config=_cfg())
+
+
+def test_gate_decide_quote_injects_its_own_config_object(tmp_path, monkeypatch):
+    """The injected VALUE, not just the duplicate-keyword TypeError: decide_quote must forward
+    the gate's OWN config object. Pins the sole S8d mutation survivor -- passing config=None
+    (or any other object) instead of self._config is invisible while quote_policy's config is
+    inert, so assert identity on the captured kwarg."""
+    captured = {}
+
+    def _spy(**kw):
+        captured.update(kw)
+        return QUOTE
+
+    monkeypatch.setattr(quote_policy, "decide_quote", _spy)
+    with _ledger(tmp_path / "m.db") as l:
+        g = MakerGate(l, _cfg())
+        g.decide_quote(pull_quotes=False, recent_adverse=Decimal("0"), break_even=Decimal("1"),
+                       locked_effective=Decimal("0"), locked_cap=Decimal("1"))
+    assert captured["config"] is g._config  # the gate's own config, by identity
