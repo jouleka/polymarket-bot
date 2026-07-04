@@ -36,7 +36,16 @@ class SimulatedFill:
 
 def simulate_fill(*, token_id, condition_id, category, side, shares, resting_price, book, maker_config):
     """A single resting-maker fill decision. Fails CLOSED (filled=False, reward 0)
-    on a crossing price or a stale/one-sided/None-mid book (A6)."""
+    on a crossing price or a stale/one-sided/None-mid book (A6). Fails LOUD
+    (ValueError, is_finite() before every compare) on a bad proposal -- a bad side,
+    non-finite/non-positive shares, or a resting_price outside (0, 1) (A7)."""
+    if side not in ("BUY", "SELL"):
+        raise ValueError(f"side must be one of BUY, SELL, got {side!r}")
+    if not shares.is_finite() or shares <= 0:
+        raise ValueError(f"shares must be finite and > 0, got {shares}")
+    if not resting_price.is_finite() or not (Decimal(0) < resting_price < Decimal(1)):
+        raise ValueError(f"resting_price must be finite and in (0, 1), got {resting_price}")
+
     mid = book.midpoint()  # None when stale / empty side / crossed
     best_bid = book.best_bid()
     best_ask = book.best_ask()
