@@ -13,9 +13,11 @@ MakerTracker's exhaustive-status raise).
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_CEILING
 
+from polybot.calibration.scoring import brier, brier_skill, murphy
 from polybot.harness import pnl
 
 _HONEST_SHADOW = ("WON", "LOST")
+_HONEST_FORECAST = {"WON": 1, "LOST": 0}
 
 
 @dataclass(frozen=True)
@@ -58,12 +60,25 @@ def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_g
     net_full = pnl.window_net(honest, maker_config=maker_config)
     oos_positive = (n_oos >= rc.min_oos_resolved) and (net_oos > required_margin)
 
-    # --- CALIBRATION + MAKER gates: computed in C2; stubbed fail-closed here (honesty pin only) ---
+    # --- CALIBRATION side: Brier-beats-mid + reliability over the OOS forecast window ---
+    fhonest = [f for f in forecast_ledger.resolved(category)
+               if f.resolution_status in _HONEST_FORECAST]
+    n_f = len(fhonest)
     brier_skill_v = reliability_v = None
-    k = Decimal(0)
-    calibration_ok = False
-    maker_go = False
+    if n_f > 0:
+        f_oos = fhonest[-_ceil_frac(n_f, rc.oos_holdout_fraction):]
+        if f_oos:
+            bot_pairs = [(f.p, _HONEST_FORECAST[f.resolution_status]) for f in f_oos]
+            market_pairs = [(f.market_mid, _HONEST_FORECAST[f.resolution_status]) for f in f_oos]
+            brier_skill_v = brier_skill(brier(bot_pairs), brier(market_pairs))
+            reliability_v = murphy(bot_pairs, rc.oos_n_bins).reliability
 
+    k = calibration_gate.k_for(category)
+    calibration_ok = ((k == Decimal(1))
+                      and (brier_skill_v is not None and brier_skill_v > Decimal(0))
+                      and (reliability_v is not None and reliability_v <= rc.reliability_max))
+
+    maker_go = maker_gate.go_for(category)
     ready = (n_resolved >= rc.min_resolved) and oos_positive and calibration_ok and maker_go
 
     return EvidenceReport(category=category, n_resolved=n_resolved, n_oos=n_oos,
