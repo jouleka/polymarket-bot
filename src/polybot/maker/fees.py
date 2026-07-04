@@ -25,3 +25,9 @@ def taker_fee(category, p, size, *, schedule) -> Decimal:
     if entry.free or not entry.active:
         return Decimal(0)
     return size * entry.fee_rate * p * (Decimal(1) - p) ** entry.exponent
+
+
+def rebate(taker_fee_paid, *, fraction) -> Decimal:
+    if not taker_fee_paid.is_finite() or taker_fee_paid < 0:
+        raise ValueError(f"taker_fee_paid must be a finite Decimal >= 0, got {taker_fee_paid}")
+    return fraction * taker_fee_paid
