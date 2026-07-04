@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from polybot.maker.inventory import _SGN, MakerFill, net_inventory
+from polybot.maker.inventory import _SGN, MakerFill, adverse_selection, net_inventory
 
 
 def _fill(**over):
@@ -119,3 +119,43 @@ def test_flattened_token_nets_zero_with_zero_avg_cost():
 
 def test_no_fills_empty_inventory():
     assert net_inventory([]) == {}
+
+
+def test_buy_mark_below_fill_is_positive_adverse():
+    # BUY 10 @ 0.50, mark 0.40: +1 * 10 * (0.50 - 0.40) = +1.00  (the bleed)
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("0.40")) == Decimal("1.00")
+
+
+def test_buy_mark_above_fill_is_negative_adverse():
+    # BUY 10 @ 0.50, mark 0.60: +1 * 10 * (0.50 - 0.60) = -1.00  (favorable = negative cost)
+    fills = [_fill(side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("0.60")) == Decimal("-1.00")
+
+
+def test_sell_mark_above_fill_is_positive_adverse():
+    # SELL 10 @ 0.50, mark 0.60: -1 * 10 * (0.50 - 0.60) = +1.00  (a hit ASK bleeds when mark RISES)
+    fills = [_fill(side="SELL", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("0.60")) == Decimal("1.00")
+
+
+def test_sell_mark_below_fill_is_negative_adverse():
+    # SELL 10 @ 0.50, mark 0.40: -1 * 10 * (0.50 - 0.40) = -1.00
+    fills = [_fill(side="SELL", shares=Decimal("10"), price_exec=Decimal("0.50"))]
+    assert adverse_selection(fills, lambda token_id: Decimal("0.40")) == Decimal("-1.00")
+
+
+def test_two_sided_book_hand_computed():
+    # BUY 10 @ 0.50 marked 0.45: +1 * 10 * (0.50 - 0.45) = +0.50
+    # SELL 4 @ 0.60 marked 0.70: -1 *  4 * (0.60 - 0.70) = +0.40
+    # total adverse = 0.90
+    fills = [
+        _fill(token_id="tok-buy", side="BUY", shares=Decimal("10"), price_exec=Decimal("0.50")),
+        _fill(token_id="tok-sell", side="SELL", shares=Decimal("4"), price_exec=Decimal("0.60")),
+    ]
+    marks = {"tok-buy": Decimal("0.45"), "tok-sell": Decimal("0.70")}
+    assert adverse_selection(fills, lambda token_id: marks[token_id]) == Decimal("0.90")
+
+
+def test_no_fills_zero_adverse():
+    assert adverse_selection([], lambda token_id: Decimal("0.50")) == Decimal(0)
