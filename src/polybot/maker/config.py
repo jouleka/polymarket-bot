@@ -53,5 +53,24 @@ class MakerConfig:
         self._verify()
 
     def _verify(self):
-        # Knob-envelope checks pinned RED-first by the A2 cycle; schedule checks by A3.
+        if not (Decimal(0) < self.rebate_fraction <= Decimal("0.5")):
+            raise ValueError(f"rebate_fraction must be in (0, 0.5], got {self.rebate_fraction}")
+        if self.reward_b <= 0:
+            raise ValueError(f"reward_b must be > 0, got {self.reward_b}")
+        if not (Decimal(0) < self.max_spread < Decimal(1)):
+            raise ValueError(f"max_spread must be in (0, 1), got {self.max_spread}")
+        if self.min_samples <= 0:
+            raise ValueError(f"min_samples must be > 0, got {self.min_samples}")
+        if self.net_margin_min < 0:
+            raise ValueError(f"net_margin_min must be >= 0, got {self.net_margin_min}")
+        if self.lockup_rate < 0:
+            raise ValueError(f"lockup_rate must be >= 0, got {self.lockup_rate}")
+        if not (Decimal(0) <= self.forced_taker_exit_p <= Decimal(1)):
+            raise ValueError(f"forced_taker_exit_p must be in [0, 1], got {self.forced_taker_exit_p}")
+        if not (Decimal(0) <= self.dispute_p <= Decimal(1)):
+            raise ValueError(f"dispute_p must be in [0, 1], got {self.dispute_p}")
+        self._verify_schedule()
+
+    def _verify_schedule(self):
+        # Schedule-envelope checks pinned RED-first by the A3 cycle.
         pass
