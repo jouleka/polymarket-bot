@@ -46,6 +46,26 @@ def test_exponent_is_applied_via_decimal_power():
     assert _fee("0.5", schedule=quadratic) == Decimal("0.375")
 
 
+def test_exponent_zero_flat_fee_is_legal_at_p_one():
+    # exponent=0 is a plausible flat-fee deploy re-pull: (1-p)**0 == 1 everywhere,
+    # INCLUDING p=1 — Decimal(0)**Decimal(0) raises InvalidOperation, so the power
+    # term must be skipped, not computed. fee = 100 * 0.03 * 1 = 3, exact.
+    flat = (
+        FeeCategory(name="sports", fee_rate=Decimal("0.03"), exponent=Decimal("0"),
+                    active=True, free=False),
+    )
+    assert _fee("1", schedule=flat) == Decimal("3")
+
+
+def test_exponent_zero_flat_fee_off_the_boundary():
+    # away from p=1 the flat model is size * rate * p: 100 * 0.03 * 0.5 = 1.5.
+    flat = (
+        FeeCategory(name="sports", fee_rate=Decimal("0.03"), exponent=Decimal("0"),
+                    active=True, free=False),
+    )
+    assert _fee("0.5", schedule=flat) == Decimal("1.5")
+
+
 def test_free_category_pays_zero():
     # geopolitics is FREE by flag — its rate/exponent fields are irrelevant.
     assert _fee("0.5", category="geopolitics") == Decimal("0")
