@@ -125,6 +125,20 @@ def test_disputed_and_void_require_resolution_value_none(tmp_path):
                 l.record_settlement("f1", status=status, resolution_value=Decimal("0.5"))
 
 
+def test_dispute_reflip_to_won_requires_a_fresh_resolution_value(tmp_path):
+    # after a DISPUTED flip clears the stale value, a re-flip back to WON must supply
+    # a FRESH value -- None cannot silently leak the cleared stale one.
+    with _ledger(str(tmp_path / "m.db")) as l:
+        _fill(l, "f1")
+        l.record_settlement("f1", status="WON", resolution_value=Decimal("1"))
+        l.record_settlement("f1", status="DISPUTED", resolution_value=None)
+        with pytest.raises(ValueError, match="resolution_value"):
+            l.record_settlement("f1", status="WON", resolution_value=None)
+        l.record_settlement("f1", status="WON", resolution_value=Decimal("1"))
+        r = l.all()[0]
+        assert r.status == "WON" and r.resolution_value == Decimal("1")
+
+
 def test_record_fill_rejects_a_bad_side(tmp_path):
     with _ledger(str(tmp_path / "m.db")) as l:
         with pytest.raises(ValueError, match="side"):

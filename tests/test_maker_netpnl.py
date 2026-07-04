@@ -81,3 +81,10 @@ def test_allows_negative_two_signed_legs():
     # spread_capture and adverse_selection may be either sign by nature.
     assert _pnl(spread_capture=Decimal("-1")).net == Decimal("-0.25")
     assert _pnl(adverse_selection=Decimal("-2")).net == Decimal("6.00")
+
+
+def test_negative_zero_is_accepted_on_a_one_signed_leg():
+    # Decimal("-0") is not a negative quantity -- the sign guard is `< 0`, so it
+    # constructs fine. Pins that a future `<= 0` tightening would be caught.
+    # 3 + 0.5 + 1.25 − 2 − 0 − 0.1 − 0.25 = 2.40.
+    assert _pnl(fees=Decimal("-0")).net == Decimal("2.40")
