@@ -112,3 +112,22 @@ def test_ramp_step_fraction_rejects_zero():
 def test_ramp_step_fraction_rejects_above_one():
     with pytest.raises(ValueError, match="ramp_step_fraction"):
         _cfg(ramp_step_fraction=Decimal("1.5"))
+
+
+_DECIMAL_KNOBS = (
+    "net_margin_min",
+    "oos_holdout_fraction",
+    "mc_penalty",
+    "reliability_max",
+    "ramp_step_fraction",
+)
+
+
+@pytest.mark.parametrize("field_name", _DECIMAL_KNOBS)
+@pytest.mark.parametrize("bad_value", [Decimal("NaN"), Decimal("Infinity")])
+def test_every_decimal_knob_rejects_non_finite_by_name_not_invalidoperation(field_name, bad_value):
+    # is_finite() BEFORE every compare: a NaN or Infinity on ANY of the five Decimal
+    # knobs must raise that knob's own NAMED ValueError -- never a bare
+    # decimal.InvalidOperation leaking from an ordered compare on NaN.
+    with pytest.raises(ValueError, match=field_name):
+        _cfg(**{field_name: bad_value})
