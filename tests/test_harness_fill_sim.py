@@ -1,0 +1,168 @@
+"""S9 / POL-11 — simulate_fill (maker-only resting fill + reward, fail-closed)."""
+
+from decimal import Decimal
+
+import pytest
+
+from polybot.ingestion.orderbook import LocalBook
+from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.maker.reward import reward_accrual
+from polybot.harness.fill_sim import SimulatedFill, simulate_fill
+
+
+def _book(bids, asks):
+    """A fresh, non-stale LocalBook seeded from (price, size) string pairs."""
+    b = LocalBook()
+    b.apply_book(
+        {
+            "bids": [{"price": p, "size": s} for p, s in bids],
+            "asks": [{"price": p, "size": s} for p, s in asks],
+        }
+    )
+    return b
+
+
+def _cfg():
+    return MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
+
+
+def _fill(**overrides):
+    """simulate_fill with a valid resting-maker BUY baseline (mid 0.50, rest 0.49)."""
+    kwargs = dict(
+        token_id="tok-1",
+        condition_id="cond-1",
+        category="politics",
+        side="BUY",
+        shares=Decimal("10"),
+        resting_price=Decimal("0.49"),
+        book=_book([("0.48", "100")], [("0.52", "100")]),
+        maker_config=_cfg(),
+    )
+    kwargs.update(overrides)
+    return simulate_fill(**kwargs)
+
+
+def test_resting_maker_buy_fills_and_accrues_the_reward():
+    fill = _fill()
+    assert isinstance(fill, SimulatedFill)
+    assert fill.filled is True
+    assert fill.fill_price == Decimal("0.49")
+    assert fill.fill_mid == Decimal("0.50")
+    # spread_from_mid = abs(0.49 - 0.50) = 0.01  (<= max_spread 0.03 -> eligible)
+    assert fill.spread_from_mid == Decimal("0.01")
+    # reward = spread_score(10, 0.01, b=1) = (10 - 0.01/10)^2 = 9.999^2 = 99.980001
+    assert fill.reward_accrued == Decimal("99.980001")
+    # and it agrees exactly with the S8 primitive it delegates to
+    assert fill.reward_accrued == reward_accrual(Decimal("10"), Decimal("0.01"), config=_cfg())
+    # passthrough fields
+    assert fill.token_id == "tok-1"
+    assert fill.condition_id == "cond-1"
+    assert fill.category == "politics"
+    assert fill.side == "BUY"
+    assert fill.shares == Decimal("10")
+
+
+def test_resting_maker_sell_mirror_fills_and_accrues_the_reward():
+    # SELL rests at 0.51 (>= best_bid 0.48 -> does not cross) ; mid 0.50 ; spread 0.01
+    fill = _fill(side="SELL", resting_price=Decimal("0.51"))
+    assert fill.filled is True
+    assert fill.side == "SELL"
+    assert fill.fill_price == Decimal("0.51")
+    assert fill.fill_mid == Decimal("0.50")
+    assert fill.spread_from_mid == Decimal("0.01")
+    assert fill.reward_accrued == Decimal("99.980001")
+
+
+def test_filled_but_outside_max_spread_earns_no_reward():
+    # Wide book (bid 0.30 / ask 0.70 -> mid 0.50). BUY resting 0.60 does NOT cross
+    # the 0.70 ask (fills), but spread_from_mid = 0.10 > max_spread 0.03 -> reward 0.
+    fill = _fill(
+        resting_price=Decimal("0.60"),
+        book=_book([("0.30", "100")], [("0.70", "100")]),
+    )
+    assert fill.filled is True
+    assert fill.fill_mid == Decimal("0.50")
+    assert fill.spread_from_mid == Decimal("0.10")
+    assert fill.reward_accrued == Decimal("0")
+
+
+def test_crossing_buy_does_not_fill_and_earns_nothing():
+    # BUY resting 0.52 == best_ask 0.52 -> would cross -> fail closed.
+    fill = _fill(resting_price=Decimal("0.52"))
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+    assert fill.fill_mid == Decimal("0.50")  # mid still reported when the book is live
+
+
+def test_crossing_sell_does_not_fill_and_earns_nothing():
+    # SELL resting 0.48 == best_bid 0.48 -> would cross -> fail closed.
+    fill = _fill(side="SELL", resting_price=Decimal("0.48"))
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+
+
+def test_stale_book_with_no_midpoint_fails_closed():
+    # A fresh LocalBook has never had a snapshot -> _stale=True -> midpoint() is None.
+    stale = LocalBook()
+    assert stale.midpoint() is None
+    fill = _fill(book=stale)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.spread_from_mid == Decimal("0")
+    assert fill.fill_mid == Decimal("0")  # mid or Decimal(0) when None
+
+
+def test_one_sided_book_fails_closed():
+    # Bids only (no ask) -> midpoint() None (empty side) -> fail closed even for a BUY.
+    one_sided = _book([("0.48", "100")], [])
+    fill = _fill(book=one_sided)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+
+
+def test_crossed_book_with_both_sides_present_fails_closed():
+    # A CROSSED book: bid 0.55 >= ask 0.45 -> BOTH sides present but midpoint() None
+    # (LocalBook.midpoint gates on bid >= ask). This is the case a one-sided/stale book
+    # does NOT cover: best_bid() is not None here, so the `mid is None` disjunct in
+    # simulate_fill's `crosses` predicate is the ONLY thing that fails it closed.
+    # SELL resting 0.60 is > best_bid 0.55 -> does NOT cross on the resting side, so
+    # dropping the `mid is None` guard would fall through to abs(0.60 - None) / filled=True.
+    crossed = _book([("0.55", "100")], [("0.45", "100")])
+    assert crossed.midpoint() is None and crossed.best_bid() is not None
+    fill = _fill(side="SELL", resting_price=Decimal("0.60"), book=crossed)
+    assert fill.filled is False
+    assert fill.reward_accrued == Decimal("0")
+    assert fill.fill_mid == Decimal("0")
+
+
+def test_bad_side_raises():
+    with pytest.raises(ValueError, match="side"):
+        _fill(side="HOLD")
+
+
+def test_non_positive_shares_raises():
+    with pytest.raises(ValueError, match="shares"):
+        _fill(shares=Decimal("0"))
+
+
+def test_non_finite_shares_raises():
+    # is_finite() BEFORE the compare -> a named ValueError, not InvalidOperation.
+    with pytest.raises(ValueError, match="shares"):
+        _fill(shares=Decimal("NaN"))
+
+
+def test_resting_price_at_or_below_zero_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("0"))
+
+
+def test_resting_price_at_or_above_one_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("1"))
+
+
+def test_non_finite_resting_price_raises():
+    with pytest.raises(ValueError, match="resting_price"):
+        _fill(resting_price=Decimal("Infinity"))
