@@ -42,3 +42,13 @@ class RampConfig:
             raise ValueError(f"min_resolved_disputed must be >= 0, got {self.min_resolved_disputed}")
         if self.min_stress_episodes < 0:
             raise ValueError(f"min_stress_episodes must be >= 0, got {self.min_stress_episodes}")
+        if not self.net_margin_min.is_finite() or self.net_margin_min < 0:
+            raise ValueError(f"net_margin_min must be finite and >= 0, got {self.net_margin_min}")
+        if not self.oos_holdout_fraction.is_finite() or not (Decimal(0) < self.oos_holdout_fraction < Decimal(1)):
+            raise ValueError(f"oos_holdout_fraction must be finite and in (0, 1), got {self.oos_holdout_fraction}")
+        if not self.mc_penalty.is_finite() or self.mc_penalty < 0:
+            raise ValueError(f"mc_penalty must be finite and >= 0, got {self.mc_penalty}")
+        if not self.reliability_max.is_finite() or not (Decimal(0) < self.reliability_max <= Decimal("0.1")):
+            raise ValueError(f"reliability_max must be finite and in (0, 0.1], got {self.reliability_max}")
+        if not self.ramp_step_fraction.is_finite() or not (Decimal(0) < self.ramp_step_fraction <= Decimal(1)):
+            raise ValueError(f"ramp_step_fraction must be finite and in (0, 1], got {self.ramp_step_fraction}")

@@ -55,3 +55,60 @@ def test_min_resolved_disputed_must_be_non_negative():
 def test_min_stress_episodes_must_be_non_negative():
     with pytest.raises(ValueError, match="min_stress_episodes"):
         _cfg(min_stress_episodes=-1)
+
+
+def test_net_margin_min_must_be_non_negative():
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _cfg(net_margin_min=Decimal("-0.01"))
+
+
+def test_net_margin_min_rejects_infinity():
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _cfg(net_margin_min=Decimal("Infinity"))
+
+
+def test_net_margin_min_rejects_nan_by_name_not_invalidoperation():
+    # is_finite() BEFORE the compare: a NaN must raise the NAMED ValueError,
+    # never a bare InvalidOperation from an ordered compare on NaN.
+    with pytest.raises(ValueError, match="net_margin_min"):
+        _cfg(net_margin_min=Decimal("NaN"))
+
+
+def test_oos_holdout_fraction_rejects_zero():
+    with pytest.raises(ValueError, match="oos_holdout_fraction"):
+        _cfg(oos_holdout_fraction=Decimal("0"))
+
+
+def test_oos_holdout_fraction_rejects_one():
+    with pytest.raises(ValueError, match="oos_holdout_fraction"):
+        _cfg(oos_holdout_fraction=Decimal("1"))
+
+
+def test_mc_penalty_must_be_non_negative():
+    with pytest.raises(ValueError, match="mc_penalty"):
+        _cfg(mc_penalty=Decimal("-0.01"))
+
+
+def test_mc_penalty_rejects_infinity():
+    with pytest.raises(ValueError, match="mc_penalty"):
+        _cfg(mc_penalty=Decimal("Infinity"))
+
+
+def test_reliability_max_rejects_zero():
+    with pytest.raises(ValueError, match="reliability_max"):
+        _cfg(reliability_max=Decimal("0"))
+
+
+def test_reliability_max_rejects_above_ceiling():
+    with pytest.raises(ValueError, match="reliability_max"):
+        _cfg(reliability_max=Decimal("0.11"))
+
+
+def test_ramp_step_fraction_rejects_zero():
+    with pytest.raises(ValueError, match="ramp_step_fraction"):
+        _cfg(ramp_step_fraction=Decimal("0"))
+
+
+def test_ramp_step_fraction_rejects_above_one():
+    with pytest.raises(ValueError, match="ramp_step_fraction"):
+        _cfg(ramp_step_fraction=Decimal("1.5"))
