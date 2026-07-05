@@ -56,6 +56,15 @@ def test_build_omits_data_api_when_disabled(tmp_path):
     assert len(rt._services) == 1                       # ws only
 
 
+def test_build_supervises_all_services(tmp_path):
+    cfg = IngestionConfig(db_path=str(tmp_path / "m.db"), universe_max_markets=5)
+    rt = build_ingestion_runtime(cfg, gamma_fetch=lambda params: _rows(),
+                                 ws_connect=object(), data_fetch=object())
+    assert rt._services                                              # non-empty
+    # every service must be a _supervised-wrapped factory (the fail-loud HALT guard is actually applied)
+    assert all("_supervised" in s.__qualname__ for s in rt._services)
+
+
 def test_main_builds_and_runs_then_clean_exit(tmp_path, monkeypatch):
     from polybot.runtime import ingestion
     toml = tmp_path / "c.toml"
