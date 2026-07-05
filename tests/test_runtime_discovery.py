@@ -47,6 +47,13 @@ def test_non_list_response_fails_loud():
     with pytest.raises(TypeError):
         discover_universe(lambda p: {"unexpected": "shape"}, cfg)
 
+def test_nan_volume_sorts_last():
+    cfg = IngestionConfig(db_path="/d.db", universe_max_markets=1)
+    nan_row = _market("nan", "bad1", "bad2", float("nan"))    # NaN volume, arrives FIRST
+    real_row = _market("real", "good1", "good2", 42.0)
+    tokens = discover_universe(lambda p: [nan_row, real_row], cfg)
+    assert tokens == ["good1", "good2"]      # the real 42.0-vol market wins the single top-N slot
+
 def test_make_gamma_fetch_hits_markets_endpoint(monkeypatch):
     from polybot.runtime import discovery
     captured = {}
