@@ -1,0 +1,32 @@
+[Unit]
+Description=polymarket-bot ingestion (read-only shadow Phase-0; captures the un-backfillable order-book + trade stream)
+After=network-online.target
+Wants=network-online.target
+# Fail-loud: a PERSISTENT venue format-change HALT trips this limit and stays down for a human
+# (>5 restarts in 300s => systemd gives up) rather than crash-looping forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=polybot
+WorkingDirectory=/opt/polymarket-bot
+Environment=PYTHONPATH=/opt/polymarket-bot/src
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/opt/polymarket-bot/.env
+ExecStart=/opt/polymarket-bot/.venv/bin/python -m polybot.runtime.ingestion --config /opt/polymarket-bot/config.toml
+# on-failure (not always): a clean SIGTERM stop is not restarted; a HALT (exit!=0) restarts up to the limit above.
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=30
+# Graceful shutdown: SIGTERM lets IngestionRuntime cancel the collectors and drain the off-loop
+# writer queue (the durability path) before exit. Give it room before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Hardening (mirrors memecoin-bot.service).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
