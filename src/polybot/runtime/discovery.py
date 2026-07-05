@@ -2,6 +2,8 @@
 the flat, de-duplicated clobTokenIds the sharded WS collector subscribes to. Pure but for the injected `fetch`."""
 from __future__ import annotations
 
+import math
+
 import httpx
 
 from polybot.ingestion.gamma import normalize_market
@@ -10,9 +12,10 @@ from polybot.runtime.config import IngestionConfig
 
 def _volume(raw) -> float:
     try:
-        return float(raw.get("volume24hr"))
+        v = float(raw.get("volume24hr"))
+        return v if math.isfinite(v) else 0.0   # NaN/inf -> sorts last, per docstring + non-finite-fails-closed doctrine
     except (TypeError, ValueError):
-        return 0.0  # missing/unparseable volume sorts last (fault-isolated)
+        return 0.0
 
 
 def discover_universe(fetch, config: IngestionConfig) -> list[str]:
