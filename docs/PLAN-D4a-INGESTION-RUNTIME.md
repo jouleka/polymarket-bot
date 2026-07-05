@@ -139,7 +139,10 @@ def main(argv=None) -> int: ...
 # tests/test_runtime_config.py
 import math
 import pytest
-from polybot.runtime.config import IngestionConfig, load_config
+from polybot.runtime.config import IngestionConfig
+# NOTE: load_config is NOT imported at module level here — it does not exist until Step 1.11, and a
+# top-level import of a not-yet-defined name fails COLLECTION of the WHOLE file (dragging the earlier
+# IngestionConfig tests red too). Its tests import it LOCALLY (Step 1.9) so each RED stays clean + isolated.
 
 def test_valid_config_defaults():
     c = IngestionConfig(db_path="/data/m.db")
@@ -256,6 +259,7 @@ Expected: PASS (all params).
 ```python
 # tests/test_runtime_config.py  (append)
 def test_load_config_toml_then_env(tmp_path):
+    from polybot.runtime.config import load_config   # local: undefined until Step 1.11 -> keeps this RED isolated
     toml = tmp_path / "ingest.toml"
     toml.write_text('db_path = "/from/toml.db"\nuniverse_max_markets = 50\n')
     # env overrides the toml value; unrelated keys keep toml/default
@@ -267,10 +271,12 @@ def test_load_config_toml_then_env(tmp_path):
     assert cfg.max_assets_per_shard == 500     # default
 
 def test_load_config_env_only():
+    from polybot.runtime.config import load_config
     cfg = load_config(None, env={"POLYBOT_INGEST_DB_PATH": "/env.db"})
     assert cfg.db_path == "/env.db"
 
 def test_load_config_invalid_still_fails_loud():
+    from polybot.runtime.config import load_config
     with pytest.raises(ValueError):
         load_config(None, env={"POLYBOT_INGEST_DB_PATH": "/e.db",
                                "POLYBOT_INGEST_UNIVERSE_MAX_MARKETS": "0"})
