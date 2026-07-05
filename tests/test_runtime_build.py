@@ -75,6 +75,19 @@ def test_main_missing_config_file_fails_loud(tmp_path):
         ingestion.main(["--config", str(tmp_path / "nope.toml")])
 
 
+def test_main_returns_1_on_halt(tmp_path, monkeypatch):
+    from polybot.runtime import ingestion
+    toml = tmp_path / "c.toml"
+    toml.write_text(f'db_path = "{tmp_path / "m.db"}"\n')
+    class _HaltingRuntime:
+        def request_stop(self): pass
+        async def run(self):
+            raise RuntimeError("boom")   # a venue HALT surfacing out of run()
+    monkeypatch.setattr(ingestion, "build_ingestion_runtime", lambda cfg: _HaltingRuntime())
+    rc = ingestion.main(["--config", str(toml)])
+    assert rc == 1                       # HALT -> non-zero for systemd Restart=on-failure
+
+
 from polybot.core.models import Envelope
 from polybot.storage.event_writer import QueuedEventWriter
 from polybot.storage.market_memory import EventStore
