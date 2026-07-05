@@ -125,6 +125,7 @@ class IngestionConfig:
     max_assets_per_shard: int = 500               # ShardedMarketCollector shard size
     data_api_enabled: bool = True
     data_api_interval_seconds: float = 2.0
+    data_api_limit: int = 500                     # /trades page size (global recency feed)
     heartbeat_path: str | None = None             # None => no heartbeat file
     heartbeat_interval_seconds: float = 5.0
     gamma_url: str = GAMMA_URL                     # from ingestion.transport
@@ -195,7 +196,10 @@ collector-specific signatures and is trivially fakeable in tests.*
 ## 6. Built-now vs deferred
 
 **Built now (D4a):** config + loader · `discover_universe` · `IngestionRuntime` supervision core + durable shutdown +
-heartbeat · `build_ingestion_runtime` + `main` + entry point · one bounded integration smoke.
+heartbeat · `build_ingestion_runtime` + the `_supervised` fail-loud guard (a collector returning normally → loud HALT,
+added per the D4a-3 review) + `main` + entry point · one bounded integration smoke. **LANDED on `main` (7 sub-commits,
+suite 1113 → 1145); both-stage-reviewed per sub-slice + a whole-slice review (read-only import invariant proven, the
+durability spine mutation-pinned in both the core and e2e layers).**
 
 **Deferred — D4a.2 fast-follow (none un-backfillable):** the `PolygonLogWatcher` service (on-chain logs are
 re-queryable by block range) · the `NewsPoller` + `CalendarScheduler` (feeds re-fetchable; only matters once Hermes

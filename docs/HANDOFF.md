@@ -386,6 +386,23 @@ edge.
 - The **POL-3, POL-5, POL-6, POL-7, POL-8, POL-9, POL-10, POL-11, POL-12 YouTrack comments** — the detailed per-slice record.
 
 ## 7. Your task — pick based on what's ready
+
+**UPDATE 2026-07-05 — the shadow deployment has STARTED (Phase 0).** "Deploy + run shadow" decomposed into a
+code half + an ops half (see `docs/DESIGN-D4a-INGESTION-RUNTIME.md` + `docs/PLAN-D4a-INGESTION-RUNTIME.md`).
+**D4a — the continuous ingestion runtime — is BUILT + on `main`** (new package `src/polybot/runtime/`: self-verifying
+`IngestionConfig` + loader, `discover_universe`, the `IngestionRuntime` supervision core with durable `TaskGroup`
+shutdown, `build_ingestion_runtime` + `main` + entry `python -m polybot.runtime.ingestion`, the `_supervised`
+fail-loud guard; branch `pol-13-d4a-ingestion-runtime`; suite 1113 → 1145; strict-TDD, both-stage-reviewed per
+sub-slice + a whole-slice review — read-only import invariant proven, durability spine mutation-pinned). Remaining
+CODE seams for a full shadow loop: **D4a.2** (Polygon/news/synthetic + dynamic universe refresh) · **D1** MarketRegistry
+(Gamma metadata → real category → warms `k`; today `StubMarketMeta` pins `k=0`) · **D2** resolution/settlement feed ·
+**D3** shadow-execution wiring (fills-recorder → ShadowLedger, `mark_for`) · **D4b** the ERS+harness runtime. Remaining
+OPS: the **Phase-0 VPS deploy** — a dedicated `polybot` user + a uv/standalone-3.13 venv + a system systemd unit,
+mirroring `memebot` on the VPS `srv1779077` (100.111.199.109; runs memecoin-bot + a shared root Hermes; `/opt/<bot>`,
+push-to-deploy via a `/root/git/<bot>.git` bare repo) → run ingestion → then layer the full shadow loop. Operator
+state: **VPS + Hermes are up** (small model now, GPT-5.5 planned; polymarket must stay self-contained from the other
+bots); **Polymarket account exists, $0 funded** (shadow needs no funds; POL-4/live still blocked on a funded clean box).
+
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
 deposit wallet on a CLEAN non-Windows box. Keys must NEVER touch the Windows/WSL box (documented cracked-game
 malware vector). You CANNOT do POL-4 from this machine. So:
