@@ -20,7 +20,11 @@ fi
 echo "== 2. dirs =="
 mkdir -p "$APP/data"
 
-echo "== 3. venv (uv, standalone python 3.13) + runtime deps =="
+echo "== 3. venv (uv, standalone python 3.13 UNDER the app dir) + runtime deps =="
+# Pin uv's python install dir under the app tree. Otherwise uv symlinks the venv to a python under
+# /root/.local/share/uv (mode 0700, unreachable by the polybot service user) -> the service can't exec it.
+# The app tree is root-owned + world-readable, so polybot can run .venv/bin/python.
+export UV_PYTHON_INSTALL_DIR="$APP/.uv-python"
 if [ ! -x "$APP/.venv/bin/python" ]; then
     "$UV" venv --python 3.13 "$APP/.venv"
 fi

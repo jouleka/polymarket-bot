@@ -403,6 +403,23 @@ push-to-deploy via a `/root/git/<bot>.git` bare repo) → run ingestion → then
 state: **VPS + Hermes are up** (small model now, GPT-5.5 planned; polymarket must stay self-contained from the other
 bots); **Polymarket account exists, $0 funded** (shadow needs no funds; POL-4/live still blocked on a funded clean box).
 
+**UPDATE 2026-07-05 (later) — D4a DEPLOYED; strategy locked; remaining build re-ticketed.** D4a ingestion is
+DEPLOYED on the VPS (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, `polymarket-ingestion.service`,
+uv/standalone-3.13 venv — reproducible kit in `deploy/`), but currently **STOPPED + DISABLED** pending a downsample
+fix: the raw WS book firehose wrote **~30 GB/day** (would fill the shared 96 GB disk in ~3 days), and the shadow eval
+**never reads raw historical frames** (the ERS re-fetches the live book at decision time) — so the fix is to persist
+periodic midpoint **snapshots** + the trade tape, not every frame (~30 GB/day → ~tens of MB/day). **OWNER DECISION
+(2026-07-05): finish the ENTIRE remaining build FIRST, then a max-2-week light shadow, then go live.** Remaining build
+(all buildable now, $0), ticketed: **POL-14 D1 MarketRegistry · POL-15 D2 resolution feed (keystone — without it the
+shadow accrues zero scored results) · POL-16 D3 shadow-exec wiring · POL-17 D4b ERS runtime · POL-18 brain** + the D4a
+downsample fix (tracked on POL-13). Build order: **D4a-downsample → D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
+The brain deploys as a dedicated `polymarket` **Hermes PROFILE** (`hermes profile create polymarket` = a separate
+Hermes home with only the 5-tool grant, isolated from the memecoin/optionsbot/default profiles). Go-live is still
+gated on **POL-4** (signing), still blocked on funding a wallet on a clean non-Windows box. NB: the deployed venv's
+python must live UNDER the app dir (`UV_PYTHON_INSTALL_DIR=/opt/polymarket-bot/.uv-python`) or the `polybot` user
+can't exec it (uv defaults it under root's 0700 home). The POL board's *states* are stale (done work shows "To do")
+because the MCP can't transition POL states — flip them in the YouTrack UI.
+
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
 deposit wallet on a CLEAN non-Windows box. Keys must NEVER touch the Windows/WSL box (documented cracked-game
 malware vector). You CANNOT do POL-4 from this machine. So:
