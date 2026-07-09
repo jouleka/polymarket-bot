@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import asyncio
 import json
+
+from polybot.core.models import Envelope
 
 
 MIDPOINT_SOURCE = "clob-midpoint"
@@ -51,3 +54,41 @@ def decode_midpoint_batch(content: str) -> dict[str, MidpointQuote]:
             raise ValueError(f"midpoint does not match bid/ask for token {token!r}")
         decoded[token] = MidpointQuote(bid, ask, midpoint)
     return decoded
+
+
+class MidpointSnapshotter:
+    def __init__(self, *, token_ids, book_for, stamper, writer,
+                 interval_seconds: float = 60.0, sleep=asyncio.sleep):
+        self._token_ids = tuple(sorted(token_ids))
+        self._book_for = book_for
+        self._stamper = stamper
+        self._writer = writer
+        self._interval_seconds = interval_seconds
+        self._sleep = sleep
+
+    def snapshot_once(self) -> int:
+        observed_at = self._stamper.stamp()
+        books = {}
+        for token_id in self._token_ids:
+            book = self._book_for(token_id)
+            midpoint = book.midpoint()
+            books[token_id] = {
+                "bid": str(book.best_bid()),
+                "ask": str(book.best_ask()),
+                "mid": str(midpoint),
+            }
+        content = json.dumps(
+            {"schema": MIDPOINT_SCHEMA, "books": books},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self._writer.append(Envelope(
+            source=MIDPOINT_SOURCE,
+            source_tier="VENUE",
+            event_id=f"batch:{observed_at}",
+            observed_at=observed_at,
+            content=content,
+            published_at=None,
+            market_links=self._token_ids,
+        ))
+        return len(books)
