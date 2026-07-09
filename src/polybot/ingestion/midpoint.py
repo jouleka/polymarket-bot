@@ -17,7 +17,18 @@ class MidpointQuote:
 
 
 def decode_midpoint_batch(content: str) -> dict[str, MidpointQuote]:
-    payload = json.loads(content)
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("midpoint batch must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("midpoint batch must be an object")
+    if set(payload) != {"schema", "books"}:
+        raise ValueError("midpoint batch keys must be exactly schema and books")
+    if payload["schema"] != MIDPOINT_SCHEMA:
+        raise ValueError(f"unsupported midpoint batch schema: {payload['schema']!r}")
+    if not isinstance(payload["books"], dict):
+        raise ValueError("midpoint batch books must be an object")
     return {
         token: MidpointQuote(
             Decimal(quote["bid"]),
