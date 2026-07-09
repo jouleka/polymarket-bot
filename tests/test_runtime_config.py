@@ -1,4 +1,6 @@
 import math
+from dataclasses import fields
+
 import pytest
 from polybot.runtime.config import IngestionConfig
 
@@ -61,6 +63,25 @@ def test_load_config_toml_then_env(tmp_path):
     assert cfg.data_api_enabled is False       # env-coerced bool
     assert cfg.snapshot_interval_seconds == 30.5  # fractional env float overrode TOML 120
     assert cfg.max_assets_per_shard == 500     # default
+
+
+def test_load_config_honors_fractional_toml_snapshot_override_without_env(tmp_path):
+    from polybot.runtime.config import load_config
+
+    toml = tmp_path / "ingest.toml"
+    toml.write_text(
+        'db_path = "/from/toml.db"\n'
+        'snapshot_interval_seconds = 120.5\n'
+    )
+
+    cfg = load_config(str(toml), env={})
+    assert cfg.snapshot_interval_seconds == 120.5
+
+
+def test_config_has_no_raw_persistence_escape_hatch():
+    names = {field.name for field in fields(IngestionConfig)}
+    assert not {name for name in names if "raw" in name.lower()}
+
 
 def test_load_config_env_only():
     from polybot.runtime.config import load_config
