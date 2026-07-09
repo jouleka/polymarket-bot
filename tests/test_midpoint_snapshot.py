@@ -44,3 +44,31 @@ def test_decode_rejects_missing_or_extra_top_level_keys():
 def test_decode_rejects_non_object_books():
     with pytest.raises(ValueError, match="books"):
         decode_midpoint_batch('{"schema":1,"books":[]}')
+
+
+def test_decode_rejects_empty_token_id():
+    content = json.dumps({
+        "schema": 1,
+        "books": {"": {"bid": "0.60", "ask": "0.62", "mid": "0.61"}},
+    })
+    with pytest.raises(ValueError, match="token"):
+        decode_midpoint_batch(content)
+
+
+def test_decode_rejects_missing_or_extra_quote_keys():
+    for quote in (
+        {"bid": "0.60", "ask": "0.62"},
+        {"bid": "0.60", "ask": "0.62", "mid": "0.61", "size": "100"},
+    ):
+        content = json.dumps({"schema": 1, "books": {"A": quote}})
+        with pytest.raises(ValueError, match="quote|keys"):
+            decode_midpoint_batch(content)
+
+
+def test_decode_rejects_numeric_json_prices_instead_of_strings():
+    content = json.dumps({
+        "schema": 1,
+        "books": {"A": {"bid": 0.60, "ask": "0.62", "mid": "0.61"}},
+    })
+    with pytest.raises(ValueError, match="string"):
+        decode_midpoint_batch(content)
