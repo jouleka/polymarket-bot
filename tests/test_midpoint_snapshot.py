@@ -374,10 +374,35 @@ def test_snapshotter_propagates_stamper_failure_before_book_lookup():
     assert looked_up == []
 
 
+def test_snapshotter_default_interval_is_60_seconds():
+    sleep_calls = []
+
+    class StopAfterFirstSleep(Exception):
+        pass
+
+    async def recording_sleep(interval):
+        sleep_calls.append(interval)
+        raise StopAfterFirstSleep
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for=lambda _token: None,
+        stamper=FakeStamper(),
+        writer=FakeWriter(),
+        sleep=recording_sleep,
+    )
+
+    with pytest.raises(StopAfterFirstSleep):
+        asyncio.run(snapshotter.run())
+    assert sleep_calls == [60.0]
+
+
 def test_run_sleeps_before_each_snapshot_and_cancels_cleanly():
     writer = FakeWriter()
     first_interval = asyncio.Event()
+    second_interval = asyncio.Event()
     second_sleep_started = asyncio.Event()
+    third_sleep_started = asyncio.Event()
     never = asyncio.Event()
     sleep_calls = []
 
@@ -385,8 +410,11 @@ def test_run_sleeps_before_each_snapshot_and_cancels_cleanly():
         sleep_calls.append(interval)
         if len(sleep_calls) == 1:
             await first_interval.wait()
-        else:
+        elif len(sleep_calls) == 2:
             second_sleep_started.set()
+            await second_interval.wait()
+        else:
+            third_sleep_started.set()
             await never.wait()
 
     snapshotter = MidpointSnapshotter(
@@ -394,24 +422,30 @@ def test_run_sleeps_before_each_snapshot_and_cancels_cleanly():
         book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
         stamper=FakeStamper(),
         writer=writer,
-        interval_seconds=60.0,
+        interval_seconds=15.0,
         sleep=controlled_sleep,
     )
 
     async def scenario():
         task = asyncio.create_task(snapshotter.run())
         await asyncio.sleep(0)
-        assert sleep_calls == [60.0]
+        assert sleep_calls == [15.0]
         assert writer.rows == []
 
         first_interval.set()
         await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
+        assert sleep_calls == [15.0, 15.0]
         assert len(writer.rows) == 1
+
+        second_interval.set()
+        await asyncio.wait_for(third_sleep_started.wait(), timeout=1)
+        assert sleep_calls == [15.0, 15.0, 15.0]
+        assert len(writer.rows) == 2
 
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert len(writer.rows) == 1
+        assert len(writer.rows) == 2
 
     asyncio.run(scenario())
 
