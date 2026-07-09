@@ -69,21 +69,21 @@ def test_decode_rejects_missing_or_extra_quote_keys():
             decode_midpoint_batch(content)
 
 
-def test_decode_rejects_numeric_json_prices_instead_of_strings():
-    content = json.dumps({
-        "schema": 1,
-        "books": {"A": {"bid": 0.60, "ask": "0.62", "mid": "0.61"}},
-    })
+@pytest.mark.parametrize("field", ["bid", "ask", "mid"])
+def test_decode_rejects_numeric_json_prices_instead_of_strings(field):
+    quote: dict[str, object] = {"bid": "0.60", "ask": "0.62", "mid": "0.61"}
+    quote[field] = 0.60
+    content = json.dumps({"schema": 1, "books": {"A": quote}})
     with pytest.raises(ValueError, match="string"):
         decode_midpoint_batch(content)
 
 
+@pytest.mark.parametrize("field", ["bid", "ask", "mid"])
 @pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
-def test_decode_rejects_non_finite_prices(bad):
-    content = json.dumps({
-        "schema": 1,
-        "books": {"A": {"bid": bad, "ask": "0.62", "mid": "0.61"}},
-    })
+def test_decode_rejects_non_finite_prices_in_every_field(field, bad):
+    quote = {"bid": "0.60", "ask": "0.62", "mid": "0.61"}
+    quote[field] = bad
+    content = json.dumps({"schema": 1, "books": {"A": quote}})
     with pytest.raises(ValueError, match="finite"):
         decode_midpoint_batch(content)
 
@@ -225,7 +225,9 @@ def test_snapshot_writes_valid_empty_batch_when_all_books_unusable():
     assert decode_midpoint_batch(writer.rows[0].content) == {}
 
 
-@pytest.mark.parametrize("token_ids", [(), ("A", "A"), ("",), (1,)])
+@pytest.mark.parametrize("token_ids", [
+    (), ("A", "A"), ("",), (1,), ("A", ""), ("A", 1),
+])
 def test_snapshotter_rejects_invalid_token_universe(token_ids):
     with pytest.raises(ValueError, match="token"):
         MidpointSnapshotter(
@@ -275,3 +277,97 @@ def test_snapshotter_propagates_writer_failure():
     )
     with pytest.raises(OSError, match="disk full"):
         snapshotter.snapshot_once()
+
+
+def test_snapshotter_stamps_before_reading_any_book():
+    events = []
+
+    class OrderingStamper:
+        def stamp(self):
+            events.append("stamp")
+            return 123
+
+    def book_for(_token):
+        events.append("book")
+        return FakeBook("0.60", "0.62", "0.61")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for=book_for,
+        stamper=OrderingStamper(),
+        writer=FakeWriter(),
+    )
+    snapshotter.snapshot_once()
+
+    assert events == ["stamp", "book"]
+
+
+@pytest.mark.parametrize("accessor", ["midpoint", "best_bid", "best_ask"])
+def test_snapshotter_propagates_book_accessor_failure(accessor):
+    class RaisingBook(FakeBook):
+        def midpoint(self):
+            if accessor == "midpoint":
+                raise ArithmeticError("midpoint failed")
+            return super().midpoint()
+
+        def best_bid(self):
+            if accessor == "best_bid":
+                raise ArithmeticError("best_bid failed")
+            return super().best_bid()
+
+        def best_ask(self):
+            if accessor == "best_ask":
+                raise ArithmeticError("best_ask failed")
+            return super().best_ask()
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": RaisingBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=FakeWriter(),
+    )
+    with pytest.raises(ArithmeticError, match=f"{accessor} failed"):
+        snapshotter.snapshot_once()
+
+
+def test_snapshotter_propagates_price_encoding_failure():
+    class Unencodable:
+        def __str__(self):
+            raise UnicodeError("cannot encode price")
+
+    class BadBook:
+        def midpoint(self):
+            return Decimal("0.61")
+
+        def best_bid(self):
+            return Unencodable()
+
+        def best_ask(self):
+            return Decimal("0.62")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": BadBook()}.get,
+        stamper=FakeStamper(),
+        writer=FakeWriter(),
+    )
+    with pytest.raises(UnicodeError, match="cannot encode price"):
+        snapshotter.snapshot_once()
+
+
+def test_snapshotter_propagates_stamper_failure_before_book_lookup():
+    looked_up = []
+
+    class RaisingStamper:
+        def stamp(self):
+            raise OSError("clock unavailable")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for=lambda token: looked_up.append(token),
+        stamper=RaisingStamper(),
+        writer=FakeWriter(),
+    )
+    with pytest.raises(OSError, match="clock unavailable"):
+        snapshotter.snapshot_once()
+    assert looked_up == []
