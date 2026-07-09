@@ -1,7 +1,7 @@
 """Compact point-in-time midpoint batches for downsampled market memory."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import json
 
 
@@ -37,9 +37,17 @@ def decode_midpoint_batch(content: str) -> dict[str, MidpointQuote]:
             raise ValueError(f"midpoint quote keys invalid for token {token!r}")
         if any(not isinstance(quote[name], str) for name in ("bid", "ask", "mid")):
             raise ValueError(f"midpoint quote prices must be strings for token {token!r}")
-        decoded[token] = MidpointQuote(
-            Decimal(quote["bid"]),
-            Decimal(quote["ask"]),
-            Decimal(quote["mid"]),
-        )
+        try:
+            bid = Decimal(quote["bid"])
+            ask = Decimal(quote["ask"])
+            midpoint = Decimal(quote["mid"])
+        except InvalidOperation as exc:
+            raise ValueError(f"midpoint quote prices invalid for token {token!r}") from exc
+        if not all(value.is_finite() for value in (bid, ask, midpoint)):
+            raise ValueError(f"midpoint quote prices must be finite for token {token!r}")
+        if not (Decimal(0) <= bid < ask <= Decimal(1)):
+            raise ValueError(f"midpoint quote prices outside valid domain for token {token!r}")
+        if midpoint != (bid + ask) / 2:
+            raise ValueError(f"midpoint does not match bid/ask for token {token!r}")
+        decoded[token] = MidpointQuote(bid, ask, midpoint)
     return decoded
