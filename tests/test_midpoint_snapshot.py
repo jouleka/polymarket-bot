@@ -114,6 +114,25 @@ def test_decode_rejects_midpoint_not_equal_to_exact_bid_ask_average():
         decode_midpoint_batch(content)
 
 
+@pytest.mark.parametrize("bad_quote,match", [
+    ({"bid": 0.30, "ask": "0.34", "mid": "0.32"}, "string"),
+    ({"bid": "0.30", "ask": "NaN", "mid": "0.32"}, "finite"),
+    ({"bid": "0.40", "ask": "0.30", "mid": "0.35"}, "domain"),
+    ({"bid": "0.30", "ask": "0.34", "mid": "0.31"}, "midpoint"),
+    ({"bid": "0.30", "ask": "0.34", "mid": "0.32", "size": "1"}, "keys"),
+])
+def test_decode_rejects_malformed_later_book(bad_quote, match):
+    content = json.dumps({
+        "schema": 1,
+        "books": {
+            "A": {"bid": "0.60", "ask": "0.62", "mid": "0.61"},
+            "Z": bad_quote,
+        },
+    })
+    with pytest.raises(ValueError, match=match):
+        decode_midpoint_batch(content)
+
+
 class FakeBook:
     def __init__(self, bid, ask, midpoint):
         self._bid = Decimal(bid)
@@ -556,4 +575,41 @@ def test_run_propagates_sleep_failure_after_a_successful_cycle():
     with pytest.raises(RuntimeError, match="second cadence sleep failed"):
         asyncio.run(snapshotter.run())
     assert sleep_calls == [15.0, 15.0]
+    assert len(writer.rows) == 1
+
+
+def test_run_propagates_lookup_failure_after_a_successful_cycle():
+    class ContinuedAfterLookupFailure(BaseException):
+        pass
+
+    sleep_calls = []
+
+    async def bounded_sleep(interval):
+        sleep_calls.append(interval)
+        await asyncio.sleep(0)
+        if len(sleep_calls) == 3:
+            raise ContinuedAfterLookupFailure("run continued after lookup failure")
+
+    lookup_calls = []
+
+    def book_for(token):
+        lookup_calls.append(token)
+        if len(lookup_calls) == 2:
+            raise LookupError("second-cycle lookup failed")
+        return FakeBook("0.60", "0.62", "0.61")
+
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for=book_for,
+        stamper=FakeStamper(),
+        writer=writer,
+        interval_seconds=15.0,
+        sleep=bounded_sleep,
+    )
+
+    with pytest.raises(LookupError, match="second-cycle lookup failed"):
+        asyncio.run(snapshotter.run())
+    assert sleep_calls == [15.0, 15.0]
+    assert lookup_calls == ["A", "A"]
     assert len(writer.rows) == 1
