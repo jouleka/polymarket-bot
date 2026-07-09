@@ -71,7 +71,11 @@ class MidpointSnapshotter:
         books = {}
         for token_id in self._token_ids:
             book = self._book_for(token_id)
+            if book is None:
+                continue
             midpoint = book.midpoint()
+            if midpoint is None:
+                continue
             books[token_id] = {
                 "bid": str(book.best_bid()),
                 "ask": str(book.best_ask()),
@@ -89,6 +93,6 @@ class MidpointSnapshotter:
             observed_at=observed_at,
             content=content,
             published_at=None,
-            market_links=self._token_ids,
+            market_links=tuple(books),
         ))
         return len(books)
