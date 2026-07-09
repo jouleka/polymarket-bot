@@ -175,3 +175,48 @@ def test_snapshot_two_fresh_books_into_one_deterministic_envelope():
         "A": MidpointQuote(Decimal("0.60"), Decimal("0.62"), Decimal("0.61")),
         "B": MidpointQuote(Decimal("0.30"), Decimal("0.34"), Decimal("0.32")),
     }
+
+
+class NoneMidBook:
+    def midpoint(self):
+        return None
+
+    def best_bid(self):
+        raise AssertionError("unusable book bid must not be read")
+
+    def best_ask(self):
+        raise AssertionError("unusable book ask must not be read")
+
+
+def test_snapshot_omits_missing_and_unusable_books():
+    books = {
+        "A": FakeBook("0.60", "0.62", "0.61"),
+        "B": NoneMidBook(),
+    }
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("C", "B", "A"),
+        book_for=books.get,
+        stamper=FakeStamper(),
+        writer=writer,
+    )
+
+    assert snapshotter.snapshot_once() == 1
+    assert writer.rows[0].market_links == ("A",)
+    assert set(decode_midpoint_batch(writer.rows[0].content)) == {"A"}
+
+
+def test_snapshot_writes_valid_empty_batch_when_all_books_unusable():
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("B", "A"),
+        book_for={"A": NoneMidBook()}.get,
+        stamper=FakeStamper(),
+        writer=writer,
+    )
+
+    assert snapshotter.snapshot_once() == 0
+    assert len(writer.rows) == 1
+    assert writer.rows[0].content == '{"books":{},"schema":1}'
+    assert writer.rows[0].market_links == ()
+    assert decode_midpoint_batch(writer.rows[0].content) == {}
