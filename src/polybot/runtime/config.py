@@ -42,7 +42,7 @@ class IngestionConfig:
             "heartbeat_interval_seconds",
         ):
             v = getattr(self, name)
-            if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+            if not (type(v) in (int, float) and math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} must be finite and > 0")
         if self.log_level not in _LOG_LEVELS:
             raise ValueError(f"log_level must be one of {sorted(_LOG_LEVELS)}")
