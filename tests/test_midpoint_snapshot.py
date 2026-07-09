@@ -9,6 +9,7 @@ from polybot.ingestion.midpoint import (
     MIDPOINT_SCHEMA,
     MIDPOINT_SOURCE,
     MidpointQuote,
+    MidpointSnapshotter,
     decode_midpoint_batch,
 )
 
@@ -107,3 +108,70 @@ def test_decode_rejects_midpoint_not_equal_to_exact_bid_ask_average():
     })
     with pytest.raises(ValueError, match="midpoint"):
         decode_midpoint_batch(content)
+
+
+class FakeBook:
+    def __init__(self, bid, ask, midpoint):
+        self._bid = Decimal(bid)
+        self._ask = Decimal(ask)
+        self._midpoint = Decimal(midpoint)
+
+    def best_bid(self):
+        return self._bid
+
+    def best_ask(self):
+        return self._ask
+
+    def midpoint(self):
+        return self._midpoint
+
+
+class FakeStamper:
+    def __init__(self):
+        self.calls = 0
+
+    def stamp(self):
+        self.calls += 1
+        return 123
+
+
+class FakeWriter:
+    def __init__(self):
+        self.rows = []
+
+    def append(self, row):
+        self.rows.append(row)
+
+
+def test_snapshot_two_fresh_books_into_one_deterministic_envelope():
+    books = {
+        "A": FakeBook("0.60", "0.62", "0.61"),
+        "B": FakeBook("0.30", "0.34", "0.32"),
+    }
+    stamper = FakeStamper()
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("B", "A"),
+        book_for=books.get,
+        stamper=stamper,
+        writer=writer,
+    )
+
+    assert snapshotter.snapshot_once() == 2
+    assert stamper.calls == 1
+    assert len(writer.rows) == 1
+    row = writer.rows[0]
+    assert row.source == "clob-midpoint"
+    assert row.source_tier == "VENUE"
+    assert row.event_id == "batch:123"
+    assert row.observed_at == 123
+    assert row.published_at is None
+    assert row.market_links == ("A", "B")
+    assert row.content == (
+        '{"books":{"A":{"ask":"0.62","bid":"0.60","mid":"0.61"},'
+        '"B":{"ask":"0.34","bid":"0.30","mid":"0.32"}},"schema":1}'
+    )
+    assert decode_midpoint_batch(row.content) == {
+        "A": MidpointQuote(Decimal("0.60"), Decimal("0.62"), Decimal("0.61")),
+        "B": MidpointQuote(Decimal("0.30"), Decimal("0.34"), Decimal("0.32")),
+    }
