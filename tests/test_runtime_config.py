@@ -78,9 +78,21 @@ def test_load_config_honors_fractional_toml_snapshot_override_without_env(tmp_pa
     assert cfg.snapshot_interval_seconds == 120.5
 
 
-def test_config_has_no_raw_persistence_escape_hatch():
+def test_config_has_only_the_approved_fields_and_no_persistence_escape_hatch():
     names = {field.name for field in fields(IngestionConfig)}
-    assert not {name for name in names if "raw" in name.lower()}
+    assert names == {
+        "db_path",
+        "universe_max_markets",
+        "max_assets_per_shard",
+        "data_api_enabled",
+        "data_api_interval_seconds",
+        "snapshot_interval_seconds",
+        "data_api_limit",
+        "heartbeat_path",
+        "heartbeat_interval_seconds",
+        "gamma_url",
+        "log_level",
+    }
 
 
 def test_load_config_env_only():

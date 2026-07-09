@@ -613,3 +613,57 @@ def test_run_propagates_lookup_failure_after_a_successful_cycle():
     assert sleep_calls == [15.0, 15.0]
     assert lookup_calls == ["A", "A"]
     assert len(writer.rows) == 1
+
+
+@pytest.mark.parametrize("failure_kind,expected_error", [
+    ("accessor", ArithmeticError),
+    ("encoding", UnicodeError),
+])
+def test_run_propagates_later_cycle_book_failures(failure_kind, expected_error):
+    class ContinuedAfterBookFailure(BaseException):
+        pass
+
+    class Unencodable:
+        def __str__(self):
+            raise UnicodeError("second-cycle encoding failed")
+
+    class StatefulBook:
+        def __init__(self):
+            self.cycle = 0
+
+        def midpoint(self):
+            self.cycle += 1
+            if self.cycle == 2 and failure_kind == "accessor":
+                raise ArithmeticError("second-cycle accessor failed")
+            return Decimal("0.61")
+
+        def best_bid(self):
+            if self.cycle == 2 and failure_kind == "encoding":
+                return Unencodable()
+            return Decimal("0.60")
+
+        def best_ask(self):
+            return Decimal("0.62")
+
+    sleep_calls = []
+
+    async def bounded_sleep(interval):
+        sleep_calls.append(interval)
+        await asyncio.sleep(0)
+        if len(sleep_calls) == 3:
+            raise ContinuedAfterBookFailure("run continued after book failure")
+
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": StatefulBook()}.get,
+        stamper=FakeStamper(),
+        writer=writer,
+        interval_seconds=15.0,
+        sleep=bounded_sleep,
+    )
+
+    with pytest.raises(expected_error, match="second-cycle"):
+        asyncio.run(snapshotter.run())
+    assert sleep_calls == [15.0, 15.0]
+    assert len(writer.rows) == 1
