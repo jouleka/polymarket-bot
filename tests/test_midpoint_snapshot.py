@@ -1,5 +1,6 @@
 """D4a / POL-13 downsampled midpoint-batch persistence."""
 
+import asyncio
 import json
 import math
 from decimal import Decimal
@@ -371,3 +372,45 @@ def test_snapshotter_propagates_stamper_failure_before_book_lookup():
     with pytest.raises(OSError, match="clock unavailable"):
         snapshotter.snapshot_once()
     assert looked_up == []
+
+
+def test_run_sleeps_before_each_snapshot_and_cancels_cleanly():
+    writer = FakeWriter()
+    first_interval = asyncio.Event()
+    second_sleep_started = asyncio.Event()
+    never = asyncio.Event()
+    sleep_calls = []
+
+    async def controlled_sleep(interval):
+        sleep_calls.append(interval)
+        if len(sleep_calls) == 1:
+            await first_interval.wait()
+        else:
+            second_sleep_started.set()
+            await never.wait()
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=writer,
+        interval_seconds=60.0,
+        sleep=controlled_sleep,
+    )
+
+    async def scenario():
+        task = asyncio.create_task(snapshotter.run())
+        await asyncio.sleep(0)
+        assert sleep_calls == [60.0]
+        assert writer.rows == []
+
+        first_interval.set()
+        await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
+        assert len(writer.rows) == 1
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(writer.rows) == 1
+
+    asyncio.run(scenario())
