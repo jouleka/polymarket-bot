@@ -50,7 +50,9 @@ class IngestionConfig:
 
 _ENV_PREFIX = "POLYBOT_INGEST_"
 _INT_FIELDS = {"universe_max_markets", "max_assets_per_shard", "data_api_limit"}
-_FLOAT_FIELDS = {"data_api_interval_seconds", "heartbeat_interval_seconds"}
+_FLOAT_FIELDS = {
+    "data_api_interval_seconds", "snapshot_interval_seconds", "heartbeat_interval_seconds",
+}
 _BOOL_FIELDS = {"data_api_enabled"}
 
 
