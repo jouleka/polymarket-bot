@@ -617,7 +617,9 @@ def test_run_propagates_lookup_failure_after_a_successful_cycle():
 
 @pytest.mark.parametrize("failure_kind,expected_error", [
     ("accessor", ArithmeticError),
-    ("encoding", UnicodeError),
+    ("encode_bid", UnicodeError),
+    ("encode_ask", UnicodeError),
+    ("encode_mid", UnicodeError),
 ])
 def test_run_propagates_later_cycle_book_failures(failure_kind, expected_error):
     class ContinuedAfterBookFailure(BaseException):
@@ -635,14 +637,18 @@ def test_run_propagates_later_cycle_book_failures(failure_kind, expected_error):
             self.cycle += 1
             if self.cycle == 2 and failure_kind == "accessor":
                 raise ArithmeticError("second-cycle accessor failed")
+            if self.cycle == 2 and failure_kind == "encode_mid":
+                return Unencodable()
             return Decimal("0.61")
 
         def best_bid(self):
-            if self.cycle == 2 and failure_kind == "encoding":
+            if self.cycle == 2 and failure_kind == "encode_bid":
                 return Unencodable()
             return Decimal("0.60")
 
         def best_ask(self):
+            if self.cycle == 2 and failure_kind == "encode_ask":
+                return Unencodable()
             return Decimal("0.62")
 
     sleep_calls = []

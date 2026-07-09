@@ -1,4 +1,5 @@
 import math
+import inspect
 from dataclasses import fields
 
 import pytest
@@ -79,8 +80,7 @@ def test_load_config_honors_fractional_toml_snapshot_override_without_env(tmp_pa
 
 
 def test_config_has_only_the_approved_fields_and_no_persistence_escape_hatch():
-    names = {field.name for field in fields(IngestionConfig)}
-    assert names == {
+    approved = {
         "db_path",
         "universe_max_markets",
         "max_assets_per_shard",
@@ -93,6 +93,8 @@ def test_config_has_only_the_approved_fields_and_no_persistence_escape_hatch():
         "gamma_url",
         "log_level",
     }
+    assert {field.name for field in fields(IngestionConfig)} == approved
+    assert set(inspect.signature(IngestionConfig).parameters) == approved
 
 
 def test_load_config_env_only():
