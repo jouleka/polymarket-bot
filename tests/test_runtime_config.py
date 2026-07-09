@@ -55,11 +55,11 @@ def test_load_config_toml_then_env(tmp_path):
     )
     cfg = load_config(str(toml), env={"POLYBOT_INGEST_UNIVERSE_MAX_MARKETS": "77",
                                       "POLYBOT_INGEST_DATA_API_ENABLED": "false",
-                                      "POLYBOT_INGEST_SNAPSHOT_INTERVAL_SECONDS": "30"})
+                                      "POLYBOT_INGEST_SNAPSHOT_INTERVAL_SECONDS": "30.5"})
     assert cfg.db_path == "/from/toml.db"      # from toml
     assert cfg.universe_max_markets == 77      # env overrode toml
     assert cfg.data_api_enabled is False       # env-coerced bool
-    assert cfg.snapshot_interval_seconds == 30.0  # env float overrode TOML 120
+    assert cfg.snapshot_interval_seconds == 30.5  # fractional env float overrode TOML 120
     assert cfg.max_assets_per_shard == 500     # default
 
 def test_load_config_env_only():
