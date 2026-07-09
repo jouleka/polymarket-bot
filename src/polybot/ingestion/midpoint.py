@@ -104,3 +104,8 @@ class MidpointSnapshotter:
             market_links=tuple(books),
         ))
         return len(books)
+
+    async def run(self) -> None:
+        while True:
+            await self._sleep(self._interval_seconds)
+            self.snapshot_once()
