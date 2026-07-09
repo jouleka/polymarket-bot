@@ -72,3 +72,38 @@ def test_decode_rejects_numeric_json_prices_instead_of_strings():
     })
     with pytest.raises(ValueError, match="string"):
         decode_midpoint_batch(content)
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+def test_decode_rejects_non_finite_prices(bad):
+    content = json.dumps({
+        "schema": 1,
+        "books": {"A": {"bid": bad, "ask": "0.62", "mid": "0.61"}},
+    })
+    with pytest.raises(ValueError, match="finite"):
+        decode_midpoint_batch(content)
+
+
+@pytest.mark.parametrize("bid,ask", [
+    ("-0.01", "0.50"),
+    ("0.50", "1.01"),
+    ("0.60", "0.60"),
+    ("0.70", "0.60"),
+])
+def test_decode_rejects_out_of_domain_locked_or_crossed_books(bid, ask):
+    midpoint = str((Decimal(bid) + Decimal(ask)) / 2)
+    content = json.dumps({
+        "schema": 1,
+        "books": {"A": {"bid": bid, "ask": ask, "mid": midpoint}},
+    })
+    with pytest.raises(ValueError, match="domain"):
+        decode_midpoint_batch(content)
+
+
+def test_decode_rejects_midpoint_not_equal_to_exact_bid_ask_average():
+    content = json.dumps({
+        "schema": 1,
+        "books": {"A": {"bid": "0.60", "ask": "0.62", "mid": "0.60"}},
+    })
+    with pytest.raises(ValueError, match="midpoint"):
+        decode_midpoint_batch(content)
