@@ -25,6 +25,7 @@ def test_valid_config_defaults():
     {"db_path": "/d", "snapshot_interval_seconds": -1},         # not > 0
     {"db_path": "/d", "snapshot_interval_seconds": math.inf},   # not finite
     {"db_path": "/d", "snapshot_interval_seconds": math.nan},   # not finite
+    {"db_path": "/d", "snapshot_interval_seconds": True},       # bool is not a cadence
     {"db_path": "/d", "heartbeat_interval_seconds": -1},        # not > 0
     {"db_path": "/d", "log_level": "LOUD"},             # unknown level
 ])
