@@ -34,6 +34,17 @@ def test_invalid_config_raises(kwargs):
         IngestionConfig(**kwargs)
 
 
+@pytest.mark.parametrize("field", [
+    "data_api_interval_seconds",
+    "snapshot_interval_seconds",
+    "heartbeat_interval_seconds",
+])
+@pytest.mark.parametrize("bad", [0, -1, math.inf, -math.inf, math.nan, True])
+def test_every_runtime_interval_rejects_invalid_values(field, bad):
+    with pytest.raises(ValueError, match=field):
+        IngestionConfig(db_path="/d", **{field: bad})
+
+
 def test_load_config_toml_then_env(tmp_path):
     from polybot.runtime.config import load_config   # local: undefined until Step 1.11 -> keeps this RED isolated
     toml = tmp_path / "ingest.toml"
