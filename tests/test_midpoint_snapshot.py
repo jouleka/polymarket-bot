@@ -265,6 +265,25 @@ def test_snapshotter_propagates_book_lookup_failure():
         snapshotter.snapshot_once()
 
 
+def test_snapshotter_propagates_later_token_lookup_failure_without_partial_batch():
+    writer = FakeWriter()
+
+    def book_for(token):
+        if token == "B":
+            raise LookupError("later book lookup failed")
+        return FakeBook("0.60", "0.62", "0.61")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("B", "A"),
+        book_for=book_for,
+        stamper=FakeStamper(),
+        writer=writer,
+    )
+    with pytest.raises(LookupError, match="later book lookup failed"):
+        snapshotter.snapshot_once()
+    assert writer.rows == []
+
+
 def test_snapshotter_propagates_writer_failure():
     class RaisingWriter:
         def append(self, _row):
@@ -472,3 +491,57 @@ def test_run_propagates_snapshot_failure_after_sleep():
     with pytest.raises(OSError, match="snapshot write failed"):
         asyncio.run(snapshotter.run())
     assert sleep_calls == [15.0]
+
+
+def test_run_propagates_writer_failure_after_a_successful_cycle():
+    class SecondAppendFails:
+        def __init__(self):
+            self.rows = []
+
+        def append(self, row):
+            if self.rows:
+                raise OSError("second snapshot write failed")
+            self.rows.append(row)
+
+    async def immediate_sleep(_interval):
+        return None
+
+    writer = SecondAppendFails()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=writer,
+        sleep=immediate_sleep,
+    )
+
+    async def scenario():
+        await asyncio.wait_for(snapshotter.run(), timeout=0.25)
+
+    with pytest.raises(OSError, match="second snapshot write failed"):
+        asyncio.run(scenario())
+    assert len(writer.rows) == 1
+
+
+def test_run_propagates_sleep_failure_after_a_successful_cycle():
+    sleep_calls = []
+
+    async def second_sleep_fails(interval):
+        sleep_calls.append(interval)
+        if len(sleep_calls) == 2:
+            raise RuntimeError("second cadence sleep failed")
+
+    writer = FakeWriter()
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=writer,
+        interval_seconds=15.0,
+        sleep=second_sleep_fails,
+    )
+
+    with pytest.raises(RuntimeError, match="second cadence sleep failed"):
+        asyncio.run(snapshotter.run())
+    assert sleep_calls == [15.0, 15.0]
+    assert len(writer.rows) == 1
