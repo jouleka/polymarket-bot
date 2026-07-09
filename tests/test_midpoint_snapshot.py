@@ -494,6 +494,9 @@ def test_run_propagates_snapshot_failure_after_sleep():
 
 
 def test_run_propagates_writer_failure_after_a_successful_cycle():
+    class ContinuedAfterWriterFailure(BaseException):
+        pass
+
     class SecondAppendFails:
         def __init__(self):
             self.rows = []
@@ -503,8 +506,13 @@ def test_run_propagates_writer_failure_after_a_successful_cycle():
                 raise OSError("second snapshot write failed")
             self.rows.append(row)
 
-    async def immediate_sleep(_interval):
-        return None
+    sleep_calls = []
+
+    async def bounded_sleep(interval):
+        sleep_calls.append(interval)
+        await asyncio.sleep(0)
+        if len(sleep_calls) == 3:
+            raise ContinuedAfterWriterFailure("run continued after writer failure")
 
     writer = SecondAppendFails()
     snapshotter = MidpointSnapshotter(
@@ -512,24 +520,28 @@ def test_run_propagates_writer_failure_after_a_successful_cycle():
         book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
         stamper=FakeStamper(),
         writer=writer,
-        sleep=immediate_sleep,
+        sleep=bounded_sleep,
     )
 
-    async def scenario():
-        await asyncio.wait_for(snapshotter.run(), timeout=0.25)
-
     with pytest.raises(OSError, match="second snapshot write failed"):
-        asyncio.run(scenario())
+        asyncio.run(snapshotter.run())
     assert len(writer.rows) == 1
+    assert sleep_calls == [60.0, 60.0]
 
 
 def test_run_propagates_sleep_failure_after_a_successful_cycle():
+    class ContinuedAfterSleepFailure(BaseException):
+        pass
+
     sleep_calls = []
 
     async def second_sleep_fails(interval):
         sleep_calls.append(interval)
+        await asyncio.sleep(0)
         if len(sleep_calls) == 2:
             raise RuntimeError("second cadence sleep failed")
+        if len(sleep_calls) == 3:
+            raise ContinuedAfterSleepFailure("run continued after sleep failure")
 
     writer = FakeWriter()
     snapshotter = MidpointSnapshotter(
