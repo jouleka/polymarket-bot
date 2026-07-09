@@ -1,6 +1,7 @@
 """D4a / POL-13 downsampled midpoint-batch persistence."""
 
 import json
+import math
 from decimal import Decimal
 
 import pytest
@@ -220,3 +221,55 @@ def test_snapshot_writes_valid_empty_batch_when_all_books_unusable():
     assert writer.rows[0].content == '{"books":{},"schema":1}'
     assert writer.rows[0].market_links == ()
     assert decode_midpoint_batch(writer.rows[0].content) == {}
+
+
+@pytest.mark.parametrize("token_ids", [(), ("A", "A"), ("",), (1,)])
+def test_snapshotter_rejects_invalid_token_universe(token_ids):
+    with pytest.raises(ValueError, match="token"):
+        MidpointSnapshotter(
+            token_ids=token_ids,
+            book_for=lambda _token: None,
+            stamper=FakeStamper(),
+            writer=FakeWriter(),
+        )
+
+
+@pytest.mark.parametrize("interval", [0, -1, math.inf, math.nan, True])
+def test_snapshotter_rejects_invalid_interval(interval):
+    with pytest.raises(ValueError, match="interval"):
+        MidpointSnapshotter(
+            token_ids=("A",),
+            book_for=lambda _token: None,
+            stamper=FakeStamper(),
+            writer=FakeWriter(),
+            interval_seconds=interval,
+        )
+
+
+def test_snapshotter_propagates_book_lookup_failure():
+    def raising_book_for(_token):
+        raise LookupError("book map corrupt")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for=raising_book_for,
+        stamper=FakeStamper(),
+        writer=FakeWriter(),
+    )
+    with pytest.raises(LookupError, match="book map corrupt"):
+        snapshotter.snapshot_once()
+
+
+def test_snapshotter_propagates_writer_failure():
+    class RaisingWriter:
+        def append(self, _row):
+            raise OSError("disk full")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=RaisingWriter(),
+    )
+    with pytest.raises(OSError, match="disk full"):
+        snapshotter.snapshot_once()

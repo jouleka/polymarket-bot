@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import asyncio
 import json
+import math
 
 from polybot.core.models import Envelope
 
@@ -59,7 +60,14 @@ def decode_midpoint_batch(content: str) -> dict[str, MidpointQuote]:
 class MidpointSnapshotter:
     def __init__(self, *, token_ids, book_for, stamper, writer,
                  interval_seconds: float = 60.0, sleep=asyncio.sleep):
-        self._token_ids = tuple(sorted(token_ids))
+        ids = tuple(token_ids)
+        if (not ids or any(not isinstance(token_id, str) or not token_id for token_id in ids)
+                or len(set(ids)) != len(ids)):
+            raise ValueError("token_ids must be non-empty, unique, non-empty strings")
+        if (type(interval_seconds) not in (int, float)
+                or not math.isfinite(interval_seconds) or interval_seconds <= 0):
+            raise ValueError("interval_seconds must be finite and > 0")
+        self._token_ids = tuple(sorted(ids))
         self._book_for = book_for
         self._stamper = stamper
         self._writer = writer
