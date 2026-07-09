@@ -32,9 +32,11 @@ def test_decode_midpoint_batch_returns_exact_quotes():
     }
 
 
-def test_decode_rejects_unknown_schema():
+@pytest.mark.parametrize("schema", [2, True, 1.0])
+def test_decode_rejects_unknown_or_non_integer_schema(schema):
+    content = json.dumps({"schema": schema, "books": {}})
     with pytest.raises(ValueError, match="schema"):
-        decode_midpoint_batch('{"schema":2,"books":{}}')
+        decode_midpoint_batch(content)
 
 
 def test_decode_rejects_missing_or_extra_top_level_keys():
