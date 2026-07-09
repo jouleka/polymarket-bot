@@ -36,12 +36,18 @@ def test_invalid_config_raises(kwargs):
 def test_load_config_toml_then_env(tmp_path):
     from polybot.runtime.config import load_config   # local: undefined until Step 1.11 -> keeps this RED isolated
     toml = tmp_path / "ingest.toml"
-    toml.write_text('db_path = "/from/toml.db"\nuniverse_max_markets = 50\n')
+    toml.write_text(
+        'db_path = "/from/toml.db"\n'
+        'universe_max_markets = 50\n'
+        'snapshot_interval_seconds = 120\n'
+    )
     cfg = load_config(str(toml), env={"POLYBOT_INGEST_UNIVERSE_MAX_MARKETS": "77",
-                                      "POLYBOT_INGEST_DATA_API_ENABLED": "false"})
+                                      "POLYBOT_INGEST_DATA_API_ENABLED": "false",
+                                      "POLYBOT_INGEST_SNAPSHOT_INTERVAL_SECONDS": "30"})
     assert cfg.db_path == "/from/toml.db"      # from toml
     assert cfg.universe_max_markets == 77      # env overrode toml
     assert cfg.data_api_enabled is False       # env-coerced bool
+    assert cfg.snapshot_interval_seconds == 30.0  # env float overrode TOML 120
     assert cfg.max_assets_per_shard == 500     # default
 
 def test_load_config_env_only():
