@@ -9,6 +9,7 @@ def test_valid_config_defaults():
     assert c.max_assets_per_shard == 500
     assert c.data_api_enabled is True
     assert c.data_api_interval_seconds == 2.0
+    assert c.snapshot_interval_seconds == 60.0
     assert c.heartbeat_path is None
     assert c.log_level == "INFO"
 
@@ -20,6 +21,10 @@ def test_valid_config_defaults():
     {"db_path": "/d", "data_api_limit": 0},             # < 1
     {"db_path": "/d", "data_api_interval_seconds": 0},  # not > 0
     {"db_path": "/d", "data_api_interval_seconds": math.inf},   # not finite
+    {"db_path": "/d", "snapshot_interval_seconds": 0},          # not > 0
+    {"db_path": "/d", "snapshot_interval_seconds": -1},         # not > 0
+    {"db_path": "/d", "snapshot_interval_seconds": math.inf},   # not finite
+    {"db_path": "/d", "snapshot_interval_seconds": math.nan},   # not finite
     {"db_path": "/d", "heartbeat_interval_seconds": -1},        # not > 0
     {"db_path": "/d", "log_level": "LOUD"},             # unknown level
 ])
