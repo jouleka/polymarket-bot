@@ -414,3 +414,27 @@ def test_run_sleeps_before_each_snapshot_and_cancels_cleanly():
         assert len(writer.rows) == 1
 
     asyncio.run(scenario())
+
+
+def test_run_propagates_snapshot_failure_after_sleep():
+    sleep_calls = []
+
+    async def immediate_sleep(interval):
+        sleep_calls.append(interval)
+
+    class RaisingWriter:
+        def append(self, _row):
+            raise OSError("snapshot write failed")
+
+    snapshotter = MidpointSnapshotter(
+        token_ids=("A",),
+        book_for={"A": FakeBook("0.60", "0.62", "0.61")}.get,
+        stamper=FakeStamper(),
+        writer=RaisingWriter(),
+        interval_seconds=15.0,
+        sleep=immediate_sleep,
+    )
+
+    with pytest.raises(OSError, match="snapshot write failed"):
+        asyncio.run(snapshotter.run())
+    assert sleep_calls == [15.0]
