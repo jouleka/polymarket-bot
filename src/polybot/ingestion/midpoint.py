@@ -29,11 +29,17 @@ def decode_midpoint_batch(content: str) -> dict[str, MidpointQuote]:
         raise ValueError(f"unsupported midpoint batch schema: {payload['schema']!r}")
     if not isinstance(payload["books"], dict):
         raise ValueError("midpoint batch books must be an object")
-    return {
-        token: MidpointQuote(
+    decoded = {}
+    for token, quote in sorted(payload["books"].items()):
+        if not isinstance(token, str) or not token:
+            raise ValueError("midpoint batch token IDs must be non-empty strings")
+        if not isinstance(quote, dict) or set(quote) != {"bid", "ask", "mid"}:
+            raise ValueError(f"midpoint quote keys invalid for token {token!r}")
+        if any(not isinstance(quote[name], str) for name in ("bid", "ask", "mid")):
+            raise ValueError(f"midpoint quote prices must be strings for token {token!r}")
+        decoded[token] = MidpointQuote(
             Decimal(quote["bid"]),
             Decimal(quote["ask"]),
             Decimal(quote["mid"]),
         )
-        for token, quote in sorted(payload["books"].items())
-    }
+    return decoded
