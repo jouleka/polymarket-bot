@@ -533,6 +533,11 @@ def test_registry_object_and_indices_are_immutable():
         mutate(registry._by_condition)
 
 
+def test_registry_direct_constructor_cannot_bypass_snapshot_validation():
+    with pytest.raises(MarketSnapshotError, match="from_gamma_snapshots"):
+        MarketRegistry({}, {}, frozenset(), frozenset(), lambda: 0)
+
+
 def test_stub_implements_single_metadata_result_contract():
     intent = _intent("legacy proposal summary")
     assert StubMarketMeta().metadata_for(intent) == MarketMetadata(
