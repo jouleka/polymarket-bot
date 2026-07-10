@@ -542,7 +542,7 @@ def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_d
         },
     ]
     events = [
-        {"id": "678139", "tags": [
+        {"id": "678139", "endDate": "1970-01-01T00:00:20Z", "tags": [
             {"id": "2", "label": "Politics", "slug": "politics"},
             {"id": "100265", "label": "Geopolitics", "slug": "geopolitics"},
         ], "markets": [
@@ -559,6 +559,7 @@ def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_d
 
     geo = registry.metadata_for(_intent(
         "proposal text must lose", condition_id="0xgeo", token_id=yes))
+    # 89 comes from the selected MARKET endDate=100, never the conflicting event endDate=20.
     assert geo == MarketMetadata("geopolitics", "Gamma geopolitical question", 89)
     crypto = registry.metadata_for(_intent(
         "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no))
