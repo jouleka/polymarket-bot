@@ -145,6 +145,32 @@ def test_build_bar_series_reads_midpoint_batches_and_uses_bar_close():
     assert bars["B"] == {0: Decimal("0.31"), 1: Decimal("0.35")}
 
 
+def test_build_bar_series_midpoints_respect_until_cutoff():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(0, {"A": ("0.60", "0.62", "0.61")}))
+        store.append(_mid_env(1000, {"A": ("0.70", "0.72", "0.71")}))
+        store.append(_mid_env(2000, {"A": ("0.80", "0.82", "0.81")}))
+
+        bars = build_bar_series(store, bar_ns=1000, until=1500)
+
+    assert bars["A"] == {0: Decimal("0.61"), 1: Decimal("0.71")}
+
+
+def test_build_bar_series_does_not_forward_fill_omitted_midpoint():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(0, {
+            "A": ("0.60", "0.62", "0.61"),
+            "B": ("0.30", "0.32", "0.31"),
+        }))
+        store.append(_mid_env(1000, {
+            "A": ("0.70", "0.72", "0.71"),
+        }))
+
+        bars = build_bar_series(store, bar_ns=1000)
+
+    assert bars["A"] == {0: Decimal("0.61"), 1: Decimal("0.71")}
+    assert bars["B"] == {0: Decimal("0.31")}
+
 
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
