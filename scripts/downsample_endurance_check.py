@@ -29,8 +29,19 @@ SECONDS_PER_DAY = 86400
 
 
 def projected_gib_per_day(total_bytes, elapsed_seconds):
-    if elapsed_seconds <= 0:
-        raise ValueError("elapsed_seconds must be > 0")
+    try:
+        invalid_total = not math.isfinite(total_bytes) or total_bytes < 0
+    except (TypeError, OverflowError):
+        invalid_total = True
+    if invalid_total:
+        raise ValueError("total_bytes must be finite and >= 0")
+
+    try:
+        invalid_elapsed = not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0
+    except (TypeError, OverflowError):
+        invalid_elapsed = True
+    if invalid_elapsed:
+        raise ValueError("elapsed_seconds must be finite and > 0")
     return total_bytes / elapsed_seconds * SECONDS_PER_DAY / GIB
 
 
@@ -76,7 +87,21 @@ def inspect_capture(store, *, projected_rate, max_gib_per_day):
         failures.append(f"raw clob-ws rows persisted: {raw_rows}")
     if usable_quotes == 0:
         failures.append("no usable midpoint quotes persisted")
-    if projected_rate > max_gib_per_day:
+
+    try:
+        projected_rate_valid = math.isfinite(projected_rate) and projected_rate >= 0
+    except (TypeError, OverflowError):
+        projected_rate_valid = False
+    try:
+        ceiling_valid = math.isfinite(max_gib_per_day) and max_gib_per_day > 0
+    except (TypeError, OverflowError):
+        ceiling_valid = False
+
+    if not projected_rate_valid:
+        failures.append("invalid projected rate: must be finite and >= 0")
+    if not ceiling_valid:
+        failures.append("invalid rate ceiling: must be finite and > 0")
+    if projected_rate_valid and ceiling_valid and projected_rate > max_gib_per_day:
         failures.append(
             f"projected rate {projected_rate:.6f} GiB/day exceeds "
             f"ceiling {max_gib_per_day:.6f} GiB/day"
