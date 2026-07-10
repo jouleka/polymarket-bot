@@ -406,7 +406,7 @@ push-to-deploy via a `/root/git/<bot>.git` bare repo) → run ingestion → then
 state: **VPS + Hermes are up** (small model now, GPT-5.5 planned; polymarket must stay self-contained from the other
 bots); **Polymarket account exists, $0 funded** (shadow needs no funds; POL-4/live still blocked on a funded clean box).
 
-**UPDATE 2026-07-10 — D4a downsample code implemented; release/deploy still blocked.** The POL-13 feature branch
+**UPDATE 2026-07-10 — D4a downsample code + release gate complete; landing/deploy approval pending.** The POL-13 feature branch
 now keeps sharded WS books only in memory (`sink=None`), persists one strict versioned `clob-midpoint` batch every
 60 seconds, and retains the full deduplicated Data API trade tape. The ERS co-move adapter auto-selects those batches
 while explicit legacy raw replay remains available. Synthetic events are **not** reconstructable from this compact
@@ -414,14 +414,12 @@ production history and remain deferred pending a tuned live contract.
 
 The VPS kit still exists (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, system unit), but the
 service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected build has
-not been merged, pushed, installed, enabled, or started. The required release gate is a real 1800-second, 200-market
-capture at total DB+WAL+SHM **≤0.5 GiB/day**, with midpoint+trade rows, zero raw rows, all batches decodable, no HALT,
-and graceful close. That gate remains pending until whole-slice reviews pass. Two 70-second probes at the true
-0.5 ceiling failed at 0.866285 and 1.723114 GiB/day under startup/full-page distortion. A longer five-market E3
-smoke passed without loosening the ceiling: 300.006 seconds, 1,515,520 bytes, source counts
-`{"clob-midpoint":4,"data-api":1000}`, 40 usable quotes, zero raw rows, 0.406486 GiB/day, exit 0. A separate
-lifecycle-only smoke had earlier passed under a deliberately permissive 5.0 ceiling. None of these short runs is the
-required 1,800-second release evidence; the ceiling must not be loosened if that gate fails.
+not been merged, pushed, installed, enabled, or started. Independent spec review passed, the final mutation battery
+killed 41/41, and the required 1,800-second/200-market release gate passed without loosening the **≤0.5 GiB/day**
+ceiling: elapsed 1,800.006 seconds; total DB+WAL+SHM 5,586,944 bytes; source counts
+`{"clob-midpoint":29,"data-api":3500}`; 1,800 usable quotes; exactly zero raw rows; all batches decoded; no HALT;
+graceful close; **0.249755 GiB/day**; exit 0. Earlier short evidence remains diagnostic only: 70-second probes
+failed under startup/full-page distortion, while a 300.006-second five-market smoke passed at 0.406486 GiB/day.
 
 Any later deployment requires separate approval and must use the GitHub-authoritative checkout pattern (never
 recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte

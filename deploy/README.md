@@ -6,15 +6,18 @@ It does **not** persist raw `clob-ws` frames.
 
 ## Current gate state
 
-The VPS service is **STOPPED + DISABLED**. Do not install, start, enable, or restart the corrected build until:
+The code release gate passed on 2026-07-10: 1,800.006 seconds, 5,586,944 total DB+WAL+SHM bytes,
+`{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes, zero raw rows, all batches decoded, no HALT,
+graceful close, 0.249755 GiB/day, exit 0. Independent spec review passed and the mutation battery killed 41/41.
 
-1. the feature branch is reviewed and merged;
-2. the 1800-second public-data gate passes at total DB+WAL+SHM `<= 0.5 GiB/day`;
-3. push approval and deployment approval are granted separately; and
-4. the old raw database is preserved and verified as described below.
+The VPS service remains **STOPPED + DISABLED**. Do not install, start, enable, or restart the corrected build until:
 
-Short 70-second captures are smoke tests, not release evidence. The 0.5 GiB/day ceiling must not be loosened if
-the real gate fails.
+1. the feature branch is approved and merged;
+2. push and deployment are separately approved; and
+3. the old raw database is preserved and verified as described below.
+
+Short captures are diagnostic only. The 1,800-second result above is the release evidence; the 0.5 GiB/day ceiling
+must not be loosened on future regressions.
 
 ## Persistence contract
 

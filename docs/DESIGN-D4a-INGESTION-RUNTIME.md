@@ -1,20 +1,21 @@
 # DESIGN — D4a: Continuous ingestion runtime (shadow-deployment, slice 1)
 
 **Date:** 2026-07-05 · **Ticket:** POL-13 (shadow deployment — slice D4a; tracking ticket TBD) ·
-**Status:** Original runtime design landed. **D4a-downsample amendment implemented on the POL-13 feature branch;
-independent whole-slice reviews and the 30-minute release gate remain pending. The VPS service remains
-STOPPED + DISABLED.**
+**Status:** Original runtime design landed. **D4a-downsample amendment is code-complete, independently reviewed,
+and release-gate verified on the POL-13 feature branch. Merge, push, installation, and activation remain separately
+approval-gated. The VPS service remains STOPPED + DISABLED.**
 
 > **2026-07-10 persistence amendment:** production no longer persists raw CLOB frames. `MarketStream` maintains
 > live books in memory; one versioned `clob-midpoint` batch is sampled every 60 seconds and stored alongside the
 > full deduplicated Data API trade tape. Synthetic events are not reconstructable from this compact history and
 > remain deferred pending a tuned live contract. The immutable release ceiling is **≤0.5 GiB/day** for total
-> DB+WAL+SHM projected over the required 30-minute real-venue run. That gate has not run yet. Two 70-second
-> default-ceiling probes correctly failed at 0.866285 and 1.723114 GiB/day because startup/full-page costs dominated.
-> A longer five-market E3 smoke then passed the real 0.5 ceiling: 300.006 seconds, 1,515,520 bytes, source counts
-> `{"clob-midpoint":4,"data-api":1000}`, 40 usable quotes, zero raw rows, and 0.406486 GiB/day. A separate
-> lifecycle-only run had earlier exercised PASS at 0.870920 GiB/day under a permissive 5.0 smoke ceiling. None of
-> these short runs is the required 1,800-second release evidence.
+> DB+WAL+SHM projected over the required 30-minute real-venue run. **The release gate passed on 2026-07-10:**
+> 1,800.006 seconds, 5,586,944 bytes, source counts `{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes,
+> exactly zero raw rows, all batches decoded, no HALT, graceful close, and **0.249755 GiB/day** (exit 0).
+> Earlier evidence remains diagnostic: two 70-second default-ceiling probes failed at 0.866285 and 1.723114 GiB/day
+> under startup/full-page distortion; a five-market E3 smoke passed at 300.006 seconds / 1,515,520 bytes /
+> 0.406486 GiB/day; and a lifecycle-only run used a permissive 5.0 smoke ceiling. Only the 1,800-second result is
+> release evidence.
 > The old raw database must be preserved under an evidence filename before a fresh corrected database is started.
 **Depends on:** S1 ingestion (POL-3) + the off-loop `EventStore` writer (POL-12) — every collector, the
 `EventStore`, the `QueuedEventWriter`, the `MonotonicStamper`, and `ingestion/transport.py` already exist and are
@@ -219,8 +220,9 @@ collector-specific signatures and is trivially fakeable in tests.*
 **Built now:** original D4a runtime plus the POL-13 downsample amendment: WS books remain live in memory with
 `sink=None`; `MidpointSnapshotter` writes one strict, versioned batch at the configured 60-second cadence; Data API
 trade payload/projection/dedup behavior is unchanged; `build_bar_series` auto-selects midpoint rows while retaining
-explicit legacy raw replay. Unit/integration and bounded mutation gates are implemented. **Release is still blocked
-on fresh whole-slice reviews and the real 1800-second ≤0.5 GiB/day gate.**
+explicit legacy raw replay. Unit/integration, independent spec, and 41-mutation gates are green; the real
+1,800-second release gate passed at 0.249755 GiB/day. **Code acceptance is complete. Merge, push, old-DB evidence
+preservation, installation, and service activation remain separate approval-gated actions.**
 
 **Deferred — D4a.2:** the `PolygonLogWatcher` service (on-chain logs are re-queryable by block range) · the
 `NewsPoller` + `CalendarScheduler` (feeds re-fetchable; only matters once Hermes reads them) · **synthetic-event
