@@ -140,6 +140,11 @@ def test_category_policy_rejects_malformed_tag_items(tags):
         DEFAULT_CATEGORY_POLICY.classify(tags)
 
 
+def test_category_policy_rejects_malformed_later_tag_item():
+    with pytest.raises((TypeError, ValueError), match="tag"):
+        DEFAULT_CATEGORY_POLICY.classify([{"id": "2"}, {"id": 3}])
+
+
 @pytest.mark.parametrize("kwargs", [
     {"precedence": (), "tag_ids_by_category": ()},
     {"precedence": ("politics", "politics"),
@@ -427,6 +432,18 @@ def test_lookup_returns_gamma_owned_metadata_not_proposal_values():
     )
 
 
+def test_lookup_preserves_representation_sensitive_token_strings_exactly():
+    tokens = ("001", "0002")
+    registry = _registry(
+        markets=[_market(tokens=tokens)],
+        events=[_event(tokens=tokens)],
+    )
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="001")).category == "politics"
+    with pytest.raises(MarketMetadataUnavailable, match="token"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="1"))
+
+
 @pytest.mark.parametrize(("condition_id", "token_id"), [
     ("missing", "t1"),
     ("c1", "missing"),
@@ -592,7 +609,8 @@ def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_d
     crypto = registry.metadata_for(_intent(
         "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no))
     assert crypto == MarketMetadata("crypto", "Gamma crypto-finance question", 189)
-    assert _intent(condition_id="0xgeo", token_id=yes).token_id == yes  # exact 77-digit string
+    assert len(crypto_no) == 77
+    assert _intent(condition_id="0xcrypto", token_id=crypto_no).token_id == crypto_no
 
     with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
         registry.metadata_for(_intent(condition_id="0xgeo", token_id=crypto_yes))
