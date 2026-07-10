@@ -10,6 +10,7 @@ from polybot.ers.market_meta import (
     DEFAULT_CATEGORY_POLICY,
     SECONDS_TO_RESOLUTION_SENTINEL,
     UNKNOWN_CATEGORY,
+    CategoryPolicy,
     MarketMetadata,
     MarketMetadataUnavailable,
     MarketRegistry,
@@ -139,11 +140,60 @@ def test_category_policy_rejects_malformed_tag_items(tags):
         DEFAULT_CATEGORY_POLICY.classify(tags)
 
 
+@pytest.mark.parametrize("kwargs", [
+    {"precedence": (), "tag_ids_by_category": ()},
+    {"precedence": ("politics", "politics"),
+     "tag_ids_by_category": (("politics", frozenset({"2"})),)},
+    {"precedence": ("politics",),
+     "tag_ids_by_category": (("crypto", frozenset({"21"})),)},
+    {"precedence": ("politics", "crypto"),
+     "tag_ids_by_category": (
+         ("politics", frozenset({"2"})), ("crypto", frozenset({"2"})))},
+    {"precedence": ("politics",),
+     "tag_ids_by_category": (("politics", {"2"}),)},
+])
+def test_category_policy_rejects_invalid_or_ambiguous_definitions(kwargs):
+    with pytest.raises(ValueError, match="category|precedence|tag"):
+        CategoryPolicy(**kwargs)
+
+
+def test_category_policy_is_frozen():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(DEFAULT_CATEGORY_POLICY, "precedence", ("politics",))
+
+
+@pytest.mark.parametrize(("category", "question", "seconds"), [
+    ("", "question", 1),
+    (1, "question", 1),
+    ("politics", None, 1),
+    ("politics", "question", -1),
+    ("politics", "question", True),
+    ("politics", "question", 1.5),
+])
+def test_market_metadata_rejects_invalid_result_values(category, question, seconds):
+    with pytest.raises((TypeError, ValueError), match="category|question|seconds"):
+        MarketMetadata(category, question, seconds)
+
+
 # POL-14 Task 2: strict two-snapshot construction + identity indices -----------
 
 
-def _event(event_id="e1", tag_ids=("2",)):
-    return {"id": event_id, "tags": [{"id": tag_id} for tag_id in tag_ids]}
+def _embedded_market(condition_id="c1", tokens=("t1", "t2"), *, encoded=True):
+    values = list(tokens)
+    if encoded:
+        import json
+        values = json.dumps(values)
+    return {"conditionId": condition_id, "clobTokenIds": values}
+
+
+def _event(event_id="e1", tag_ids=("2",), *, condition_id="c1",
+           tokens=("t1", "t2"), markets=None):
+    embedded = [_embedded_market(condition_id, tokens)] if markets is None else markets
+    return {
+        "id": event_id,
+        "tags": [{"id": tag_id} for tag_id in tag_ids],
+        "markets": embedded,
+    }
 
 
 def _market(condition_id="c1", tokens=("t1", "t2"), *, event_id="e1",
@@ -173,7 +223,8 @@ def test_registry_builds_from_json_string_and_parsed_token_arrays():
     registry = _registry(
         markets=[_market("c1", ("t1", "t2")),
                  _market("c2", ("t3", "t4"), event_id="e2", encoded=False)],
-        events=[_event("e1", ("2",)), _event("e2", ("21",))],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
     )
     assert len(registry) == 2
 
@@ -262,9 +313,52 @@ def test_missing_event_and_unmapped_event_are_skipped_when_another_market_is_usa
         markets=[_market("good", ("g1", "g2"), event_id="mapped"),
                  _market("missing", ("m1", "m2"), event_id="not-returned"),
                  _market("unmapped", ("u1", "u2"), event_id="unknown-tag")],
-        events=[_event("mapped", ("2",)), _event("unknown-tag", ("999999",))],
+        events=[_event("mapped", ("2",), condition_id="good", tokens=("g1", "g2")),
+                _event("unknown-tag", ("999999",),
+                       condition_id="unmapped", tokens=("u1", "u2"))],
     )
     assert len(registry) == 1
+
+
+@pytest.mark.parametrize("markets_value", [None, {}, "not-a-list"])
+def test_referenced_event_requires_embedded_market_list(markets_value):
+    event = _event()
+    event["markets"] = markets_value
+    with pytest.raises(MarketSnapshotError, match="event.*markets|market list"):
+        _registry(events=[event])
+
+
+def test_market_missing_from_referenced_event_is_indexed_unavailable():
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("orphan", ("o1", "o2"), event_id="orphan-event")],
+        events=[_event("mapped", condition_id="good", tokens=("g1", "g2")),
+                _event("orphan-event", condition_id="different", tokens=("d1", "d2"))],
+    )
+    assert len(registry) == 1
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.metadata_for(_intent(condition_id="orphan", token_id="o1"))
+
+
+def test_event_embedded_market_token_mismatch_fails_loud():
+    event = _event(tokens=("wrong-yes", "wrong-no"))
+    with pytest.raises(MarketSnapshotError, match="event.*token|token.*conflict|identity"):
+        _registry(events=[event])
+
+
+def test_event_duplicate_embedded_condition_with_conflicting_tokens_fails_loud():
+    event = _event(markets=[
+        _embedded_market("c1", ("t1", "t2")),
+        _embedded_market("c1", ("t1", "other")),
+    ])
+    with pytest.raises(MarketSnapshotError, match="event.*token|condition.*conflict|identity"):
+        _registry(events=[event])
+
+
+def test_event_duplicate_identical_embedded_condition_is_idempotent():
+    embedded = _embedded_market("c1", ("t1", "t2"))
+    event = _event(markets=[embedded, dict(embedded)])
+    assert len(_registry(events=[event])) == 1
 
 
 def test_identical_duplicate_market_rows_are_idempotent():
@@ -332,7 +426,8 @@ def test_lookup_rejects_known_but_mismatched_condition_and_token():
     registry = _registry(
         markets=[_market("c1", ("t1", "t2")),
                  _market("c2", ("t3", "t4"), event_id="e2")],
-        events=[_event("e1", ("2",)), _event("e2", ("21",))],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
     )
     with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
         registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
@@ -346,7 +441,9 @@ def test_lookup_rejects_known_market_with_unmapped_category(condition_id, token_
     registry = _registry(
         markets=[_market("good", ("g1", "g2"), event_id="mapped"),
                  _market("unmapped", ("u1", "u2"), event_id="other")],
-        events=[_event("mapped", ("2",)), _event("other", ("999999",))],
+        events=[_event("mapped", ("2",), condition_id="good", tokens=("g1", "g2")),
+                _event("other", ("999999",),
+                       condition_id="unmapped", tokens=("u1", "u2"))],
     )
     with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
         registry.metadata_for(_intent(condition_id=condition_id, token_id=token_id))
@@ -394,11 +491,23 @@ def test_lookup_wraps_clock_exceptions_as_unavailable():
         registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
 
 
-def test_repeated_lookup_does_not_mutate_registry():
+def test_registry_lookup_is_repeatable_and_does_not_mutate_indices():
     registry = _registry(clock=lambda: 0)
     intent = _intent(condition_id="c1", token_id="t1")
     assert registry.metadata_for(intent) == registry.metadata_for(intent)
     assert len(registry) == 1
+
+
+def test_registry_object_and_indices_are_immutable():
+    registry = _registry()
+
+    def mutate(mapping):
+        mapping["other"] = mapping["c1"]
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(registry, "_clock", lambda: 1)
+    with pytest.raises(TypeError):
+        mutate(registry._by_condition)
 
 
 def test_stub_implements_single_metadata_result_contract():
@@ -436,10 +545,14 @@ def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_d
         {"id": "678139", "tags": [
             {"id": "2", "label": "Politics", "slug": "politics"},
             {"id": "100265", "label": "Geopolitics", "slug": "geopolitics"},
+        ], "markets": [
+            {"conditionId": "0xgeo", "clobTokenIds": f'["{yes}", "{no}"]'},
         ]},
         {"id": "16183", "tags": [
             {"id": "120", "label": "Finance", "slug": "finance"},
             {"id": "21", "label": "Crypto", "slug": "crypto"},
+        ], "markets": [
+            {"conditionId": "0xcrypto", "clobTokenIds": [crypto_yes, crypto_no]},
         ]},
     ]
     registry = MarketRegistry.from_gamma_snapshots(markets, events, clock=lambda: 10.25)

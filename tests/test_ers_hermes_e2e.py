@@ -156,7 +156,10 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
         [{"id": "ev-market", "tags": [
             {"id": "120", "label": "Finance"},
             {"id": "21", "label": "Crypto"},
-        ]}],
+        ], "markets": [{
+            "conditionId": "m1",
+            "clobTokenIds": f'["{token}", "{sibling}"]',
+        }]}],
         clock=lambda: 0,
     )
 
