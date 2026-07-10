@@ -170,6 +170,22 @@ def test_build_bar_series_same_bar_omission_keeps_earlier_token_observation():
     assert bars["B"] == {0: Decimal("0.31")}
 
 
+def test_build_bar_series_same_bar_omission_keeps_earlier_first_token_observation():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(0, {
+            "A": ("0.60", "0.62", "0.61"),
+            "B": ("0.30", "0.32", "0.31"),
+        }))
+        store.append(_mid_env(10, {
+            "B": ("0.40", "0.42", "0.41"),
+        }))
+
+        bars = build_bar_series(store, bar_ns=1000)
+
+    assert bars["A"] == {0: Decimal("0.61")}
+    assert bars["B"] == {0: Decimal("0.41")}
+
+
 def test_build_bar_series_midpoints_respect_until_cutoff():
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
         store.append(_mid_env(0, {"A": ("0.60", "0.62", "0.61")}))
@@ -186,6 +202,20 @@ def test_build_bar_series_until_zero_is_a_real_cutoff():
         store.append(_mid_env(1, {"A": ("0.60", "0.62", "0.61")}))
 
         bars = build_bar_series(store, bar_ns=1000, until=0)
+
+    assert bars == {}
+
+
+def test_build_bar_series_forced_midpoint_until_zero_is_a_real_cutoff():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(1, {"A": ("0.60", "0.62", "0.61")}))
+
+        bars = build_bar_series(
+            store,
+            bar_ns=1000,
+            until=0,
+            source=MIDPOINT_SOURCE,
+        )
 
     assert bars == {}
 
@@ -289,9 +319,11 @@ def test_build_bar_series_auto_never_merges_raw_and_midpoint_rows():
         store.append(_mid_env(10, {"A": ("0.50", "0.52", "0.51")}))
 
         automatic = build_bar_series(store, bar_ns=1000)
+        forced_midpoint = build_bar_series(store, bar_ns=1000, source=MIDPOINT_SOURCE)
         forced_raw = build_bar_series(store, bar_ns=1000, source="clob-ws")
 
     assert automatic == {"A": {0: Decimal("0.51")}}
+    assert forced_midpoint == {"A": {0: Decimal("0.51")}}
     assert forced_raw == {"RAW": {0: Decimal("0.91")}}
 
 
@@ -435,6 +467,51 @@ def test_build_bar_series_replays_alternate_explicit_raw_source():
         bars = build_bar_series(store, bar_ns=1000, source="diagnostic-ws")
 
     assert bars == {"A": {0: Decimal("0.61")}}
+
+
+def test_build_bar_series_alternate_explicit_source_respects_until_zero():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env(
+            "A",
+            _book_frame("A", "0.60", "0.62"),
+            1,
+            source="diagnostic-ws",
+        ))
+
+        bars = build_bar_series(
+            store,
+            bar_ns=1000,
+            until=0,
+            source="diagnostic-ws",
+        )
+
+    assert bars == {}
+
+
+def test_build_bar_series_alternate_explicit_source_uses_same_bar_close():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env(
+            "A", _book_frame("A", "0.60", "0.62"), 0, source="diagnostic-ws",
+        ))
+        store.append(_ws_env(
+            "A", _book_frame("A", "0.50", "0.52"), 10, source="diagnostic-ws",
+        ))
+
+        bars = build_bar_series(store, bar_ns=1000, source="diagnostic-ws")
+
+    assert bars == {"A": {0: Decimal("0.51")}}
+
+
+def test_build_bar_series_alternate_explicit_source_is_exclusive_in_mixed_store():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("RAW", _book_frame("RAW", "0.90", "0.92"), 0))
+        store.append(_ws_env(
+            "ALT", _book_frame("ALT", "0.60", "0.62"), 10, source="diagnostic-ws",
+        ))
+
+        bars = build_bar_series(store, bar_ns=1000, source="diagnostic-ws")
+
+    assert bars == {"ALT": {0: Decimal("0.61")}}
 
 
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
