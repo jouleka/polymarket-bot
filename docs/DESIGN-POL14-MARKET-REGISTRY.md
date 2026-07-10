@@ -94,6 +94,10 @@ tags fail closed rather than creating calibration buckets.
 - `clobTokenIds` may be Gamma's JSON-encoded string or an already-parsed list, but must contain
   exactly two distinct string token IDs. Numeric coercion is forbidden.
 - A market must name exactly one event represented by the event snapshot.
+- The referenced event must independently embed the selected `conditionId` with the exact same
+  two-token sibling list before its tags may authorize a category.
+- A missing event or missing event-contained market relationship leaves that market unavailable;
+  a contradictory event/market token identity is a fatal snapshot-construction error.
 - Duplicate identical rows are idempotent.
 - A condition with conflicting definitions, a token reused by two conditions, or duplicate token
   siblings is a fatal snapshot-construction error.
@@ -132,8 +136,9 @@ silently default to the stub.
 ## 5. Acceptance criteria
 
 - Targeted tests prove the canonical category map and every precedence boundary.
-- Tests prove condition/token cross-validation, exact string handling, duplicate conflicts, malformed
-  snapshots, unknown events/categories, missing questions/deadlines, and clock boundaries.
+- Tests prove condition/token cross-validation, event-contained condition/token reconciliation, exact
+  string handling, duplicate conflicts, malformed snapshots, unknown events/categories, missing
+  questions/deadlines, and clock boundaries.
 - An ERS integration test proves unavailable metadata returns `market_meta_unavailable` and writes
   neither forecast nor component rows.
 - A whole-slice test uses representative live-shaped `/markets` + `/events` fixtures and returns the

@@ -1,17 +1,17 @@
 """Market metadata seam (S6 / POL-8 stub; POL-14 real registry policy).
 
-The legacy stub remains an explicit paper-only fixture. POL-14 adds the immutable result and the
-reviewed Gamma tag-ID classification policy first; the strict two-snapshot registry is built in the
-following TDD slices.
+The legacy stub remains an explicit paper-only fixture. POL-14 adds the immutable result, reviewed
+Gamma tag-ID policy, strict two-snapshot identity reconciliation, and fail-closed registry.
 """
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import math
 from numbers import Real
 import time
 from types import MappingProxyType
+from typing import Any
 
 
 # Fixed at 10**9 (about 31.7 years): deliberately enormous and strictly greater than the default
@@ -31,6 +31,17 @@ class MarketMetadata:
     category: str
     question_text: str
     seconds_to_resolution: int
+
+    def __post_init__(self):
+        if not isinstance(self.category, str) or not self.category:
+            raise TypeError("market metadata category must be a non-empty string")
+        if not isinstance(self.question_text, str):
+            raise TypeError("market metadata question must be a string")
+        if isinstance(self.seconds_to_resolution, bool) or not isinstance(
+                self.seconds_to_resolution, int):
+            raise TypeError("market metadata seconds must be an integer")
+        if self.seconds_to_resolution < 0:
+            raise ValueError("market metadata seconds must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -136,6 +147,13 @@ class _MarketDefinition:
     end_epoch: float
 
 
+@dataclass(frozen=True)
+class _EventDefinition:
+    category: str | None
+    # Only selected conditions are retained; tuple form is deeply immutable and deterministic.
+    market_token_ids: tuple[tuple[str, tuple[str, str]], ...]
+
+
 def _required_string(row, field, context):
     value = row.get(field)
     if not isinstance(value, str) or not value.strip():
@@ -206,19 +224,20 @@ def _event_id_for_market(row, condition_id):
     return _required_string(relation, "id", f"market {condition_id} event")
 
 
+@dataclass(frozen=True, repr=False)
 class MarketRegistry:
     """Immutable condition+token metadata registry built from injected Gamma snapshots.
 
-    Construction performs all provider parsing once. The stored mappings are read-only; a future
-    runtime refresh builds a complete replacement registry instead of mutating this instance.
+    Construction parses the selected market snapshot first, then accepts category metadata only when
+    the event snapshot independently contains the same condition and exact sibling token pair.
+    Stored mappings are read-only; refresh builds a complete replacement registry.
     """
 
-    def __init__(self, by_condition, by_token, unavailable_conditions, unavailable_tokens, clock):
-        self._by_condition = MappingProxyType(dict(by_condition))
-        self._by_token = MappingProxyType(dict(by_token))
-        self._unavailable_conditions = frozenset(unavailable_conditions)
-        self._unavailable_tokens = frozenset(unavailable_tokens)
-        self._clock = clock
+    _by_condition: Mapping[str, _MarketDefinition]
+    _by_token: Mapping[str, _MarketDefinition]
+    _unavailable_conditions: frozenset[str]
+    _unavailable_tokens: frozenset[str]
+    _clock: Any
 
     @classmethod
     def from_gamma_snapshots(cls, market_rows, event_rows, *, clock=None,
@@ -234,21 +253,8 @@ class MarketRegistry:
         if not isinstance(category_policy, CategoryPolicy):
             raise MarketSnapshotError("category_policy must be a CategoryPolicy")
 
-        event_categories: dict[str, str | None] = {}
-        for index, row in enumerate(event_rows):
-            if not isinstance(row, Mapping):
-                raise MarketSnapshotError(
-                    f"Gamma event row {index} must be a mapping, got {type(row).__name__}"
-                )
-            event_id = _required_string(row, "id", f"event row {index}")
-            try:
-                category = category_policy.classify(row.get("tags"))
-            except (TypeError, ValueError) as exc:
-                raise MarketSnapshotError(f"Gamma event {event_id} tags are invalid: {exc}") from exc
-            if event_id in event_categories and event_categories[event_id] != category:
-                raise MarketSnapshotError(f"Gamma event {event_id} category conflict")
-            event_categories[event_id] = category
-
+        # Parse and de-duplicate the selected market snapshot before consulting event metadata.
+        # Category remains unavailable until the second snapshot proves the event relationship.
         all_by_condition: dict[str, _MarketDefinition] = {}
         all_by_token: dict[str, _MarketDefinition] = {}
         for index, row in enumerate(market_rows):
@@ -265,7 +271,7 @@ class MarketRegistry:
                 condition_id=condition_id,
                 token_ids=tokens,
                 event_id=event_id,
-                category=event_categories.get(event_id),
+                category=None,
                 question_text=question,
                 end_epoch=deadline,
             )
@@ -283,6 +289,84 @@ class MarketRegistry:
                     )
                 all_by_token[token_id] = definition
 
+        conditions_by_event: dict[str, set[str]] = {}
+        for definition in all_by_condition.values():
+            conditions_by_event.setdefault(definition.event_id, set()).add(definition.condition_id)
+
+        # Parse only relationship details for selected conditions. Gamma events legitimately contain
+        # unrelated legacy markets with absent CLOB IDs; those cannot authorize a selected market and
+        # are ignored. The referenced event itself and every matching relationship remain strict.
+        event_definitions: dict[str, _EventDefinition] = {}
+        for index, row in enumerate(event_rows):
+            if not isinstance(row, Mapping):
+                raise MarketSnapshotError(
+                    f"Gamma event row {index} must be a mapping, got {type(row).__name__}"
+                )
+            event_id = _required_string(row, "id", f"event row {index}")
+            selected_conditions = conditions_by_event.get(event_id)
+            if selected_conditions is None:
+                continue
+            try:
+                category = category_policy.classify(row.get("tags"))
+            except (TypeError, ValueError) as exc:
+                raise MarketSnapshotError(f"Gamma event {event_id} tags are invalid: {exc}") from exc
+
+            embedded_rows = row.get("markets")
+            if not isinstance(embedded_rows, list):
+                raise MarketSnapshotError(
+                    f"Gamma event {event_id} markets must be a market list"
+                )
+            selected_tokens: dict[str, tuple[str, str]] = {}
+            for embedded_index, embedded in enumerate(embedded_rows):
+                if not isinstance(embedded, Mapping):
+                    raise MarketSnapshotError(
+                        f"Gamma event {event_id} market row {embedded_index} must be a mapping"
+                    )
+                embedded_condition = embedded.get("conditionId")
+                if embedded_condition not in selected_conditions:
+                    continue
+                tokens = _parse_tokens(embedded.get("clobTokenIds"), embedded_condition)
+                previous_tokens = selected_tokens.get(embedded_condition)
+                if previous_tokens is not None and previous_tokens != tokens:
+                    raise MarketSnapshotError(
+                        f"Gamma event {event_id} condition {embedded_condition} "
+                        "token identity conflict"
+                    )
+                selected_tokens[embedded_condition] = tokens
+
+            event_definition = _EventDefinition(
+                category=category,
+                market_token_ids=tuple(sorted(selected_tokens.items())),
+            )
+            previous_event = event_definitions.get(event_id)
+            if previous_event is not None and previous_event != event_definition:
+                raise MarketSnapshotError(f"Gamma event {event_id} definition conflict")
+            event_definitions[event_id] = event_definition
+
+        # Reconcile the two snapshots. Missing event/relationship/category data leaves only that
+        # market unavailable. Contradictory token identities are provider corruption and halt the
+        # whole construction rather than exposing a partially trusted generation.
+        reconciled_by_condition: dict[str, _MarketDefinition] = {}
+        for condition_id, definition in all_by_condition.items():
+            event_definition = event_definitions.get(definition.event_id)
+            category = None
+            if event_definition is not None:
+                event_tokens = dict(event_definition.market_token_ids).get(condition_id)
+                if event_tokens is not None:
+                    if event_tokens != definition.token_ids:
+                        raise MarketSnapshotError(
+                            f"Gamma event {definition.event_id} token identity conflict "
+                            f"for condition {condition_id}"
+                        )
+                    category = event_definition.category
+            reconciled_by_condition[condition_id] = replace(definition, category=category)
+
+        all_by_condition = reconciled_by_condition
+        all_by_token = {
+            token_id: definition
+            for definition in all_by_condition.values()
+            for token_id in definition.token_ids
+        }
         by_condition = {
             condition_id: definition
             for condition_id, definition in all_by_condition.items()
@@ -295,13 +379,16 @@ class MarketRegistry:
             for token_id, definition in all_by_token.items()
             if definition.category is not None
         }
-        unavailable_conditions = set(all_by_condition) - set(by_condition)
-        unavailable_tokens = {
+        unavailable_conditions = frozenset(set(all_by_condition) - set(by_condition))
+        unavailable_tokens = frozenset(
             token_id for token_id, definition in all_by_token.items()
             if definition.category is None
-        }
+        )
         return cls(
-            by_condition, by_token, unavailable_conditions, unavailable_tokens,
+            MappingProxyType(dict(by_condition)),
+            MappingProxyType(dict(by_token)),
+            unavailable_conditions,
+            unavailable_tokens,
             time.time if clock is None else clock,
         )
 
@@ -339,8 +426,11 @@ class MarketRegistry:
                 f"market metadata wall clock must be finite real seconds, got {now!r}"
             )
         seconds = max(0, math.floor(condition_definition.end_epoch - float(now)))
+        category = condition_definition.category
+        if category is None:  # defensive invariant: unavailable rows never enter the public indices
+            raise MarketMetadataUnavailable("market category is unavailable")
         return MarketMetadata(
-            category=condition_definition.category,
+            category=category,
             question_text=condition_definition.question_text,
             seconds_to_resolution=seconds,
         )

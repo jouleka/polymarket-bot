@@ -49,6 +49,8 @@ RED:
 - Numeric, empty, duplicate, or non-binary token arrays fail.
 - Missing/malformed condition, event, question, deadline, or top-level shape fails.
 - A missing event and an unmapped event are unavailable rather than `unknown`.
+- The event snapshot must independently embed each usable selected condition with the exact sibling
+  token pair; a missing relationship is unavailable and a contradictory pair fails loudly.
 - Identical duplicate rows are idempotent.
 - Conflicting condition definitions and token reuse across conditions fail loudly.
 - If no usable market remains, construction fails loudly.
