@@ -130,12 +130,14 @@ This exact process has caught a real defect on **every** slice of this project. 
 - **Repo (dev checkout on the VPS):** `/root/projects/polymarket-bot`. Canonical: GitHub
   `jouleka/polymarket-bot`, `origin/main`.
 - **Deploy:** `/opt/polymarket-bot` (`polymarket-ingestion.service`, user `polybot`) — currently
-  **STOPPED + DISABLED** pending the downsample fix. Push-to-deploy via the bare repo
-  `/root/git/polymarket-bot.git` (`git push` → on the VPS `git pull` + `bash deploy/install.sh` +
-  restart). Do NOT conflate the dev checkout with the deploy dir. `uv` is at `/root/.local/bin/uv`.
+  **STOPPED + DISABLED**. The existing service checkout still points to a deleted local bare remote and
+  must be repaired before any install. The approved layout uses GitHub-linked dev and service
+  checkouts; **do not recreate `/root/git/polymarket-bot.git`**. Deployment, database migration, and
+  service start are separate owner-approved actions. See `deploy/README.md`.
 - **Venv (gitignored):** `uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python
   pytest "httpx>=0.28" "websockets>=16"`.
-- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → baseline **1145 passing, exit 0**. Run BARE
+- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → baseline **1313 passing, exit 0** on the reviewed
+  POL-13 downsample tree (2026-07-10). Run BARE
   (`-o addopts=""` restores the summary the pyproject `-q` hides). Trust the "NNN passed" line + exit
   0; do NOT pipe through tail/head to judge pass/fail.
 
@@ -144,37 +146,33 @@ This exact process has caught a real defect on **every** slice of this project. 
 `docs/HANDOFF.md` (authoritative current state) → `docs/CONTEXT.md` (onboarding, verified
 Polymarket/Hermes facts, landmines) → `docs/DECISIONS-S0.md` (the risk-envelope numbers) →
 `docs/specs/2026-06-24-autonomous-polymarket-bot-design.md` (master design) →
-`docs/DESIGN-D4a-INGESTION-RUNTIME.md` + `docs/PLAN-D4a-INGESTION-RUNTIME.md` (the freshest worked
-example — mirror its shape) → `deploy/README.md` (deploy runbook).
+`docs/DESIGN-D4a-DOWNSAMPLE.md` + `docs/PLAN-D4a-DOWNSAMPLE.md` (the freshest worked example —
+mirror its shape) → `deploy/README.md` (deploy runbook).
 
 ### Current state
 
-The deterministic engine **S1–S9 is DONE** (1145 tests, strict-TDD + reviewed): S1 ingestion, S3 ERS +
-propose chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusion + truth-gate,
-S7 detectors, S8 maker net-of-cost economics, S9 shadow harness + ramp controller. **D4a** (the
-continuous ingestion runtime, `src/polybot/runtime/`) is DONE + deployed but STOPPED pending the
-downsample fix.
+The deterministic engine **S1–S9 is DONE** (strict-TDD + reviewed): S1 ingestion, S3 ERS + propose
+chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusion + truth-gate, S7
+detectors, S8 maker net-of-cost economics, and S9 shadow harness + ramp controller. The corrected
+**D4a downsample** implementation is release-gated: 1,313 tests, final mutation battery 41/41, and a
+passing 1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. The corrected build is
+not installed; the ingestion service remains stopped and disabled.
 
 ### Build order (owner decision: finish the ENTIRE build, then a ≤2-week light shadow, then live)
 
-1. **D4a downsample fix (POL-13)** — the deployed ingestion persisted the raw WS book firehose
-   ≈30 GB/day (would fill the shared 96 GB disk in ~3 days). The shadow eval never reads raw
-   historical frames (the ERS re-fetches the live book at decision time), so: keep the WS live for the
-   in-memory `LocalBook`, but persist only periodic midpoint **snapshots** per token + the `/trades`
-   tape, not every frame. Brainstorm the exact snapshot design with the owner.
-2. **POL-14 · D1 MarketRegistry** — replace `ers/market_meta.py StubMarketMeta` (pins
+1. **POL-14 · D1 MarketRegistry** — replace `ers/market_meta.py StubMarketMeta` (pins
    `category="unknown"` → k=0) with real Gamma metadata → `(category, question, seconds_to_resolution)`.
-3. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
+2. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
    (WON/LOST/DISPUTED/VOID + value) → settle the ForecastLedger (warms k) + ShadowLedger/MakerLedger.
    Without it the shadow scores ZERO results. Read-only sources (Gamma status + on-chain UMA).
-4. **POL-16 · D3 shadow-execution wiring** — accepted paper intents → S9 `fill_sim` → ShadowLedger;
+3. **POL-16 · D3 shadow-execution wiring** — accepted paper intents → S9 `fill_sim` → ShadowLedger;
    `mark_for` = `LocalBook.midpoint()` live / resolution value at settle; feed the MakerLedger.
-5. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
+4. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
    propose→validate→shadow-execute loop continuously.
-6. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
+5. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
    EXACTLY the 5-tool grant from `deploy/hermes/config.yaml`, with the ProposeOnlyFacade as its MCP
    server.
-7. Then the **≤2-week light shadow**, then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
+6. Then the **≤2-week light shadow**, then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
    owner funding a wallet on a CLEAN box; keys never touch a compromised machine.
 
 ### Git & tickets
@@ -182,9 +180,9 @@ downsample fix.
 - Branch off `main`: `pol-<n>-<slice>`. **OMIT the `Co-Authored-By` trailer.** Commit only when a
   cycle's tests pass. Merge to `main` `--no-ff` with the verification status. Multi-line commit/merge
   messages: write to a file, then `git commit -F <file>`.
-- YouTrack project **POL** at mysigner.youtrack.cloud (via the wired MCP). Post a progress comment
-  when a slice lands. **The MCP cannot transition POL states** — the board is stale; the code is
-  authoritative; the owner flips states in the UI. You CAN create issues + post comments.
+- YouTrack project **POL** at mysigner.youtrack.cloud. Post a progress comment when a slice lands.
+  API access can create issues and comments; state transitions may still require the owner in the UI.
+  Reconcile live ticket fields with executable repository evidence rather than trusting either alone.
 - When a slice lands: post a POL comment, keep `docs/HANDOFF.md` current, update persistent memory.
 
 ### When to STOP and ask the owner

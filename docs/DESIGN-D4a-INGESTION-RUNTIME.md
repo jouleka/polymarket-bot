@@ -1,7 +1,22 @@
 # DESIGN — D4a: Continuous ingestion runtime (shadow-deployment, slice 1)
 
 **Date:** 2026-07-05 · **Ticket:** POL-13 (shadow deployment — slice D4a; tracking ticket TBD) ·
-**Status:** DESIGN (forks operator-resolved 2026-07-05 → awaiting operator spec review → writing-plans).
+**Status:** Original runtime design landed. **D4a-downsample amendment is code-complete, independently reviewed,
+and release-gate verified on the POL-13 feature branch. Merge, push, installation, and activation remain separately
+approval-gated. The VPS service remains STOPPED + DISABLED.**
+
+> **2026-07-10 persistence amendment:** production no longer persists raw CLOB frames. `MarketStream` maintains
+> live books in memory; one versioned `clob-midpoint` batch is sampled every 60 seconds and stored alongside the
+> full deduplicated Data API trade tape. Synthetic events are not reconstructable from this compact history and
+> remain deferred pending a tuned live contract. The immutable release ceiling is **≤0.5 GiB/day** for total
+> DB+WAL+SHM projected over the required 30-minute real-venue run. **The release gate passed on 2026-07-10:**
+> 1,800.006 seconds, 5,586,944 bytes, source counts `{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes,
+> exactly zero raw rows, all batches decoded, no HALT, graceful close, and **0.249755 GiB/day** (exit 0).
+> Earlier evidence remains diagnostic: two 70-second default-ceiling probes failed at 0.866285 and 1.723114 GiB/day
+> under startup/full-page distortion; a five-market E3 smoke passed at 300.006 seconds / 1,515,520 bytes /
+> 0.406486 GiB/day; and a lifecycle-only run used a permissive 5.0 smoke ceiling. Only the 1,800-second result is
+> release evidence.
+> The old raw database must be preserved under an evidence filename before a fresh corrected database is started.
 **Depends on:** S1 ingestion (POL-3) + the off-loop `EventStore` writer (POL-12) — every collector, the
 `EventStore`, the `QueuedEventWriter`, the `MonotonicStamper`, and `ingestion/transport.py` already exist and are
 tested. D4a is a **thin supervision/wiring layer over already-tested components**. **Runs READ-ONLY.** Nothing
@@ -10,22 +25,22 @@ signs, sizes, proposes, or trades — it only ingests public market data into th
 > Master design CONTEXT §5 (architecture) + the load-bearing landmine (CONTEXT §7 / master §7): *"Self-snapshot
 > market data from day one — Polymarket's `/prices-history` is lossy after resolution and order-book history is
 > dead. You cannot backfill it later."* D4a is the operational realization of that mandate and the first slice of
-> POL-11's deferred "actually RUN the shadow period" work: stand up **continuous, durable capture of the
-> un-backfillable order-book + trade stream** on the clean VPS, in an isolated footprint, before anything reasons
-> or trades. It is Phase 0 of the deploy: prove the plumbing + the deploy environment on the smallest possible
-> surface, then layer the Hermes→ERS shadow loop (D1–D4b) on top.
+> POL-11's deferred "actually RUN the shadow period" work: stand up **continuous, bounded capture of the
+> 60-second midpoint substrate + full deduplicated trade tape** on the clean VPS, in an isolated footprint, before
+> anything reasons or trades. Raw order-book history is intentionally not retained: live books exist in memory and
+> are sampled into versioned batches. It is Phase 0 of the deploy: prove the plumbing + the deploy environment on the
+> smallest possible surface, then layer the Hermes→ERS shadow loop (D1–D4b) on top.
 
 ---
 
 ## 0. TL;DR + resolved forks
 
-D4a is a NEW self-contained package `src/polybot/runtime/` — a small config surface, a pure universe-discovery
-function, and a supervision core that runs the existing async collectors in one `asyncio.TaskGroup` with durable,
-signal-driven shutdown. It captures the **irreplaceable** data (live order books via the sharded CLOB WS + the trade
-tape via the Data API) into the durable `EventStore` through the off-loop `QueuedEventWriter`, 24/7, deployable as an
-isolated `polybot`-user systemd service on the VPS. It is **purely additive** — no existing file changes (every
-collector already exposes `async run(...)`). Consumed by nobody upstream yet; it is the data foundation the shadow
-loop (D4b) and the calibration/detector warming will read.
+D4a is a self-contained package `src/polybot/runtime/` — a small config surface, a pure universe-discovery
+function, and a supervision core that runs the existing async collectors plus the midpoint sampler in one
+`asyncio.TaskGroup` with durable, signal-driven shutdown. It retains the compact, point-in-time substrate needed by
+the shadow loop: live sharded CLOB books are maintained in memory, one versioned midpoint batch is persisted every
+60 seconds, and the deduplicated Data API trade tape is retained in full. It is deployable as an isolated `polybot`
+user systemd service on the VPS. It is **read-only** — no component reasons, signs, or trades.
 
 **The durability spine:** every buffered row reaches SQLite on any *clean* exit. `IngestionRuntime.run()` guarantees
 `writer.close()` (drain the queue → join the writer thread → re-raise) runs in a `finally` on cancellation OR on a
@@ -36,9 +51,9 @@ stop) is graceful.
 
 | # | Fork | Decision |
 |---|---|---|
-| 1 | Scope | **Minimal.** Only the un-backfillable stream: Gamma discovery → sharded CLOB WS (book/price_change/last_trade_price) + Data API `/trades` → `EventStore`. Everything else deferred (§6) because none of it is un-backfillable. |
+| 1 | Scope | **Minimal and bounded.** Gamma discovery → sharded CLOB WS maintains live books in memory → one versioned 60-second midpoint batch; Data API `/trades` retains the full deduplicated trade tape. Raw `clob-ws` frames are never sent to the production writer. |
 | 2 | Universe | **Top-N active binary markets by 24h volume** (default N=400 → ~800 tokens → ~2 shards). Bounds WS load; focuses capture on tradeable liquidity. `discover-once at startup`; restart-to-refresh (no live re-subscription in v1 — the collector shards at construction). |
-| 3 | Trade capture | **Data API `/trades` polled as a GLOBAL recency feed** (one request per interval), NOT per-market fan-out (400 markets × 2 s = 200 req/s would be rate-limited). Global-feed pagination/recency semantics are a plan-time verification (default: keep all returned trades; the WS `last_trade_price` is the per-token backstop). |
+| 3 | Trade capture | **Data API `/trades` polled as a GLOBAL recency feed** (one request per interval), NOT per-market fan-out (400 markets × 2 s = 200 req/s would be rate-limited). Keep all returned trades and rely on EventStore event-ID deduplication; WS trade frames may update live in-memory state but are not persisted. |
 | 4 | Testability | **Three layers.** A PURE `IngestionRuntime` supervision core (fake services → hermetic lifecycle/shutdown tests) + a thin `build_ingestion_runtime` production factory (real wiring, one bounded integration smoke) + a `main`/entry point. Matches the project's "pure unit + deferred live integration behind seams" doctrine. |
 
 **Baked (doctrine-forced, not asked):** ONE process-wide `MonotonicStamper` → strictly-increasing global `observed_at`
@@ -57,12 +72,12 @@ composes the sharded WS collector + the Data API poller in one event loop with a
 graceful, durability-preserving shutdown — plus the thin production factory + entry point that make it
 `systemctl`-able. Concretely the units in §4.
 
-**Non-goals (deferred; §6):** the Polygon on-chain watcher, the news fast-path + `CalendarScheduler`, the
-`SyntheticDetector` wiring, and dynamic universe refresh (all in a D4a.2 fast-follow — none is un-backfillable);
-the VPS deployment itself (the `polybot` user, the uv/3.13 venv, the bare-repo push-to-deploy, the systemd unit — that
-is Phase 0 ops, a sibling slice with its own runbook, gated on this code landing); anything Hermes/ERS/shadow-loop
-(D1–D4b); alerting on a HALT (journald + the stopped unit for now). **No change to any existing file** — every
-collector already exposes `run()`; D4a only imports and composes them.
+**Non-goals (deferred; §6):** the Polygon on-chain watcher, the news fast-path + `CalendarScheduler`, dynamic
+universe refresh, and synthetic-event persistence. Synthetic events can no longer be reconstructed from production
+raw history because raw frames are intentionally absent; they require a separately designed, tuned live contract.
+The VPS kit exists, but activation of the corrected runtime is an operations action gated on review, the 30-minute
+rate test, merge/push approval, old-DB evidence preservation, and separate service start/enable approval. Anything
+Hermes/ERS/shadow-loop (D1–D4b) remains outside this runtime slice.
 
 ## 2. Architecture
 
@@ -85,21 +100,22 @@ src/polybot/runtime/  (NEW package — additive; the composition root that did n
 
   entry point:  python -m polybot.runtime.ingestion   (the module's __main__ guard calls main())
 
-  (reuses, unchanged: ingestion.sharding.ShardedMarketCollector, ingestion.data_api.DataApiPoller,
-   ingestion.market_stream.MarketStream, ingestion.persistence.PersistingSink, ingestion.transport.*,
+  (reuses: ingestion.sharding.ShardedMarketCollector, ingestion.data_api.DataApiPoller,
+   ingestion.market_stream.MarketStream, ingestion.midpoint.MidpointSnapshotter, ingestion.transport.*,
    storage.event_writer.QueuedEventWriter, storage.market_memory.EventStore, core.clock.MonotonicStamper,
    ers.heartbeat.* for the liveness file.)
 ```
 
-- **One event loop, one writer thread, one stamper.** The sharded WS collector runs its shards as concurrent tasks
-  inside its own internal `TaskGroup`; the Data API poller runs as a sibling task; the heartbeat as a third. All feed
-  the one `QueuedEventWriter` (via `PersistingSink` for WS, directly for the poller) and stamp from the one
-  `MonotonicStamper` → global strictly-increasing `observed_at`.
-- **Supervision is the only new logic.** Composition + cancellation + the durability-preserving `finally` +
-  heartbeat. Everything data-shaped (frames, resync, sharding, retry, sanitization) is already tested in S1.
-- **Data-flow:** `Gamma /markets → token_ids` → sharded WS `book`/`price_change`/`last_trade_price` → `MarketStream`
-  (sync, on-loop) → `PersistingSink` → `writer.append()` (µs enqueue) → off-loop writer thread → `EventStore.append`
-  (SQLite WAL). Data API global `/trades` polled every `data_api_interval_seconds` on its own task → same writer.
+- **One event loop, one writer thread, one stamper.** The sharded WS collector maintains live books in memory; the
+  midpoint snapshotter and Data API poller are sibling supervised services. Only the snapshotter and poller feed the
+  one `QueuedEventWriter`. The one `MonotonicStamper` preserves globally increasing `observed_at` values.
+- **The raw path ends in memory.** WS `book`/`price_change`/`last_trade_price` frames update `MarketStream`; there is no
+  production `PersistingSink` on that path. Every 60 seconds `MidpointSnapshotter` obtains usable non-stale books,
+  validates exact decimal strings, and emits one versioned batch. Data API `/trades` rows go directly to the writer
+  and retain their existing EventStore event-ID deduplication.
+- **Data-flow:** `Gamma /markets → token_ids` → sharded CLOB WS → in-memory `MarketStream` → periodic
+  `clob-midpoint` batch → writer → SQLite WAL; Data API global `/trades` → same writer. A snapshot writer error or
+  collector return propagates as a supervised HALT, after which the writer is closed and drained.
 
 ## 3. Durability & lifecycle contract (the load-bearing behaviour)
 
@@ -126,6 +142,7 @@ class IngestionConfig:
     data_api_enabled: bool = True
     data_api_interval_seconds: float = 2.0
     data_api_limit: int = 500                     # /trades page size (global recency feed)
+    snapshot_interval_seconds: float = 60.0       # one versioned midpoint batch per cadence
     heartbeat_path: str | None = None             # None => no heartbeat file
     heartbeat_interval_seconds: float = 5.0
     gamma_url: str = GAMMA_URL                     # from ingestion.transport
@@ -165,10 +182,12 @@ def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_con
     # data_fetch -> transport.make_httpx_fetch(DATA_API_URL); clock -> MonotonicStamper()'s clock.
     #   token_ids = discover_universe(gamma_fetch, config)
     #   writer    = QueuedEventWriter(EventStore(config.db_path, check_same_thread=False))
-    #   ws        = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=PersistingSink(writer),
+    #   ws        = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=None,
     #                                      max_assets_per_shard=config.max_assets_per_shard, reconnect_on=WS_RECONNECT_ON)
-    #   data      = DataApiPoller(data_fetch, stamper, writer)   # global /trades; run(interval=config.data_api_interval_seconds)
-    #   return IngestionRuntime(services=[ws-as-service, data-as-service], writer=writer, heartbeat=..., clock=...)
+    #   snapshot  = MidpointSnapshotter(token_ids=token_ids, book_for=ws.book_for, stamper=stamper,
+    #                                   writer=writer, interval_seconds=config.snapshot_interval_seconds)
+    #   data      = DataApiPoller(data_fetch, stamper, writer)   # global /trades when enabled
+    #   return IngestionRuntime(services=[ws, snapshot, optional data], writer=writer, heartbeat=..., clock=...)
 
 def main(argv: Sequence[str] | None = None) -> int:
     # load_config(argv's --config) -> build_ingestion_runtime -> loop.add_signal_handler(SIGTERM/SIGINT, request_stop)
@@ -181,36 +200,41 @@ collector-specific signatures and is trivially fakeable in tests.*
 
 ## 5. Safety / correctness invariants
 
-1. **Read-only.** No signer, no IntentStore, no ERS. D4a cannot place, size, propose, or move anything. (Structural:
-   it imports only `ingestion/`, `storage/`, `core/`, and `ers/heartbeat.py` — never the validator/facade/signer.)
+1. **Read-only.** No signer, no IntentStore, no order path. The runtime composition root imports only ingestion,
+   storage, core, and heartbeat surfaces. The amendment's isolated `ers/comove.py` adapter reads EventStore data and
+   the midpoint decoder; it does not touch validator, service, caps, safety state, or signer behavior.
 2. **Durability:** `writer.close()` called **exactly once** on every exit path (A4/A5). No row lost except on SIGKILL.
 3. **Global ordering:** one `MonotonicStamper` for all sources → strictly-increasing unique `observed_at`
    (replay/no-look-ahead invariant from S1, preserved).
 4. **Fail loud:** config invalid → construction raises; a venue format change → HALT propagates (never silently
    swallowed); a Gamma schema change in discovery → raise, never a silently-empty universe.
-5. **Purely additive:** only `src/polybot/runtime/**` + `tests/**` are created. `git diff --stat` shows no existing
-   `src/` file modified. Baseline 1113 stays green.
+5. **File-scope evidence.** The original landed D4a runtime was additive under `src/polybot/runtime/**`. The later
+   POL-13 downsample amendment intentionally adds `src/polybot/ingestion/midpoint.py`, modifies runtime config/wiring,
+   and changes only the isolated `src/polybot/ers/comove.py` replay adapter outside those packages. Signed risk,
+   validation, service, intent, safety, and signer surfaces remain byte-identical to `main`.
 6. **Bounded footprint:** the universe is capped (top-N); the writer queue is bounded (`max_queued`); the poller is a
    single global request per interval — no unbounded fan-out.
 
 ## 6. Built-now vs deferred
 
-**Built now (D4a):** config + loader · `discover_universe` · `IngestionRuntime` supervision core + durable shutdown +
-heartbeat · `build_ingestion_runtime` + the `_supervised` fail-loud guard (a collector returning normally → loud HALT,
-added per the D4a-3 review) + `main` + entry point · one bounded integration smoke. **LANDED on `main` (7 sub-commits,
-suite 1113 → 1145); both-stage-reviewed per sub-slice + a whole-slice review (read-only import invariant proven, the
-durability spine mutation-pinned in both the core and e2e layers).**
+**Built now:** original D4a runtime plus the POL-13 downsample amendment: WS books remain live in memory with
+`sink=None`; `MidpointSnapshotter` writes one strict, versioned batch at the configured 60-second cadence; Data API
+trade payload/projection/dedup behavior is unchanged; `build_bar_series` auto-selects midpoint rows while retaining
+explicit legacy raw replay. Unit/integration, independent spec, and 41-mutation gates are green; the real
+1,800-second release gate passed at 0.249755 GiB/day. **Code acceptance is complete. Merge, push, old-DB evidence
+preservation, installation, and service activation remain separate approval-gated actions.**
 
-**Deferred — D4a.2 fast-follow (none un-backfillable):** the `PolygonLogWatcher` service (on-chain logs are
-re-queryable by block range) · the `NewsPoller` + `CalendarScheduler` (feeds re-fetchable; only matters once Hermes
-reads them) · the `SyntheticDetector` wiring (its events are recomputable from stored raw frames) · **dynamic
-universe refresh** (live re-subscription / periodic re-discovery + graceful collector rebuild) · HALT alerting
+**Deferred — D4a.2:** the `PolygonLogWatcher` service (on-chain logs are re-queryable by block range) · the
+`NewsPoller` + `CalendarScheduler` (feeds re-fetchable; only matters once Hermes reads them) · **synthetic-event
+persistence** (not recomputable from the compact production substrate; requires a tuned live contract) · dynamic
+universe refresh (live re-subscription / periodic re-discovery + graceful collector rebuild) · HALT alerting
 (Telegram/S4.6 notify).
 
-**Deferred — sibling ops slice (Phase 0 deploy, gated on this code):** the `polybot` Linux user · the uv + standalone
-Python 3.13 venv (mirror `memebot`) · `/opt/polymarket-bot` layout + `config.toml`/`.env` (0600) + `data/` ·
-`/root/git/polymarket-bot.git` bare repo + push-to-deploy · the `polymarket-ingestion.service` systemd unit
-(`Restart=on-failure`, start-limit) · egress/log posture. Documented in a `deploy/` runbook, not here.
+**Operations state:** the VPS user/tree/unit were previously installed, but the service is **STOPPED + DISABLED**
+after the raw firehose measured roughly 30 GB/day. Deployment of this corrected build is not approved. It must use
+the GitHub-authoritative checkout flow (no recreated `/root/git/polymarket-bot.git`), preserve and hash the old raw
+DB under an evidence filename, start from a fresh `market_memory.db`, and keep the unit stopped until separate
+start/enable approval.
 
 **Deferred — later slices:** D1 MarketRegistry · D2 resolution feed · D3 shadow-execution wiring · D4b the full
 ERS+harness runtime.
@@ -226,7 +250,7 @@ ERS+harness runtime.
 | A5 | A fake service that RAISES → `run()` re-raises loudly **and** `writer.close()` still called **exactly once** (durability on crash). |
 | A6 | With a `heartbeat` configured, the heartbeat file is (re)written at least once while running. |
 | A7 | `build_ingestion_runtime` wires the REAL collectors and, in a bounded integration smoke (few seconds, live venue or a local WS fake), persists ≥1 row end-to-end through the durable store. |
-| A8 | **Additive invariant:** `git diff --name-only main` lists only `src/polybot/runtime/**`, `tests/**`, `docs/**`. Full suite: 1113 prior tests + the new ones, green, exit 0. |
+| A8 | **Historical original-runtime criterion:** the landed D4a implementation was limited to runtime/tests/docs and raised the baseline above 1113. **Amendment evidence:** the POL-13 downsample range is the explicit file surface in `DESIGN-D4a-DOWNSAMPLE.md` §6; full suite, sacred-surface hashes, and structural no-trading checks must pass. |
 
 ## 8. Sub-slice decomposition (build order — strict TDD, one implementer each, serial on the branch)
 

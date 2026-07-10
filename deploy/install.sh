@@ -9,6 +9,22 @@ APP=/opt/polymarket-bot
 SVC_USER=polybot
 UV=/root/.local/bin/uv
 
+verify_service_stopped_disabled() {
+    local active_state=
+    if active_state=$(systemctl is-active polymarket-ingestion.service 2>&1); then :; fi
+    if [ "$active_state" != "inactive" ]; then
+        echo "ERROR: expected polymarket-ingestion.service inactive, got: $active_state" >&2
+        return 1
+    fi
+
+    local enabled_state=
+    if enabled_state=$(systemctl is-enabled polymarket-ingestion.service 2>&1); then :; fi
+    if [ "$enabled_state" != "disabled" ]; then
+        echo "ERROR: expected polymarket-ingestion.service disabled, got: $enabled_state" >&2
+        return 1
+    fi
+}
+
 echo "== 1. system user ($SVC_USER, nologin) =="
 if ! id "$SVC_USER" >/dev/null 2>&1; then
     useradd --system --home "$APP" --shell /usr/sbin/nologin "$SVC_USER"
@@ -44,13 +60,13 @@ echo "== 5. ownership (ONLY the writable data dir -> $SVC_USER) =="
 # dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 in the unit keeps src/ write-free.
 chown -R "$SVC_USER:$SVC_USER" "$APP/data"
 
-echo "== 6. systemd unit =="
+echo "== 6. systemd unit (install only; remain stopped + disabled) =="
+# Activation is a separate owner-approved action. An update must never restart or enable capture implicitly.
 cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service
 systemctl daemon-reload
-systemctl enable polymarket-ingestion.service
+systemctl disable --now polymarket-ingestion.service
+verify_service_stopped_disabled
 
 echo
-echo "installed. Next:"
-echo "   systemctl start polymarket-ingestion.service"
-echo "   journalctl -u polymarket-ingestion.service -f"
-echo "   ls -l $APP/data/          # market_memory.db + heartbeat should appear + grow"
+echo "installed; service remains STOPPED + DISABLED"
+echo "   verify config + release evidence, then follow deploy/README.md only after separate activation approval"

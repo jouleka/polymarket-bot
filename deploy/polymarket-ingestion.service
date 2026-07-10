@@ -1,5 +1,5 @@
 [Unit]
-Description=polymarket-bot ingestion (read-only shadow Phase-0; captures the un-backfillable order-book + trade stream)
+Description=polymarket-bot ingestion (read-only shadow Phase-0; 60-second midpoint batches + trade tape)
 After=network-online.target
 Wants=network-online.target
 # Fail-loud: a PERSISTENT venue format-change HALT trips this limit and stays down for a human

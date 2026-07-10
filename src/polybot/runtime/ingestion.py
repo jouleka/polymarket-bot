@@ -11,7 +11,7 @@ import sys
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.heartbeat import Heartbeat
 from polybot.ingestion.data_api import DataApiPoller
-from polybot.ingestion.persistence import PersistingSink
+from polybot.ingestion.midpoint import MidpointSnapshotter
 from polybot.ingestion.sharding import ShardedMarketCollector
 from polybot.ingestion.transport import DATA_API_URL, WS_RECONNECT_ON, make_httpx_fetch, open_market_ws
 from polybot.storage.event_writer import QueuedEventWriter
@@ -83,8 +83,9 @@ def _supervised(name, factory):
 
 def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
                             data_fetch=None, stamper=None) -> IngestionRuntime:
-    """Live wiring: discover the universe, then one QueuedEventWriter(EventStore) fed by the sharded WS collector
-    (+ the Data API /trades poller when enabled). Injectable seams default to the real transport factories."""
+    """Live wiring: discover the universe, then run the sharded WS collector in-memory while one
+    QueuedEventWriter(EventStore) is fed by the midpoint snapshotter (+ the full Data API /trades poller when
+    enabled). Injectable seams default to the real transport factories."""
     stamper = stamper or MonotonicStamper()
     gamma_fetch = gamma_fetch or make_gamma_fetch(config.gamma_url)
     ws_connect = ws_connect or open_market_ws
@@ -93,10 +94,20 @@ def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_con
     token_ids = discover_universe(gamma_fetch, config)
     writer = QueuedEventWriter(EventStore(config.db_path, check_same_thread=False))
 
-    ws = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=PersistingSink(writer),
+    ws = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=None,
                                 max_assets_per_shard=config.max_assets_per_shard,
                                 reconnect_on=WS_RECONNECT_ON)
-    services = [_supervised("clob-ws", lambda: ws.run(max_connections=None))]
+    snapshotter = MidpointSnapshotter(
+        token_ids=token_ids,
+        book_for=ws.book_for,
+        stamper=stamper,
+        writer=writer,
+        interval_seconds=config.snapshot_interval_seconds,
+    )
+    services = [
+        _supervised("clob-ws", lambda: ws.run(max_connections=None)),
+        _supervised("clob-midpoint", snapshotter.run),
+    ]
 
     if config.data_api_enabled:
         poller = DataApiPoller(data_fetch, stamper, writer)
