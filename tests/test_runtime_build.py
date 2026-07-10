@@ -1,4 +1,6 @@
+import ast
 import asyncio
+import inspect
 import json
 from decimal import Decimal
 
@@ -7,11 +9,12 @@ from polybot.runtime.config import IngestionConfig
 from polybot.runtime.ingestion import IngestionRuntime, build_ingestion_runtime, _supervised
 
 
-def test_supervised_normal_return_becomes_halt():
+@pytest.mark.parametrize("name", ["x", "clob-ws", "clob-midpoint", "data-api"])
+def test_supervised_normal_return_becomes_halt_for_every_service_name(name):
     async def returns_immediately():
         return
     async def scenario():
-        await _supervised("x", returns_immediately)()
+        await _supervised(name, returns_immediately)()
     with pytest.raises(RuntimeError, match="returned unexpectedly"):
         asyncio.run(scenario())
 
@@ -108,12 +111,90 @@ def test_build_structurally_disables_raw_ws_persistence(tmp_path, monkeypatch):
         assert captured["collector"]["sink"] is None
         assert captured["collector"]["stamper"] is stamper
         assert captured["collector"]["token_ids"] == ("t1", "t2")
+        assert set(captured["collector"]["kwargs"]) == {"max_assets_per_shard", "reconnect_on"}
         assert captured["snapshotter"]["token_ids"] == ["t1", "t2"]
         assert captured["snapshotter"]["stamper"] is stamper
         assert captured["snapshotter"]["writer"] is rt._writer
         assert captured["snapshotter"]["interval_seconds"] == 12.5
         assert captured["snapshotter"]["book_for"].__self__.__class__ is FakeCollector
         assert not hasattr(ingestion, "PersistingSink")
+    finally:
+        rt._writer.close()
+
+
+def test_runtime_source_imports_no_raw_or_synthetic_persistence_helpers():
+    from polybot.runtime import ingestion
+
+    tree = ast.parse(inspect.getsource(ingestion))
+    imported_modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+
+    forbidden = {
+        "polybot.ingestion.persistence",
+        "polybot.ingestion.synthetic",
+    }
+    assert imported_modules.isdisjoint(forbidden)
+
+
+def test_build_pins_full_trade_service_wiring(tmp_path, monkeypatch):
+    from polybot.runtime import ingestion
+
+    captured = {}
+
+    class FakeCollector:
+        def __init__(self, _connect, _stamper, _token_ids, *, sink, **_kwargs):
+            assert sink is None
+
+        def book_for(self, _token_id):
+            return None
+
+        async def run(self, max_connections=None):
+            await asyncio.Event().wait()
+
+    class FakeSnapshotter:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self):
+            await asyncio.Event().wait()
+
+    class FakePoller:
+        def __init__(self, fetch, stamper, writer):
+            captured["poller"] = (fetch, stamper, writer)
+
+        async def run(self, path, **kwargs):
+            captured["run"] = (path, kwargs)
+
+    monkeypatch.setattr(ingestion, "ShardedMarketCollector", FakeCollector)
+    monkeypatch.setattr(ingestion, "MidpointSnapshotter", FakeSnapshotter)
+    monkeypatch.setattr(ingestion, "DataApiPoller", FakePoller)
+    fetch = object()
+    stamper = object()
+    cfg = IngestionConfig(
+        db_path=str(tmp_path / "m.db"),
+        data_api_enabled=True,
+        data_api_limit=321,
+        data_api_interval_seconds=7.5,
+    )
+    rt = build_ingestion_runtime(
+        cfg,
+        gamma_fetch=lambda params: _rows(),
+        ws_connect=object(),
+        data_fetch=fetch,
+        stamper=stamper,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="data-api"):
+            asyncio.run(rt._services[2]())
+        assert captured["poller"] == (fetch, stamper, rt._writer)
+        assert captured["run"] == (
+            "/trades",
+            {"params": {"limit": 321}, "interval": 7.5},
+        )
     finally:
         rt._writer.close()
 

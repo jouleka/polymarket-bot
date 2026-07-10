@@ -47,8 +47,10 @@ def test_trade_tape_retains_the_complete_source_item(tmp_path):
         "proxyWallet": "0xwallet",
         "timestamp": "1719331200000",
         "transactionHash": "0xhash",
+        "feeRateBps": "25",
         "outcome": "Yes",
         "title": "full fidelity sentinel",
+        "futureVenueField": {"nested": ["must", "survive"]},
     }
     store = EventStore(str(tmp_path / "mm.db"))
     poller = DataApiPoller(_fetch_returning([item]), MonotonicStamper(clock=lambda: 1), store)
