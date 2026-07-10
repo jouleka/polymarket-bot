@@ -9,6 +9,22 @@ APP=/opt/polymarket-bot
 SVC_USER=polybot
 UV=/root/.local/bin/uv
 
+verify_service_stopped_disabled() {
+    local active_state=
+    if active_state=$(systemctl is-active polymarket-ingestion.service 2>&1); then :; fi
+    if [ "$active_state" != "inactive" ]; then
+        echo "ERROR: expected polymarket-ingestion.service inactive, got: $active_state" >&2
+        return 1
+    fi
+
+    local enabled_state=
+    if enabled_state=$(systemctl is-enabled polymarket-ingestion.service 2>&1); then :; fi
+    if [ "$enabled_state" != "disabled" ]; then
+        echo "ERROR: expected polymarket-ingestion.service disabled, got: $enabled_state" >&2
+        return 1
+    fi
+}
+
 echo "== 1. system user ($SVC_USER, nologin) =="
 if ! id "$SVC_USER" >/dev/null 2>&1; then
     useradd --system --home "$APP" --shell /usr/sbin/nologin "$SVC_USER"
@@ -49,20 +65,7 @@ echo "== 6. systemd unit (install only; remain stopped + disabled) =="
 cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service
 systemctl daemon-reload
 systemctl disable --now polymarket-ingestion.service
-
-active_state=
-if active_state=$(systemctl is-active polymarket-ingestion.service 2>&1); then :; fi
-if [ "$active_state" != "inactive" ]; then
-    echo "ERROR: expected polymarket-ingestion.service inactive, got: $active_state" >&2
-    exit 1
-fi
-
-enabled_state=
-if enabled_state=$(systemctl is-enabled polymarket-ingestion.service 2>&1); then :; fi
-if [ "$enabled_state" != "disabled" ]; then
-    echo "ERROR: expected polymarket-ingestion.service disabled, got: $enabled_state" >&2
-    exit 1
-fi
+verify_service_stopped_disabled
 
 echo
 echo "installed; service remains STOPPED + DISABLED"
