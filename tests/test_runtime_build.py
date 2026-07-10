@@ -56,6 +56,65 @@ def test_build_omits_data_api_when_disabled(tmp_path):
     assert len(rt._services) == 2                       # ws + midpoint
 
 
+def test_build_structurally_disables_raw_ws_persistence(tmp_path, monkeypatch):
+    from polybot.runtime import ingestion
+
+    captured = {}
+
+    class FakeCollector:
+        def __init__(self, connect, stamper, token_ids, *, sink, **kwargs):
+            captured["collector"] = {
+                "connect": connect,
+                "stamper": stamper,
+                "token_ids": tuple(token_ids),
+                "sink": sink,
+                "kwargs": kwargs,
+            }
+
+        def book_for(self, token_id):
+            return token_id
+
+        async def run(self, max_connections=None):
+            await asyncio.sleep(3600)
+
+    class FakeSnapshotter:
+        def __init__(self, **kwargs):
+            captured["snapshotter"] = kwargs
+
+        async def run(self):
+            await asyncio.sleep(3600)
+
+    monkeypatch.setattr(ingestion, "ShardedMarketCollector", FakeCollector)
+    monkeypatch.setattr(ingestion, "MidpointSnapshotter", FakeSnapshotter)
+    cfg = IngestionConfig(
+        db_path=str(tmp_path / "m.db"),
+        data_api_enabled=False,
+        snapshot_interval_seconds=12.5,
+    )
+    stamper = object()
+    connect = object()
+
+    rt = build_ingestion_runtime(
+        cfg,
+        gamma_fetch=lambda params: _rows(),
+        ws_connect=connect,
+        data_fetch=object(),
+        stamper=stamper,
+    )
+    try:
+        assert captured["collector"]["sink"] is None
+        assert captured["collector"]["stamper"] is stamper
+        assert captured["collector"]["token_ids"] == ("t1", "t2")
+        assert captured["snapshotter"]["token_ids"] == ["t1", "t2"]
+        assert captured["snapshotter"]["stamper"] is stamper
+        assert captured["snapshotter"]["writer"] is rt._writer
+        assert captured["snapshotter"]["interval_seconds"] == 12.5
+        assert captured["snapshotter"]["book_for"].__self__.__class__ is FakeCollector
+        assert not hasattr(ingestion, "PersistingSink")
+    finally:
+        rt._writer.close()
+
+
 def test_build_supervises_all_services(tmp_path):
     cfg = IngestionConfig(db_path=str(tmp_path / "m.db"), universe_max_markets=5)
     rt = build_ingestion_runtime(cfg, gamma_fetch=lambda params: _rows(),
