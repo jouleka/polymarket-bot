@@ -3,6 +3,7 @@
 **Status:** owner-approved 2026-07-10
 **Ticket:** POL-14 (child of POL-13)
 **Branch:** `pol-14-market-registry`
+**Verification:** [VERIFICATION-POL14-MARKET-REGISTRY.md](VERIFICATION-POL14-MARKET-REGISTRY.md)
 
 ## 1. Purpose
 
