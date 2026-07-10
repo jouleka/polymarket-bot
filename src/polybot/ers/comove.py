@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.market_stream import MarketStream
+from polybot.ingestion.midpoint import MIDPOINT_SOURCE, decode_midpoint_batch
 from polybot.ers.validator import ClusterView
 
 _RHO_QUANTUM = Decimal("0.000001")  # quantize rho to 6dp for deterministic, stable caps
@@ -83,19 +84,18 @@ def correlation(returns_a, returns_b):
     return rho
 
 
-def build_bar_series(store, *, bar_ns, until=None, source="clob-ws"):
-    """Reconstruct per-token midpoint BARS from the Market-Memory EventStore in a SINGLE
-    forward pass: replay the stored ``clob-ws`` frames in observed_at order through one
-    ``MarketStream`` (reusing the proven, gap-detecting reconstruction), and at each bar
-    boundary record every tracked token's closing midpoint. Point-in-time / no-look-ahead:
-    ``until`` (an observed_at cutoff) bounds the rows replayed.
+def _build_midpoint_bars(envelopes, *, bar_ns):
+    bars = {}
+    for env in envelopes:
+        if env.source != MIDPOINT_SOURCE:
+            continue
+        bar_index = env.observed_at // bar_ns
+        for token, quote in decode_midpoint_batch(env.content).items():
+            bars.setdefault(token, {})[bar_index] = quote.midpoint
+    return bars
 
-    Bars key on absolute ``observed_at // bar_ns`` so series across tokens align on a common
-    grid. A token with no fresh book in a bar (snapshot not yet seen, or stale after a gap ->
-    ``midpoint()`` is None) simply gets no sample for that bar -- the estimator then aligns on
-    the bars both tokens actually have.
-    """
-    envelopes = store.all() if until is None else store.replay_until(until)
+
+def _build_raw_bars(envelopes, *, bar_ns, source):
     stream = MarketStream(MonotonicStamper())
     bars = {}            # token -> {bar_index: midpoint}
     universe = []        # tokens seen, in first-seen order (stable, no dependence on dict order)
@@ -127,3 +127,22 @@ def build_bar_series(store, *, bar_ns, until=None, source="clob-ws"):
     if cur_bar is not None:
         close_bar(cur_bar)
     return bars
+
+
+def build_bar_series(store, *, bar_ns, until=None, source=None):
+    """Build exact per-token closing-midpoint bars from one bounded store view.
+
+    Auto mode prefers midpoint batches and otherwise preserves legacy raw-frame replay.
+    Explicit midpoint mode never falls back; any other explicit source uses raw replay.
+    """
+    envelopes = store.all() if until is None else store.replay_until(until)
+    selected_source = source
+    if selected_source is None:
+        selected_source = (
+            MIDPOINT_SOURCE
+            if any(env.source == MIDPOINT_SOURCE for env in envelopes)
+            else "clob-ws"
+        )
+    if selected_source == MIDPOINT_SOURCE:
+        return _build_midpoint_bars(envelopes, bar_ns=bar_ns)
+    return _build_raw_bars(envelopes, bar_ns=bar_ns, source=selected_source)

@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from polybot.core.models import Envelope
 from polybot.ers.comove import ClusterModel, build_bar_series, correlation
+from polybot.ingestion.midpoint import MIDPOINT_SCHEMA, MIDPOINT_SOURCE
 from polybot.ers.validator import ClusterView
 from polybot.storage.market_memory import EventStore
 
@@ -104,6 +105,45 @@ def _ws_env(asset, frame, observed_at):
     return Envelope(source="clob-ws", source_tier="VENUE",
                     event_id=f"{asset}:book:{observed_at}", observed_at=observed_at,
                     content=json.dumps(frame), market_links=(asset,))
+
+
+def _mid_env(observed_at, books):
+    payload = {
+        "schema": MIDPOINT_SCHEMA,
+        "books": {
+            token: {"bid": bid, "ask": ask, "mid": mid}
+            for token, (bid, ask, mid) in books.items()
+        },
+    }
+    return Envelope(
+        source=MIDPOINT_SOURCE,
+        source_tier="VENUE",
+        event_id=f"midpoint:{observed_at}",
+        observed_at=observed_at,
+        content=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        market_links=tuple(sorted(books)),
+    )
+
+
+def test_build_bar_series_reads_midpoint_batches_and_uses_bar_close():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(0, {
+            "A": ("0.60", "0.62", "0.61"),
+            "B": ("0.30", "0.32", "0.31"),
+        }))
+        store.append(_mid_env(10, {
+            "A": ("0.50", "0.52", "0.51"),
+        }))
+        store.append(_mid_env(1000, {
+            "A": ("0.70", "0.72", "0.71"),
+            "B": ("0.34", "0.36", "0.35"),
+        }))
+
+        bars = build_bar_series(store, bar_ns=1000)
+
+    assert bars["A"] == {0: Decimal("0.51"), 1: Decimal("0.71")}
+    assert bars["B"] == {0: Decimal("0.31"), 1: Decimal("0.35")}
+
 
 
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
