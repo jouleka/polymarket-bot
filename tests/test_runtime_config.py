@@ -1,6 +1,8 @@
 import math
 import inspect
+import tomllib
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 from polybot.runtime.config import IngestionConfig
@@ -95,6 +97,17 @@ def test_config_has_only_the_approved_fields_and_no_persistence_escape_hatch():
     }
     assert {field.name for field in fields(IngestionConfig)} == approved
     assert set(inspect.signature(IngestionConfig).parameters) == approved
+
+
+def test_deploy_example_explicitly_configures_snapshot_cadence():
+    from polybot.runtime.config import load_config
+
+    path = Path(__file__).parents[1] / "deploy" / "config.example.toml"
+    raw = tomllib.loads(path.read_text())
+    assert raw["snapshot_interval_seconds"] == 60.0
+
+    cfg = load_config(str(path), env={})
+    assert cfg.snapshot_interval_seconds == 60.0
 
 
 def test_load_config_env_only():
