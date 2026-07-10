@@ -10,8 +10,11 @@ STOPPED + DISABLED.**
 > full deduplicated Data API trade tape. Synthetic events are not reconstructable from this compact history and
 > remain deferred pending a tuned live contract. The immutable release ceiling is **≤0.5 GiB/day** for total
 > DB+WAL+SHM projected over the required 30-minute real-venue run. That gate has not run yet. Two 70-second
-> default-ceiling probes correctly failed at 0.866285 and 1.723114 GiB/day; a separate smoke-only run exercised
-> graceful PASS/exit-zero at 0.870920 GiB/day under an explicitly permissive 5.0 ceiling. None is release evidence.
+> default-ceiling probes correctly failed at 0.866285 and 1.723114 GiB/day because startup/full-page costs dominated.
+> A longer five-market E3 smoke then passed the real 0.5 ceiling: 300.006 seconds, 1,515,520 bytes, source counts
+> `{"clob-midpoint":4,"data-api":1000}`, 40 usable quotes, zero raw rows, and 0.406486 GiB/day. A separate
+> lifecycle-only run had earlier exercised PASS at 0.870920 GiB/day under a permissive 5.0 smoke ceiling. None of
+> these short runs is the required 1,800-second release evidence.
 > The old raw database must be preserved under an evidence filename before a fresh corrected database is started.
 **Depends on:** S1 ingestion (POL-3) + the off-loop `EventStore` writer (POL-12) — every collector, the
 `EventStore`, the `QueuedEventWriter`, the `MonotonicStamper`, and `ingestion/transport.py` already exist and are

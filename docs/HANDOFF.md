@@ -416,10 +416,12 @@ The VPS kit still exists (`srv1779077`; dedicated `polybot` user, `/opt/polymark
 service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected build has
 not been merged, pushed, installed, enabled, or started. The required release gate is a real 1800-second, 200-market
 capture at total DB+WAL+SHM **≤0.5 GiB/day**, with midpoint+trade rows, zero raw rows, all batches decodable, no HALT,
-and graceful close. That gate remains pending until whole-slice reviews pass. Early 70-second probes at the true
-0.5 ceiling correctly failed at 0.866285 and 1.723114 GiB/day; a smoke-only run proved PASS/exit-zero at 0.870920
-GiB/day under a deliberately permissive 5.0 ceiling. These short runs are not release evidence and the ceiling must
-not be loosened if the 30-minute gate fails.
+and graceful close. That gate remains pending until whole-slice reviews pass. Two 70-second probes at the true
+0.5 ceiling failed at 0.866285 and 1.723114 GiB/day under startup/full-page distortion. A longer five-market E3
+smoke passed without loosening the ceiling: 300.006 seconds, 1,515,520 bytes, source counts
+`{"clob-midpoint":4,"data-api":1000}`, 40 usable quotes, zero raw rows, 0.406486 GiB/day, exit 0. A separate
+lifecycle-only smoke had earlier passed under a deliberately permissive 5.0 ceiling. None of these short runs is the
+required 1,800-second release evidence; the ceiling must not be loosened if that gate fails.
 
 Any later deployment requires separate approval and must use the GitHub-authoritative checkout pattern (never
 recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte
