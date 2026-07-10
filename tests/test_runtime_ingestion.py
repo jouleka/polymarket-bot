@@ -30,6 +30,42 @@ def test_runs_all_services_then_stops_cleanly():
     assert w.close_calls == 1                    # durability: closed exactly once
 
 
+def test_production_shaped_three_services_cancel_and_close_writer_once():
+    started = set()
+    cancelled = set()
+    all_started = asyncio.Event()
+    never = asyncio.Event()
+
+    def service(name):
+        async def run():
+            started.add(name)
+            if len(started) == 3:
+                all_started.set()
+            try:
+                await never.wait()
+            finally:
+                cancelled.add(name)
+        return run
+
+    writer = FakeWriter()
+
+    async def scenario():
+        runtime = IngestionRuntime(
+            services=[service("clob-ws"), service("clob-midpoint"), service("data-api")],
+            writer=writer,
+        )
+        task = asyncio.create_task(runtime.run())
+        await asyncio.wait_for(all_started.wait(), timeout=1)
+        runtime.request_stop()
+        await asyncio.wait_for(task, timeout=1)
+        # Assert before asyncio.run() cleanup can cancel an accidentally detached task.
+        assert cancelled == started
+
+    asyncio.run(scenario())
+    assert started == {"clob-ws", "clob-midpoint", "data-api"}
+    assert writer.close_calls == 1
+
+
 def test_service_halt_propagates_and_still_closes_writer():
     async def good():
         await asyncio.sleep(3600)

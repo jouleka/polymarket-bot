@@ -21,6 +21,7 @@ class IngestionConfig:
     max_assets_per_shard: int = 500
     data_api_enabled: bool = True
     data_api_interval_seconds: float = 2.0
+    snapshot_interval_seconds: float = 60.0
     data_api_limit: int = 500
     heartbeat_path: str | None = None
     heartbeat_interval_seconds: float = 5.0
@@ -36,9 +37,12 @@ class IngestionConfig:
             raise ValueError("max_assets_per_shard must be >= 1")
         if self.data_api_limit < 1:
             raise ValueError("data_api_limit must be >= 1")
-        for name in ("data_api_interval_seconds", "heartbeat_interval_seconds"):
+        for name in (
+            "data_api_interval_seconds", "snapshot_interval_seconds",
+            "heartbeat_interval_seconds",
+        ):
             v = getattr(self, name)
-            if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+            if not (type(v) in (int, float) and math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} must be finite and > 0")
         if self.log_level not in _LOG_LEVELS:
             raise ValueError(f"log_level must be one of {sorted(_LOG_LEVELS)}")
@@ -46,7 +50,9 @@ class IngestionConfig:
 
 _ENV_PREFIX = "POLYBOT_INGEST_"
 _INT_FIELDS = {"universe_max_markets", "max_assets_per_shard", "data_api_limit"}
-_FLOAT_FIELDS = {"data_api_interval_seconds", "heartbeat_interval_seconds"}
+_FLOAT_FIELDS = {
+    "data_api_interval_seconds", "snapshot_interval_seconds", "heartbeat_interval_seconds",
+}
 _BOOL_FIELDS = {"data_api_enabled"}
 
 
