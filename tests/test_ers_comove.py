@@ -4,6 +4,8 @@ import json
 import tempfile
 from decimal import Decimal
 
+import pytest
+
 from polybot.core.models import Envelope
 from polybot.ers.comove import ClusterModel, build_bar_series, correlation
 from polybot.ingestion.midpoint import MIDPOINT_SCHEMA, MIDPOINT_SOURCE
@@ -182,6 +184,44 @@ def test_build_bar_series_auto_never_merges_raw_and_midpoint_rows():
 
     assert automatic == {"A": {0: Decimal("0.51")}}
     assert forced_raw == {"RAW": {0: Decimal("0.91")}}
+
+
+def test_build_bar_series_fails_loud_on_malformed_midpoint_batch():
+    malformed = Envelope(
+        source=MIDPOINT_SOURCE,
+        source_tier="VENUE",
+        event_id="malformed-midpoint",
+        observed_at=0,
+        content=json.dumps({
+            "schema": MIDPOINT_SCHEMA,
+            "books": {"A": {"bid": "0.50", "ask": "0.52", "mid": "0.99"}},
+        }),
+        market_links=("A",),
+    )
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(malformed)
+        with pytest.raises(ValueError, match="midpoint"):
+            build_bar_series(store, bar_ns=1000)
+
+
+def test_build_bar_series_auto_falls_back_to_legacy_raw_store():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
+        store.append(_ws_env("A", _book_frame("A", "0.50", "0.52"), 10))
+        store.append(_ws_env("A", _book_frame("A", "0.70", "0.72"), 1000))
+
+        bars = build_bar_series(store, bar_ns=1000)
+
+    assert bars == {"A": {0: Decimal("0.51"), 1: Decimal("0.71")}}
+
+
+def test_build_bar_series_forced_midpoint_source_returns_empty_without_batches():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
+
+        bars = build_bar_series(store, bar_ns=1000, source=MIDPOINT_SOURCE)
+
+    assert bars == {}
 
 
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
