@@ -44,13 +44,12 @@ echo "== 5. ownership (ONLY the writable data dir -> $SVC_USER) =="
 # dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 in the unit keeps src/ write-free.
 chown -R "$SVC_USER:$SVC_USER" "$APP/data"
 
-echo "== 6. systemd unit =="
+echo "== 6. systemd unit (install only; remain stopped + disabled) =="
+# Activation is a separate owner-approved action. An update must never restart or enable capture implicitly.
+systemctl disable --now polymarket-ingestion.service >/dev/null 2>&1 || true
 cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service
 systemctl daemon-reload
-systemctl enable polymarket-ingestion.service
 
 echo
-echo "installed. Next:"
-echo "   systemctl start polymarket-ingestion.service"
-echo "   journalctl -u polymarket-ingestion.service -f"
-echo "   ls -l $APP/data/          # market_memory.db + heartbeat should appear + grow"
+echo "installed; service remains STOPPED + DISABLED"
+echo "   verify config + release evidence, then follow deploy/README.md only after separate activation approval"

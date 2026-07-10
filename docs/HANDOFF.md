@@ -85,8 +85,11 @@ edge.
   **operator must review PRIMARY before it informs trades**) + `news.CalendarScheduler` · synthetic events ·
   the **replay-fidelity / no-look-ahead acceptance gate** (`scripts/replay_fidelity_check.py`,
   staleness-aware + `--forced-resync`) · Market-Memory `EventStore` (append-only) +
-  `storage/event_writer.QueuedEventWriter` (off-loop single-writer — **prod WS shards may now rise past 2**,
-  verified by `scripts/shard_endurance_check.py`: 6 shards / ~220 rows/s / writer peak backlog ~40 vs 100k).
+  `storage/event_writer.QueuedEventWriter` (off-loop single-writer; historical shard endurance proved the in-memory
+  WS path can exceed 2 shards). **Current D4a production wiring deliberately does not attach the raw-frame
+  `PersistingSink`: WS books stay in memory, one versioned midpoint batch is written every 60 seconds, and the Data
+  API trade tape is retained. The old raw collectors/replay path remain available for tests and explicit legacy
+  evidence replay, not new production persistence.**
 - **S3 ERS (`src/polybot/ers/`):**
   - `caps.py RiskCaps` — the signed DECISIONS-S0 §4 envelope (NAV $300 · at-risk ≤$60 · per-trade ≤$12 ·
     ¼-Kelly · per-event-union ≤$24 · per-market ≤$18 · per-source ≤$30 · reserve ≥$240 · max-concurrent ≤4 ·
@@ -403,22 +406,28 @@ push-to-deploy via a `/root/git/<bot>.git` bare repo) → run ingestion → then
 state: **VPS + Hermes are up** (small model now, GPT-5.5 planned; polymarket must stay self-contained from the other
 bots); **Polymarket account exists, $0 funded** (shadow needs no funds; POL-4/live still blocked on a funded clean box).
 
-**UPDATE 2026-07-05 (later) — D4a DEPLOYED; strategy locked; remaining build re-ticketed.** D4a ingestion is
-DEPLOYED on the VPS (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, `polymarket-ingestion.service`,
-uv/standalone-3.13 venv — reproducible kit in `deploy/`), but currently **STOPPED + DISABLED** pending a downsample
-fix: the raw WS book firehose wrote **~30 GB/day** (would fill the shared 96 GB disk in ~3 days), and the shadow eval
-**never reads raw historical frames** (the ERS re-fetches the live book at decision time) — so the fix is to persist
-periodic midpoint **snapshots** + the trade tape, not every frame (~30 GB/day → ~tens of MB/day). **OWNER DECISION
-(2026-07-05): finish the ENTIRE remaining build FIRST, then a max-2-week light shadow, then go live.** Remaining build
-(all buildable now, $0), ticketed: **POL-14 D1 MarketRegistry · POL-15 D2 resolution feed (keystone — without it the
-shadow accrues zero scored results) · POL-16 D3 shadow-exec wiring · POL-17 D4b ERS runtime · POL-18 brain** + the D4a
-downsample fix (tracked on POL-13). Build order: **D4a-downsample → D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
-The brain deploys as a dedicated `polymarket` **Hermes PROFILE** (`hermes profile create polymarket` = a separate
-Hermes home with only the 5-tool grant, isolated from the memecoin/optionsbot/default profiles). Go-live is still
-gated on **POL-4** (signing), still blocked on funding a wallet on a clean non-Windows box. NB: the deployed venv's
-python must live UNDER the app dir (`UV_PYTHON_INSTALL_DIR=/opt/polymarket-bot/.uv-python`) or the `polybot` user
-can't exec it (uv defaults it under root's 0700 home). The POL board's *states* are stale (done work shows "To do")
-because the MCP can't transition POL states — flip them in the YouTrack UI.
+**UPDATE 2026-07-10 — D4a downsample code implemented; release/deploy still blocked.** The POL-13 feature branch
+now keeps sharded WS books only in memory (`sink=None`), persists one strict versioned `clob-midpoint` batch every
+60 seconds, and retains the full deduplicated Data API trade tape. The ERS co-move adapter auto-selects those batches
+while explicit legacy raw replay remains available. Synthetic events are **not** reconstructable from this compact
+production history and remain deferred pending a tuned live contract.
+
+The VPS kit still exists (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, system unit), but the
+service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected build has
+not been merged, pushed, installed, enabled, or started. The required release gate is a real 1800-second, 200-market
+capture at total DB+WAL+SHM **≤0.5 GiB/day**, with midpoint+trade rows, zero raw rows, all batches decodable, no HALT,
+and graceful close. That gate remains pending until whole-slice reviews pass. Early 70-second probes at the true
+0.5 ceiling correctly failed at 0.866285 and 1.723114 GiB/day; a smoke-only run proved PASS/exit-zero at 0.870920
+GiB/day under a deliberately permissive 5.0 ceiling. These short runs are not release evidence and the ceiling must
+not be loosened if the 30-minute gate fails.
+
+Any later deployment requires separate approval and must use the GitHub-authoritative checkout pattern (never
+recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte
+size and SHA-256, install against a fresh `market_memory.db`, and leave the service stopped until explicit
+start/enable approval. **OWNER DECISION (2026-07-05): finish the remaining build first, then a max-2-week light
+shadow, then go live.** Build order remains **D4a-downsample → D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
+The brain deploys as a dedicated `polymarket` Hermes profile. Go-live remains gated on POL-4 and a funded wallet on
+a clean non-Windows box.
 
 **The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
 deposit wallet on a CLEAN non-Windows box. Keys must NEVER touch the Windows/WSL box (documented cracked-game
