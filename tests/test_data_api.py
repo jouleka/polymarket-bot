@@ -36,6 +36,28 @@ def test_poll_once_persists_each_item_as_an_envelope(tmp_path):
     assert json.loads(events[0].content)["price"] == "0.50"
 
 
+def test_trade_tape_retains_the_complete_source_item(tmp_path):
+    item = {
+        "id": "t-full",
+        "conditionId": "0xabc",
+        "asset": "123",
+        "price": "0.50",
+        "size": "17.25",
+        "side": "BUY",
+        "proxyWallet": "0xwallet",
+        "timestamp": "1719331200000",
+        "transactionHash": "0xhash",
+        "outcome": "Yes",
+        "title": "full fidelity sentinel",
+    }
+    store = EventStore(str(tmp_path / "mm.db"))
+    poller = DataApiPoller(_fetch_returning([item]), MonotonicStamper(clock=lambda: 1), store)
+
+    asyncio.run(poller.poll_once("/trades", source_tier="DATA"))
+
+    assert json.loads(store.all()[0].content) == item
+
+
 def test_poll_once_is_idempotent_on_item_id(tmp_path):
     items = [{"id": "t1", "conditionId": "0xabc"}]
     store = EventStore(str(tmp_path / "mm.db"))
