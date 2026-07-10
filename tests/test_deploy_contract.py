@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -8,8 +9,22 @@ UNIT = ROOT / "deploy" / "polymarket-ingestion.service"
 
 def test_installer_leaves_service_stopped_and_disabled():
     text = INSTALLER.read_text()
-    assert "systemctl enable polymarket-ingestion.service" not in text
-    assert "systemctl start polymarket-ingestion.service" not in text
+    commands = [
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith(("#", "echo"))
+    ]
+    install = 'cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service'
+    reload = "systemctl daemon-reload"
+    disable = "systemctl disable --now polymarket-ingestion.service"
+
+    assert install in commands
+    assert reload in commands
+    assert disable in commands
+    assert commands.index(install) < commands.index(reload) < commands.index(disable)
+    assert "systemctl is-active polymarket-ingestion.service" in text
+    assert "systemctl is-enabled polymarket-ingestion.service" in text
+    assert all("|| true" not in line for line in commands if "disable --now" in line)
+    assert not re.search(r"^\s*systemctl\s+(?:enable|reenable|start|restart)\b", text, re.MULTILINE)
     assert "installed; service remains STOPPED + DISABLED" in text
 
 
