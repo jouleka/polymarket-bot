@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import math
+from numbers import Real
 import time
 from types import MappingProxyType
 
@@ -307,6 +308,43 @@ class MarketRegistry:
     def __len__(self):
         return len(self._by_condition)
 
+    def metadata_for(self, intent):
+        """Resolve one intent by BOTH trusted identity keys and one injected wall-clock read."""
+        condition_id = getattr(intent, "condition_id", None)
+        token_id = getattr(intent, "token_id", None)
+        if not isinstance(condition_id, str) or not condition_id:
+            raise MarketMetadataUnavailable("market condition identifier is unavailable")
+        if not isinstance(token_id, str) or not token_id:
+            raise MarketMetadataUnavailable("market token identifier is unavailable")
+
+        condition_definition = self._by_condition.get(condition_id)
+        if condition_definition is None:
+            state = "unavailable" if condition_id in self._unavailable_conditions else "unknown"
+            raise MarketMetadataUnavailable(f"market condition {condition_id!r} is {state}")
+        token_definition = self._by_token.get(token_id)
+        if token_definition is None:
+            state = "unavailable" if token_id in self._unavailable_tokens else "unknown"
+            raise MarketMetadataUnavailable(f"market token {token_id!r} is {state}")
+        if condition_definition is not token_definition:
+            raise MarketMetadataUnavailable(
+                f"market condition/token identity mismatch: {condition_id!r}, {token_id!r}"
+            )
+
+        try:
+            now = self._clock()
+        except Exception as exc:
+            raise MarketMetadataUnavailable("market metadata wall clock failed") from exc
+        if isinstance(now, bool) or not isinstance(now, Real) or not math.isfinite(now):
+            raise MarketMetadataUnavailable(
+                f"market metadata wall clock must be finite real seconds, got {now!r}"
+            )
+        seconds = max(0, math.floor(condition_definition.end_epoch - float(now)))
+        return MarketMetadata(
+            category=condition_definition.category,
+            question_text=condition_definition.question_text,
+            seconds_to_resolution=seconds,
+        )
+
 
 class StubMarketMeta:
     """Legacy MVP metadata fixture. Production composition must use ``MarketRegistry``.
@@ -316,11 +354,18 @@ class StubMarketMeta:
     injected; there is no implicit production fallback.
     """
 
+    def metadata_for(self, intent):
+        return MarketMetadata(
+            category=UNKNOWN_CATEGORY,
+            question_text=intent.resolution_summary,
+            seconds_to_resolution=SECONDS_TO_RESOLUTION_SENTINEL,
+        )
+
     def category_for(self, intent):
-        return UNKNOWN_CATEGORY
+        return self.metadata_for(intent).category
 
     def question_text_for(self, intent):
-        return intent.resolution_summary
+        return self.metadata_for(intent).question_text
 
     def seconds_to_resolution_for(self, intent):
-        return SECONDS_TO_RESOLUTION_SENTINEL
+        return self.metadata_for(intent).seconds_to_resolution

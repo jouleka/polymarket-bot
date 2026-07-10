@@ -9,16 +9,19 @@ from polybot.ers.intent_store import PendingIntent
 from polybot.ers.market_meta import (
     DEFAULT_CATEGORY_POLICY,
     SECONDS_TO_RESOLUTION_SENTINEL,
+    UNKNOWN_CATEGORY,
     MarketMetadata,
+    MarketMetadataUnavailable,
     MarketRegistry,
     MarketSnapshotError,
     StubMarketMeta,
 )
 
 
-def _intent(resolution_summary="Will the incumbent win the 2026 election?"):
+def _intent(resolution_summary="Will the incumbent win the 2026 election?", *,
+            condition_id="0xabc", token_id="t1"):
     return PendingIntent(
-        intent_id="i1", status="PROPOSED", token_id="t1", condition_id="0xabc",
+        intent_id="i1", status="PROPOSED", token_id=token_id, condition_id=condition_id,
         event_id="e1", side="BUY", target_price=Decimal("0.55"), max_price=Decimal("0.60"),
         size_usd_suggestion=Decimal("10"), p=Decimal("0.7"), p_confidence=Decimal("0.6"),
         resolution_summary=resolution_summary, thesis="thesis text",
@@ -158,11 +161,11 @@ def _market(condition_id="c1", tokens=("t1", "t2"), *, event_id="e1",
     }
 
 
-def _registry(markets=None, events=None):
+def _registry(markets=None, events=None, *, clock=None):
     return MarketRegistry.from_gamma_snapshots(
         [_market()] if markets is None else markets,
         [_event()] if events is None else events,
-        clock=lambda: 0,
+        clock=(lambda: 0) if clock is None else clock,
     )
 
 
@@ -295,3 +298,110 @@ def test_conflicting_duplicate_event_category_fails_loud():
 def test_registry_fails_when_no_market_is_usable(markets, events):
     with pytest.raises(MarketSnapshotError, match="no usable"):
         _registry(markets=markets, events=events)
+
+
+# POL-14 Task 3: lookup clock + dual-identifier contract -----------------------
+
+
+def test_lookup_returns_gamma_owned_metadata_not_proposal_values():
+    registry = _registry(
+        markets=[_market(question="Gamma canonical question",
+                         end_date="1970-01-01T00:01:40Z")],
+        clock=lambda: 10.25,
+    )
+    result = registry.metadata_for(_intent(
+        "proposal-owned summary", condition_id="c1", token_id="t1"))
+    assert result == MarketMetadata(
+        category="politics",
+        question_text="Gamma canonical question",
+        seconds_to_resolution=89,
+    )
+
+
+@pytest.mark.parametrize(("condition_id", "token_id"), [
+    ("missing", "t1"),
+    ("c1", "missing"),
+])
+def test_lookup_rejects_unknown_condition_or_token(condition_id, token_id):
+    registry = _registry()
+    with pytest.raises(MarketMetadataUnavailable, match="condition|token"):
+        registry.metadata_for(_intent(condition_id=condition_id, token_id=token_id))
+
+
+def test_lookup_rejects_known_but_mismatched_condition_and_token():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"), event_id="e2")],
+        events=[_event("e1", ("2",)), _event("e2", ("21",))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
+
+
+@pytest.mark.parametrize(("condition_id", "token_id"), [
+    ("unmapped", "u1"),
+    ("unmapped", "u2"),
+])
+def test_lookup_rejects_known_market_with_unmapped_category(condition_id, token_id):
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("unmapped", ("u1", "u2"), event_id="other")],
+        events=[_event("mapped", ("2",)), _event("other", ("999999",))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.metadata_for(_intent(condition_id=condition_id, token_id=token_id))
+
+
+def test_lookup_reads_wall_clock_exactly_once():
+    calls = []
+
+    def clock():
+        calls.append("read")
+        return 10
+
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:01:40Z")], clock=clock)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 90
+    assert calls == ["read"]
+
+
+@pytest.mark.parametrize(("now", "expected"), [
+    (99.1, 0),
+    (100, 0),
+    (100.1, 0),
+])
+def test_lookup_floors_fractional_time_and_clamps_at_or_past_deadline(now, expected):
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:01:40Z")], clock=lambda: now)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == expected
+
+
+@pytest.mark.parametrize("clock_value", [None, "10", True, float("nan"), float("inf"), float("-inf")])
+def test_lookup_rejects_invalid_wall_clock_values(clock_value):
+    registry = _registry(clock=lambda: clock_value)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+def test_lookup_wraps_clock_exceptions_as_unavailable():
+    def broken_clock():
+        raise RuntimeError("clock source failed")
+
+    registry = _registry(clock=broken_clock)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+def test_repeated_lookup_does_not_mutate_registry():
+    registry = _registry(clock=lambda: 0)
+    intent = _intent(condition_id="c1", token_id="t1")
+    assert registry.metadata_for(intent) == registry.metadata_for(intent)
+    assert len(registry) == 1
+
+
+def test_stub_implements_single_metadata_result_contract():
+    intent = _intent("legacy proposal summary")
+    assert StubMarketMeta().metadata_for(intent) == MarketMetadata(
+        UNKNOWN_CATEGORY, "legacy proposal summary", SECONDS_TO_RESOLUTION_SENTINEL)
