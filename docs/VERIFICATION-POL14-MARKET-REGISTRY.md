@@ -46,6 +46,27 @@ reached `MarketRegistry.metadata_for` and reproduced the intended raw `OverflowE
   consistent in token-shape and cross-condition token-reuse tests.
 - A7-A11 address the independent review's remaining implementation and test-strength findings.
 
+## Adversarial mutation result
+
+Corrected isolated-worktree battery at `10dd850354b86177e5e3eed31f19d8edf823e2c2`:
+
+- baseline focused suite: `172 passed in 1.64s`;
+- mutations killed: `25/25`;
+- survivors: none;
+- restored focused suite: `172 passed in 1.82s`;
+- restored worktree status: clean;
+- mutation worktree removed and pruned.
+
+The battery covered provider label/slug trust, both category-precedence boundaries, condition/token
+sibling bypasses, cross-condition token reuse, numeric coercion, one/three-token acceptance,
+market-versus-event deadline ownership, naive and Python-only timestamp acceptance, fractional-time
+rounding and negative time, permissive unknown-category fallback, logging before metadata rejection,
+unexpected-error swallowing, proposal-owned question substitution, multiple clock reads, registry
+mutability, event-token conflict bypass, decimal-token integer round-trip, malformed later tag
+skipping, whitespace tokens, and direct-constructor bypass. The complete local ledger was captured as
+`/tmp/pol14-mutation-results.json`; temporary mutation files and the detached worktree were not added
+to the repository.
+
 ## Required final gate
 
 Before merge, record exact-HEAD evidence for:
