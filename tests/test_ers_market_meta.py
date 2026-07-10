@@ -288,6 +288,8 @@ def test_registry_rejects_bad_token_wire_shapes(wire):
     ("question", 123),
     ("endDate", None),
     ("endDate", "2030-01-01T00:00:00"),
+    ("endDate", "2030-01-01X00:00:00+00:00"),
+    ("endDate", "2030-01-01🙂00:00:00+00:00"),
     ("endDate", "not-a-date"),
 ])
 def test_registry_rejects_missing_or_malformed_market_fields(field, value):
