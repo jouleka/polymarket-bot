@@ -145,6 +145,7 @@ def test_build_bar_series_reads_midpoint_batches_and_uses_bar_close():
 
     assert bars["A"] == {0: Decimal("0.51"), 1: Decimal("0.71")}
     assert bars["B"] == {0: Decimal("0.31"), 1: Decimal("0.35")}
+    assert all(type(midpoint) is Decimal for token_bars in bars.values() for midpoint in token_bars.values())
 
 
 def test_build_bar_series_midpoints_respect_until_cutoff():
@@ -156,6 +157,26 @@ def test_build_bar_series_midpoints_respect_until_cutoff():
         bars = build_bar_series(store, bar_ns=1000, until=1500)
 
     assert bars["A"] == {0: Decimal("0.61"), 1: Decimal("0.71")}
+
+
+def test_build_bar_series_auto_selection_uses_only_rows_before_until():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("RAW", _book_frame("RAW", "0.60", "0.62"), 0))
+        store.append(_mid_env(2000, {"A": ("0.70", "0.72", "0.71")}))
+
+        bars = build_bar_series(store, bar_ns=1000, until=1500)
+
+    assert bars == {"RAW": {0: Decimal("0.61")}}
+
+
+def test_build_bar_series_empty_midpoint_batch_still_suppresses_raw_fallback():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("RAW", _book_frame("RAW", "0.60", "0.62"), 0))
+        store.append(_mid_env(10, {}))
+
+        bars = build_bar_series(store, bar_ns=1000)
+
+    assert bars == {}
 
 
 def test_build_bar_series_does_not_forward_fill_omitted_midpoint():
@@ -199,6 +220,25 @@ def test_build_bar_series_fails_loud_on_malformed_midpoint_batch():
         market_links=("A",),
     )
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(malformed)
+        with pytest.raises(ValueError, match="midpoint"):
+            build_bar_series(store, bar_ns=1000)
+
+
+def test_build_bar_series_fails_loud_on_malformed_later_midpoint_batch():
+    malformed = Envelope(
+        source=MIDPOINT_SOURCE,
+        source_tier="VENUE",
+        event_id="malformed-later-midpoint",
+        observed_at=1000,
+        content=json.dumps({
+            "schema": MIDPOINT_SCHEMA,
+            "books": {"A": {"bid": "0.70", "ask": "0.72", "mid": "0.99"}},
+        }),
+        market_links=("A",),
+    )
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_mid_env(0, {"A": ("0.50", "0.52", "0.51")}))
         store.append(malformed)
         with pytest.raises(ValueError, match="midpoint"):
             build_bar_series(store, bar_ns=1000)
