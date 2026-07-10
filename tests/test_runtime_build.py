@@ -96,6 +96,7 @@ def test_build_structurally_disables_raw_ws_persistence(tmp_path, monkeypatch):
         db_path=str(tmp_path / "m.db"),
         data_api_enabled=False,
         snapshot_interval_seconds=12.5,
+        max_assets_per_shard=7,
     )
     stamper = object()
     connect = object()
@@ -109,9 +110,13 @@ def test_build_structurally_disables_raw_ws_persistence(tmp_path, monkeypatch):
     )
     try:
         assert captured["collector"]["sink"] is None
+        assert captured["collector"]["connect"] is connect
         assert captured["collector"]["stamper"] is stamper
         assert captured["collector"]["token_ids"] == ("t1", "t2")
-        assert set(captured["collector"]["kwargs"]) == {"max_assets_per_shard", "reconnect_on"}
+        assert captured["collector"]["kwargs"] == {
+            "max_assets_per_shard": 7,
+            "reconnect_on": ingestion.WS_RECONNECT_ON,
+        }
         assert captured["snapshotter"]["token_ids"] == ["t1", "t2"]
         assert captured["snapshotter"]["stamper"] is stamper
         assert captured["snapshotter"]["writer"] is rt._writer
@@ -126,18 +131,23 @@ def test_runtime_source_imports_no_raw_or_synthetic_persistence_helpers():
     from polybot.runtime import ingestion
 
     tree = ast.parse(inspect.getsource(ingestion))
-    imported_modules = set()
+    imported_paths = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.add(node.module)
+            imported_paths.add(node.module)
+            imported_paths.update(f"{node.module}.{alias.name}" for alias in node.names)
         elif isinstance(node, ast.Import):
-            imported_modules.update(alias.name for alias in node.names)
+            imported_paths.update(alias.name for alias in node.names)
 
-    forbidden = {
+    forbidden = (
         "polybot.ingestion.persistence",
         "polybot.ingestion.synthetic",
+    )
+    assert not {
+        path
+        for path in imported_paths
+        if any(path == module or path.startswith(f"{module}.") for module in forbidden)
     }
-    assert imported_modules.isdisjoint(forbidden)
 
 
 def test_build_pins_full_trade_service_wiring(tmp_path, monkeypatch):
@@ -153,14 +163,14 @@ def test_build_pins_full_trade_service_wiring(tmp_path, monkeypatch):
             return None
 
         async def run(self, max_connections=None):
-            await asyncio.Event().wait()
+            captured["ws_run"] = {"max_connections": max_connections}
 
     class FakeSnapshotter:
         def __init__(self, **_kwargs):
             pass
 
         async def run(self):
-            await asyncio.Event().wait()
+            captured["snapshot_run"] = True
 
     class FakePoller:
         def __init__(self, fetch, stamper, writer):
@@ -188,8 +198,14 @@ def test_build_pins_full_trade_service_wiring(tmp_path, monkeypatch):
         stamper=stamper,
     )
     try:
-        with pytest.raises(RuntimeError, match="data-api"):
-            asyncio.run(rt._services[2]())
+        for service, name in zip(rt._services, ("clob-ws", "clob-midpoint", "data-api"), strict=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                asyncio.run(service())
+            assert str(exc_info.value) == (
+                f"ingestion service '{name}' returned unexpectedly (must run forever) — HALT"
+            )
+        assert captured["ws_run"] == {"max_connections": None}
+        assert captured["snapshot_run"] is True
         assert captured["poller"] == (fetch, stamper, rt._writer)
         assert captured["run"] == (
             "/trades",
@@ -293,15 +309,6 @@ def test_factory_end_to_end_persists_midpoints_but_no_raw_ws_rows(tmp_path, monk
     quotes = decode_midpoint_batch(rows[0].content)
     assert quotes["t1"].midpoint == Decimal("0.61")
     assert quotes["t2"].midpoint == Decimal("0.32")
-
-
-def test_build_supervises_all_services(tmp_path):
-    cfg = IngestionConfig(db_path=str(tmp_path / "m.db"), universe_max_markets=5)
-    rt = build_ingestion_runtime(cfg, gamma_fetch=lambda params: _rows(),
-                                 ws_connect=object(), data_fetch=object())
-    assert rt._services                                              # non-empty
-    # every service must be a _supervised-wrapped factory (the fail-loud HALT guard is actually applied)
-    assert all("_supervised" in s.__qualname__ for s in rt._services)
 
 
 def test_main_builds_and_runs_then_clean_exit(tmp_path, monkeypatch):
