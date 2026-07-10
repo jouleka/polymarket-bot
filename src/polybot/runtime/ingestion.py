@@ -83,8 +83,9 @@ def _supervised(name, factory):
 
 def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
                             data_fetch=None, stamper=None) -> IngestionRuntime:
-    """Live wiring: discover the universe, then one QueuedEventWriter(EventStore) fed by the sharded WS collector
-    (+ the Data API /trades poller when enabled). Injectable seams default to the real transport factories."""
+    """Live wiring: discover the universe, then run the sharded WS collector in-memory while one
+    QueuedEventWriter(EventStore) is fed by the midpoint snapshotter (+ the full Data API /trades poller when
+    enabled). Injectable seams default to the real transport factories."""
     stamper = stamper or MonotonicStamper()
     gamma_fetch = gamma_fetch or make_gamma_fetch(config.gamma_url)
     ws_connect = ws_connect or open_market_ws
