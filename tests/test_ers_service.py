@@ -15,6 +15,7 @@ from polybot.core.clock import MonotonicStamper
 from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
+from polybot.ers.market_meta import MarketMetadata, MarketMetadataUnavailable
 from polybot.ers.service import PaperSigner, process_pending
 from polybot.ers.validator import ClusterView, OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
@@ -271,12 +272,14 @@ class _FakeCalibGate:
         self._clamp_to = clamp_to
         self._raises = raises
         self.clamp_calls = []
+        self.clamp_metadata_calls = []
 
     def k_for(self, category):
         return self._k
 
     def clamp_p(self, p, market_mid, *, question_text, seconds_to_resolution, corroborated):
         self.clamp_calls.append((p, market_mid, corroborated))
+        self.clamp_metadata_calls.append((question_text, seconds_to_resolution))
         if self._raises is not None:
             raise self._raises
         target = p if self._clamp_to is None else self._clamp_to
@@ -295,6 +298,10 @@ class _StubMeta:
         self._cat = category
         self._secs = seconds
 
+    def metadata_for(self, intent):
+        return MarketMetadata(self._cat, intent.resolution_summary, self._secs)
+
+    # Legacy accessors remain so this fixture can expose whether service.py still calls them.
     def category_for(self, intent):
         return self._cat
 
@@ -401,6 +408,69 @@ def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monk
 
         assert store.get("i1").decision_reason == "truth_gate_refuse"
         assert signer.placed == [] and ledger.all() == []
+
+
+# POL-14: one real metadata result, typed fail-closed rejection before logging.
+
+
+class _RecordingMeta:
+    def __init__(self, result=None, raises=None):
+        self.result = result or MarketMetadata("politics", "Gamma canonical question", 123)
+        self.raises = raises
+        self.calls = []
+
+    def metadata_for(self, intent):
+        self.calls.append((intent.condition_id, intent.token_id))
+        if self.raises is not None:
+            raise self.raises
+        return self.result
+
+
+def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):
+    meta = _RecordingMeta(raises=MarketMetadataUnavailable("missing Gamma metadata"))
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=signer, pipeline=pipe)
+
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "market_meta_unavailable"
+        assert meta.calls == [("m1", "t1")]
+        assert signer.placed == []
+        assert ledger.all() == []
+        assert clog.all() == ()
+        assert pipe.calib_gate.clamp_calls == []
+
+
+def test_pipeline_unexpected_metadata_bug_stays_internal_error(tmp_path, monkeypatch):
+    meta = _RecordingMeta(raises=RuntimeError("implementation bug"))
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=PaperSigner(), pipeline=pipe)
+        assert store.get("i1").decision_reason == "internal_error"
+        assert ledger.all() == [] and clog.all() == ()
+
+
+def test_pipeline_consumes_one_metadata_object_and_threads_gamma_values(tmp_path, monkeypatch):
+    meta = _RecordingMeta(MarketMetadata("crypto", "Gamma question, not proposal", 321))
+    calib = _FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.70"))
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta, calib=calib)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **dict(_P, resolution_summary="Hermes proposal summary"))
+        process_pending(store, book_for={"t1": _book("0.50")}.get,
+                        portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                        signer=PaperSigner(), pipeline=pipe)
+
+        assert meta.calls == [("m1", "t1")]  # one internally-consistent lookup
+        assert calib.clamp_metadata_calls == [("Gamma question, not proposal", 321)]
+        assert ledger.get("i1").category == "crypto"
+        assert len(clog.all()) == 1
 
 
 def test_pipeline_clamp_p_raise_maps_to_distinct_anchor_error(tmp_path, monkeypatch):

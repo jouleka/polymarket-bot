@@ -8,8 +8,8 @@ through ProposeOnlyFacade; this loop independently re-derives price, size, caps,
 the anchored posterior. The signer here is a paper stub; the real signer is S2/POL-4.
 
 S6 contract (DESIGN-S6-HERMES.md §2/§3): pipeline=None -> behavior is EXACTLY slice-3 (the existing
-tests stay green). pipeline supplied -> steps 1-11 of §2 engage and calib_score is IGNORED in favor
-of the per-intent k = pipeline.calib_gate.k_for(category).
+tests stay green). pipeline supplied -> the S6 chain plus the POL-14 metadata gate engage and
+calib_score is IGNORED in favor of the per-intent k = pipeline.calib_gate.k_for(category).
 """
 
 from dataclasses import dataclass
@@ -25,12 +25,14 @@ from polybot.ers.validator import (
     evaluate_intent,
 )
 from polybot.fusion.engine import FusionError
+from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.detectors.orchestrator import DetectorInputs, REASON_DETECTOR_AVOID
 
 _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move model is wired
 
-# New S6 Decision.reason codes (free-form strings; NO validator change -- DESIGN §6).
+# New S6/POL-14 Decision.reason codes (free-form strings; no validator change).
 REASON_ANCHOR_ERROR = "anchor_error"
+REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class HermesPipeline:
     detectors: object             # detectors.orchestrator.DetectorOrchestrator
     forecast_ledger: object       # calibration.ledger.ForecastLedger
     component_log: object         # fusion.component_log.ComponentLog
-    market_meta: object           # ers.market_meta.StubMarketMeta (the MarketRegistry seam)
+    market_meta: object           # ers.market_meta.MarketRegistry (StubMarketMeta only in explicit legacy tests)
     allowlist: object             # iterable of ingestion.news.Source (truth-gate independence surface)
     event_store: object           # storage.market_memory.EventStore (sanitized citations only)
     stamper: object               # the ONE shared core.clock.MonotonicStamper (now_ns for the gate)
@@ -156,7 +158,7 @@ def _process_intent_slice3(intent, book_for, portfolio, caps, calib_score, clust
 
 
 def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, pipeline):
-    """The S6 per-intent chain (DESIGN §2 steps 1-11). Returns (decision, trade_intent).
+    """The S6 per-intent chain plus POL-14 metadata gate. Returns (decision, trade_intent).
 
     Order is load-bearing: cheap/structural refusals (no_book, detector_avoid, truth-gate) come
     BEFORE any genuine estimate, so a refused proposal records NO forecast (DESIGN §2). A clean
@@ -190,17 +192,26 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
     if mid is None:
         return Decision("REJECT", None, None, "book_stale"), trade_intent
 
-    # 5. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
+    # 5. Resolve the trusted condition+token pair ONCE. Known provider gaps are a distinct audited
+    #    rejection before fusion or any non-backfillable forecast/component write. Unexpected
+    #    implementation failures are deliberately not swallowed here: the outer per-intent guard
+    #    maps those to internal_error.
+    try:
+        metadata = pipeline.market_meta.metadata_for(intent)
+    except MarketMetadataUnavailable:
+        return Decision("REJECT", None, None, REASON_MARKET_META_UNAVAILABLE), trade_intent
+    category = metadata.category
+    question_text = metadata.question_text
+    seconds = metadata.seconds_to_resolution
+
+    # 6. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
     #    p_base/p_micro/p_flow are ERS-derived; at MVP p_base = mid (no base-rate model wired here
     #    beyond the anchor's prior), p_micro/p_flow carry zero weight (logged, not weighted).
     fusion_result = fuse(mid, p_news=intent.p, p_base=mid, p_micro=mid,
                          p_flow=verdict.p_flow if Decimal(0) < verdict.p_flow < Decimal(1) else mid,
                          corroborated=truth.corroborated, config=pipeline.fusion_config)
 
-    # 6. Anchor clamp, wrapped so a non-finite anchor maps to a DISTINCT anchor_error (not internal).
-    category = pipeline.market_meta.category_for(intent)
-    question_text = pipeline.market_meta.question_text_for(intent)
-    seconds = pipeline.market_meta.seconds_to_resolution_for(intent)
+    # 7. Anchor clamp, wrapped so a non-finite anchor maps to a DISTINCT anchor_error (not internal).
     try:
         anchor = pipeline.calib_gate.clamp_p(
             fusion_result.p_final, mid, question_text=question_text,
@@ -209,7 +220,7 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         return Decision("REJECT", None, None, REASON_ANCHOR_ERROR), trade_intent
     p_clamped = anchor.p_clamped
 
-    # 7. Record the genuine estimate: per-signal components THEN the forecast (the calibration
+    # 8. Record the genuine estimate: per-signal components THEN the forecast (the calibration
     #    substrate). Components FIRST: component_log fails-loud on a non-finite raw p_news (Hermes
     #    can supply Decimal("NaN")), so doing it first aborts BEFORE any forecast row is written ->
     #    no orphan. record_forecast can't raise on the happy path (p_clamped is always finite/in
@@ -224,10 +235,10 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         forecast_id, category=category, condition_id=intent.condition_id,
         p=p_clamped, market_mid=mid)
 
-    # 8. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
+    # 9. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
     k = pipeline.calib_gate.k_for(category)
 
-    # 9-11. Substitute the anchored posterior into the TradeIntent and size with the UNCHANGED
+    # 10-12. Substitute the anchored posterior into the TradeIntent and size with the UNCHANGED
     #        validator (calib_score=k). evaluate_intent / validator dataclasses are untouched.
     trade_intent = _to_trade_intent(intent, matrix_cold=not cluster.warm, p_override=p_clamped)
     decision = evaluate_intent(trade_intent, book, portfolio, caps, calib_score=k, cluster=cluster)
