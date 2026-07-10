@@ -429,6 +429,13 @@ class _RecordingMeta:
 def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):
     meta = _RecordingMeta(raises=MarketMetadataUnavailable("missing Gamma metadata"))
     pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
+
+    import polybot.fusion.engine as fusion_mod
+
+    def forbidden_fusion(*args, **kwargs):
+        raise AssertionError("fusion ran before the metadata availability gate")
+
+    monkeypatch.setattr(fusion_mod, "fuse", forbidden_fusion, raising=True)
     with _store(str(tmp_path / "i.db")) as store:
         store.propose_trade("i1", **_P)
         signer = PaperSigner()
