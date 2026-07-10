@@ -430,11 +430,22 @@ class MarketRegistry:
             now = self._clock()
         except Exception as exc:
             raise MarketMetadataUnavailable("market metadata wall clock failed") from exc
-        if isinstance(now, bool) or not isinstance(now, Real) or not math.isfinite(now):
+        if isinstance(now, bool) or not isinstance(now, Real):
             raise MarketMetadataUnavailable(
-                f"market metadata wall clock must be finite real seconds, got {now!r}"
+                "market metadata wall clock must return finite real seconds"
             )
-        seconds = max(0, math.floor(condition_definition.end_epoch - float(now)))
+        try:
+            now_seconds = float(now)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise MarketMetadataUnavailable(
+                "market metadata wall clock must return finite real seconds"
+            ) from exc
+        if not math.isfinite(now_seconds):
+            raise MarketMetadataUnavailable(
+                "market metadata wall clock must return finite real seconds"
+            )
+
+        seconds = max(0, math.floor(condition_definition.end_epoch - now_seconds))
         category = condition_definition.category
         if category is None:  # defensive invariant: unavailable rows never enter the public indices
             raise MarketMetadataUnavailable("market category is unavailable")

@@ -490,9 +490,17 @@ def test_lookup_floors_fractional_time_and_clamps_at_or_past_deadline(now, expec
         _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == expected
 
 
-@pytest.mark.parametrize("clock_value", [None, "10", True, float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("clock_value", [
+    None, "10", True, float("nan"), float("inf"), float("-inf"),
+])
 def test_lookup_rejects_invalid_wall_clock_values(clock_value):
     registry = _registry(clock=lambda: clock_value)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+def test_lookup_normalizes_wall_clock_overflow_as_unavailable():
+    registry = _registry(clock=lambda: 10**10000)
     with pytest.raises(MarketMetadataUnavailable, match="clock"):
         registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
 
