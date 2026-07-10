@@ -233,7 +233,10 @@ def _event_id_for_market(row, condition_id):
     return _required_string(relation, "id", f"market {condition_id} event")
 
 
-@dataclass(frozen=True, repr=False)
+_MARKET_REGISTRY_CONSTRUCTION_KEY = object()
+
+
+@dataclass(frozen=True, repr=False, init=False)
 class MarketRegistry:
     """Immutable condition+token metadata registry built from injected Gamma snapshots.
 
@@ -247,6 +250,18 @@ class MarketRegistry:
     _unavailable_conditions: frozenset[str]
     _unavailable_tokens: frozenset[str]
     _clock: Any
+
+    def __init__(self, by_condition, by_token, unavailable_conditions,
+                 unavailable_tokens, clock, *, _construction_key=None):
+        if _construction_key is not _MARKET_REGISTRY_CONSTRUCTION_KEY:
+            raise MarketSnapshotError(
+                "MarketRegistry must be built with from_gamma_snapshots"
+            )
+        object.__setattr__(self, "_by_condition", by_condition)
+        object.__setattr__(self, "_by_token", by_token)
+        object.__setattr__(self, "_unavailable_conditions", unavailable_conditions)
+        object.__setattr__(self, "_unavailable_tokens", unavailable_tokens)
+        object.__setattr__(self, "_clock", clock)
 
     @classmethod
     def from_gamma_snapshots(cls, market_rows, event_rows, *, clock=None,
@@ -399,6 +414,7 @@ class MarketRegistry:
             unavailable_conditions,
             unavailable_tokens,
             time.time if clock is None else clock,
+            _construction_key=_MARKET_REGISTRY_CONSTRUCTION_KEY,
         )
 
     def __len__(self):
