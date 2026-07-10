@@ -405,3 +405,52 @@ def test_stub_implements_single_metadata_result_contract():
     intent = _intent("legacy proposal summary")
     assert StubMarketMeta().metadata_for(intent) == MarketMetadata(
         UNKNOWN_CATEGORY, "legacy proposal summary", SECONDS_TO_RESOLUTION_SENTINEL)
+
+
+# POL-14 Task 5: representative live-shaped whole-slice contract ---------------
+
+
+def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_deadline():
+    yes = "7704407378332423580507141839985172615515196706624243524491048428567892599013"
+    no = "1959412866692185789324499315644486550124994570117004262795754352991182983341"
+    crypto_yes = "114083367175349101587118456512209157494315102378898420654169806682644264287063"
+    crypto_no = "87004704450340662630452254179921033526720310358232052759253551781798129052057"
+    markets = [
+        {
+            "conditionId": "0xgeo",
+            "question": "Gamma geopolitical question",
+            "category": "politics",  # documented-but-stale field must NOT override reviewed tags
+            "endDate": "1970-01-01T00:01:40Z",
+            "clobTokenIds": f'["{yes}", "{no}"]',
+            "events": [{"id": "678139", "title": "container"}],
+        },
+        {
+            "conditionId": "0xcrypto",
+            "question": "Gamma crypto-finance question",
+            "endDate": "1970-01-01T00:03:20Z",
+            "clobTokenIds": [crypto_yes, crypto_no],
+            "events": [{"id": "16183"}],
+        },
+    ]
+    events = [
+        {"id": "678139", "tags": [
+            {"id": "2", "label": "Politics", "slug": "politics"},
+            {"id": "100265", "label": "Geopolitics", "slug": "geopolitics"},
+        ]},
+        {"id": "16183", "tags": [
+            {"id": "120", "label": "Finance", "slug": "finance"},
+            {"id": "21", "label": "Crypto", "slug": "crypto"},
+        ]},
+    ]
+    registry = MarketRegistry.from_gamma_snapshots(markets, events, clock=lambda: 10.25)
+
+    geo = registry.metadata_for(_intent(
+        "proposal text must lose", condition_id="0xgeo", token_id=yes))
+    assert geo == MarketMetadata("geopolitics", "Gamma geopolitical question", 89)
+    crypto = registry.metadata_for(_intent(
+        "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no))
+    assert crypto == MarketMetadata("crypto", "Gamma crypto-finance question", 189)
+    assert _intent(condition_id="0xgeo", token_id=yes).token_id == yes  # exact 77-digit string
+
+    with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
+        registry.metadata_for(_intent(condition_id="0xgeo", token_id=crypto_yes))
