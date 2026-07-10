@@ -259,6 +259,8 @@ def test_registry_rejects_non_mapping_event_rows(row):
     ("one", "two", "three"),
     ("same", "same"),
     ("", "two"),
+    (" ", "two"),
+    (" padded", "two"),
     (123, "two"),
 ])
 def test_registry_rejects_bad_token_members(tokens):
