@@ -1,4 +1,5 @@
 import asyncio
+import json
 from decimal import Decimal
 
 import pytest
@@ -124,58 +125,60 @@ def test_factory_end_to_end_persists_midpoints_but_no_raw_ws_rows(tmp_path, monk
     )
     from polybot.runtime import ingestion
 
-    class FakeBook:
-        def __init__(self, bid, ask, mid):
-            self._bid = Decimal(bid)
-            self._ask = Decimal(ask)
-            self._mid = Decimal(mid)
-
-        def best_bid(self):
-            return self._bid
-
-        def best_ask(self):
-            return self._ask
-
-        def midpoint(self):
-            return self._mid
-
-    class FakeCollector:
-        def __init__(self, _connect, _stamper, token_ids, *, sink, **_kwargs):
-            assert sink is None
-            self._books = {
-                token_ids[0]: FakeBook("0.60", "0.62", "0.61"),
-                token_ids[1]: FakeBook("0.30", "0.34", "0.32"),
-            }
-
-        def book_for(self, token_id):
-            return self._books.get(token_id)
-
-        async def run(self, max_connections=None):
-            await asyncio.Event().wait()
-
     db = str(tmp_path / "e2e-midpoint.db")
 
     async def scenario():
-        first_sleep_started = asyncio.Event()
-        complete_first_interval = asyncio.Event()
+        books_ingested = asyncio.Event()
         second_sleep_started = asyncio.Event()
-        never = asyncio.Event()
+        transport_idle = asyncio.Event()
+        snapshot_idle = asyncio.Event()
         sleep_calls = []
+        frame = json.dumps([
+            {
+                "event_type": "book",
+                "asset_id": "t1",
+                "bids": [{"price": "0.60", "size": "100"}],
+                "asks": [{"price": "0.62", "size": "100"}],
+            },
+            {
+                "event_type": "book",
+                "asset_id": "t2",
+                "bids": [{"price": "0.30", "size": "100"}],
+                "asks": [{"price": "0.34", "size": "100"}],
+            },
+        ])
+
+        class IdleAfterBookTransport:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, message):
+                self.sent.append(message)
+
+            async def __aiter__(self):
+                yield frame
+                # The generator resumes only after MarketSocket dispatched the frame
+                # through MarketStream into both LocalBooks.
+                books_ingested.set()
+                await transport_idle.wait()
+
+        transport = IdleAfterBookTransport()
+
+        async def connect():
+            return transport
 
         async def controlled_sleep(interval):
             sleep_calls.append(interval)
             if len(sleep_calls) == 1:
-                first_sleep_started.set()
-                await complete_first_interval.wait()
+                await books_ingested.wait()
             else:
                 second_sleep_started.set()
-                await never.wait()
+                await snapshot_idle.wait()
 
         class ControlledSnapshotter(RealMidpointSnapshotter):
             def __init__(self, **kwargs):
                 super().__init__(**kwargs, sleep=controlled_sleep)
 
-        monkeypatch.setattr(ingestion, "ShardedMarketCollector", FakeCollector)
         monkeypatch.setattr(ingestion, "MidpointSnapshotter", ControlledSnapshotter)
         cfg = IngestionConfig(
             db_path=db,
@@ -185,16 +188,19 @@ def test_factory_end_to_end_persists_midpoints_but_no_raw_ws_rows(tmp_path, monk
         rt = build_ingestion_runtime(
             cfg,
             gamma_fetch=lambda params: _rows(),
-            ws_connect=object(),
+            ws_connect=connect,
             data_fetch=object(),
         )
         task = asyncio.create_task(rt.run())
-        await asyncio.wait_for(first_sleep_started.wait(), timeout=1)
-        complete_first_interval.set()
         await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
         rt.request_stop()
         await asyncio.wait_for(task, timeout=1)
         assert sleep_calls == [12.5, 12.5]
+        assert len(transport.sent) == 1
+        assert json.loads(transport.sent[0]) == {
+            "type": "market",
+            "assets_ids": ["t1", "t2"],
+        }
 
     asyncio.run(scenario())
 
