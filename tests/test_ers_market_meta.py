@@ -262,8 +262,13 @@ def test_registry_rejects_non_mapping_event_rows(row):
     (123, "two"),
 ])
 def test_registry_rejects_bad_token_members(tokens):
+    # Mirror the candidate identity in both provider snapshots so this test cannot pass vacuously
+    # from a later market/event mismatch after the token-shape guard is mutated away.
     with pytest.raises(MarketSnapshotError, match="token"):
-        _registry(markets=[_market(tokens=tokens, encoded=False)])
+        _registry(
+            markets=[_market(tokens=tokens, encoded=False)],
+            events=[_event(tokens=tokens)],
+        )
 
 
 @pytest.mark.parametrize("wire", [None, {}, "not-json", "{}", "[1, 2]"])
@@ -374,9 +379,15 @@ def test_conflicting_duplicate_condition_fails_loud():
 
 
 def test_token_reused_across_conditions_fails_loud():
+    # Keep both event-contained identities internally consistent. The only intended failure is the
+    # selected-market token reuse itself, so a mutation cannot hide behind a later event mismatch.
     with pytest.raises(MarketSnapshotError, match="token.*condition"):
-        _registry(markets=[_market("c1", ("shared", "t2")),
-                           _market("c2", ("shared", "t4"))])
+        _registry(
+            markets=[_market("c1", ("shared", "t2")),
+                     _market("c2", ("shared", "t4"), event_id="e2")],
+            events=[_event("e1", condition_id="c1", tokens=("shared", "t2")),
+                    _event("e2", condition_id="c2", tokens=("shared", "t4"))],
+        )
 
 
 def test_conflicting_duplicate_event_category_fails_loud():
