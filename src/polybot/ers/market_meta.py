@@ -188,9 +188,11 @@ def _parse_tokens(raw, condition_id):
         raise MarketSnapshotError(
             f"Gamma market {condition_id} token list must contain exactly two IDs"
         )
-    if any(not isinstance(token, str) or not token for token in values):
+    if any(
+            not isinstance(token, str) or not token or token != token.strip()
+            for token in values):
         raise MarketSnapshotError(
-            f"Gamma market {condition_id} token IDs must be non-empty strings"
+            f"Gamma market {condition_id} token IDs must be non-empty exact strings"
         )
     if values[0] == values[1]:
         raise MarketSnapshotError(f"Gamma market {condition_id} token IDs must be distinct")
