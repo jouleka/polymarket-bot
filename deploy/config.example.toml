@@ -3,9 +3,10 @@
 # Any field can be overridden by an env var POLYBOT_INGEST_<FIELD_UPPERCASE>
 #   (e.g. POLYBOT_INGEST_UNIVERSE_MAX_MARKETS=400), which the systemd .env (EnvironmentFile) can carry.
 
-db_path = "/opt/polymarket-bot/data/market_memory.db"   # the un-backfillable EventStore (SQLite, WAL)
+db_path = "/opt/polymarket-bot/data/market_memory.db"   # versioned midpoint batches + full deduplicated trade tape (no raw CLOB frames)
 universe_max_markets = 200            # start conservative (top-N active binary markets by 24h volume); widen once proven
 max_assets_per_shard = 500            # CLOB WS shard size (venue caps ~500 assets/connection)
+snapshot_interval_seconds = 60.0      # persist one global midpoint batch per minute; every WS frame still updates live books
 data_api_enabled = true               # also poll the Data API /trades tape
 data_api_interval_seconds = 2.0
 data_api_limit = 500                  # /trades page size
