@@ -45,7 +45,7 @@ def test_build_wires_services_and_store(tmp_path):
     rt = build_ingestion_runtime(cfg, gamma_fetch=lambda params: _rows(),
                                  ws_connect=object(), data_fetch=object())
     assert isinstance(rt, IngestionRuntime)
-    assert len(rt._services) == 2                       # ws + data-api (both _supervised-wrapped)
+    assert len(rt._services) == 3                       # ws + midpoint + data-api (all supervised)
     assert (tmp_path / "m.db").exists()                 # EventStore created at db_path
 
 
@@ -53,7 +53,7 @@ def test_build_omits_data_api_when_disabled(tmp_path):
     cfg = IngestionConfig(db_path=str(tmp_path / "m.db"), universe_max_markets=5, data_api_enabled=False)
     rt = build_ingestion_runtime(cfg, gamma_fetch=lambda params: _rows(),
                                  ws_connect=object(), data_fetch=object())
-    assert len(rt._services) == 1                       # ws only
+    assert len(rt._services) == 2                       # ws + midpoint
 
 
 def test_build_supervises_all_services(tmp_path):
