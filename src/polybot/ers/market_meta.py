@@ -6,6 +6,11 @@ following TDD slices.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
+import json
+import math
+import time
+from types import MappingProxyType
 
 
 # Fixed at 10**9 (about 31.7 years): deliberately enormous and strictly greater than the default
@@ -110,6 +115,197 @@ DEFAULT_CATEGORY_POLICY = CategoryPolicy(
         ("weather", frozenset({"84"})),
     ),
 )
+
+
+class MarketSnapshotError(ValueError):
+    """A Gamma snapshot cannot be interpreted without weakening the metadata contract."""
+
+
+class MarketMetadataUnavailable(LookupError):
+    """The requested condition/token pair has no safe metadata definition in this snapshot."""
+
+
+@dataclass(frozen=True)
+class _MarketDefinition:
+    condition_id: str
+    token_ids: tuple[str, str]
+    event_id: str
+    category: str | None
+    question_text: str
+    end_epoch: float
+
+
+def _required_string(row, field, context):
+    value = row.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise MarketSnapshotError(
+            f"Gamma {context} {field} must be a non-empty string, got {value!r}"
+        )
+    return value
+
+
+def _parse_tokens(raw, condition_id):
+    if isinstance(raw, str):
+        try:
+            values = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise MarketSnapshotError(
+                f"Gamma market {condition_id} clobTokenIds is not valid JSON"
+            ) from exc
+    else:
+        values = raw
+    if not isinstance(values, list):
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} clobTokenIds must decode to a token list"
+        )
+    if len(values) != 2:
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} token list must contain exactly two IDs"
+        )
+    if any(not isinstance(token, str) or not token for token in values):
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} token IDs must be non-empty strings"
+        )
+    if values[0] == values[1]:
+        raise MarketSnapshotError(f"Gamma market {condition_id} token IDs must be distinct")
+    return values[0], values[1]
+
+
+def _parse_deadline(raw, condition_id):
+    if not isinstance(raw, str) or not raw:
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} endDate must be a non-empty RFC3339 string"
+        )
+    value = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} endDate is not valid RFC3339: {raw!r}"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} endDate must include a UTC offset"
+        )
+    epoch = parsed.timestamp()
+    if not math.isfinite(epoch):
+        raise MarketSnapshotError(f"Gamma market {condition_id} endDate is non-finite")
+    return epoch
+
+
+def _event_id_for_market(row, condition_id):
+    relations = row.get("events")
+    if not isinstance(relations, list) or len(relations) != 1:
+        raise MarketSnapshotError(
+            f"Gamma market {condition_id} event link must contain exactly one event"
+        )
+    relation = relations[0]
+    if not isinstance(relation, Mapping):
+        raise MarketSnapshotError(f"Gamma market {condition_id} event link must be a mapping")
+    return _required_string(relation, "id", f"market {condition_id} event")
+
+
+class MarketRegistry:
+    """Immutable condition+token metadata registry built from injected Gamma snapshots.
+
+    Construction performs all provider parsing once. The stored mappings are read-only; a future
+    runtime refresh builds a complete replacement registry instead of mutating this instance.
+    """
+
+    def __init__(self, by_condition, by_token, unavailable_conditions, unavailable_tokens, clock):
+        self._by_condition = MappingProxyType(dict(by_condition))
+        self._by_token = MappingProxyType(dict(by_token))
+        self._unavailable_conditions = frozenset(unavailable_conditions)
+        self._unavailable_tokens = frozenset(unavailable_tokens)
+        self._clock = clock
+
+    @classmethod
+    def from_gamma_snapshots(cls, market_rows, event_rows, *, clock=None,
+                             category_policy=DEFAULT_CATEGORY_POLICY):
+        if not isinstance(market_rows, list):
+            raise MarketSnapshotError(
+                f"Gamma market snapshot must be a list, got {type(market_rows).__name__}"
+            )
+        if not isinstance(event_rows, list):
+            raise MarketSnapshotError(
+                f"Gamma event snapshot must be a list, got {type(event_rows).__name__}"
+            )
+        if not isinstance(category_policy, CategoryPolicy):
+            raise MarketSnapshotError("category_policy must be a CategoryPolicy")
+
+        event_categories: dict[str, str | None] = {}
+        for index, row in enumerate(event_rows):
+            if not isinstance(row, Mapping):
+                raise MarketSnapshotError(
+                    f"Gamma event row {index} must be a mapping, got {type(row).__name__}"
+                )
+            event_id = _required_string(row, "id", f"event row {index}")
+            try:
+                category = category_policy.classify(row.get("tags"))
+            except (TypeError, ValueError) as exc:
+                raise MarketSnapshotError(f"Gamma event {event_id} tags are invalid: {exc}") from exc
+            if event_id in event_categories and event_categories[event_id] != category:
+                raise MarketSnapshotError(f"Gamma event {event_id} category conflict")
+            event_categories[event_id] = category
+
+        all_by_condition: dict[str, _MarketDefinition] = {}
+        all_by_token: dict[str, _MarketDefinition] = {}
+        for index, row in enumerate(market_rows):
+            if not isinstance(row, Mapping):
+                raise MarketSnapshotError(
+                    f"Gamma market row {index} must be a mapping, got {type(row).__name__}"
+                )
+            condition_id = _required_string(row, "conditionId", f"market row {index}")
+            question = _required_string(row, "question", f"market {condition_id}")
+            tokens = _parse_tokens(row.get("clobTokenIds"), condition_id)
+            event_id = _event_id_for_market(row, condition_id)
+            deadline = _parse_deadline(row.get("endDate"), condition_id)
+            definition = _MarketDefinition(
+                condition_id=condition_id,
+                token_ids=tokens,
+                event_id=event_id,
+                category=event_categories.get(event_id),
+                question_text=question,
+                end_epoch=deadline,
+            )
+
+            previous = all_by_condition.get(condition_id)
+            if previous is not None and previous != definition:
+                raise MarketSnapshotError(f"Gamma condition {condition_id} definition conflict")
+            all_by_condition[condition_id] = definition
+            for token_id in tokens:
+                token_owner = all_by_token.get(token_id)
+                if token_owner is not None and token_owner.condition_id != condition_id:
+                    raise MarketSnapshotError(
+                        f"Gamma token {token_id} maps to multiple conditions: "
+                        f"{token_owner.condition_id}, {condition_id}"
+                    )
+                all_by_token[token_id] = definition
+
+        by_condition = {
+            condition_id: definition
+            for condition_id, definition in all_by_condition.items()
+            if definition.category is not None
+        }
+        if not by_condition:
+            raise MarketSnapshotError("Gamma snapshots contain no usable categorized market")
+        by_token = {
+            token_id: definition
+            for token_id, definition in all_by_token.items()
+            if definition.category is not None
+        }
+        unavailable_conditions = set(all_by_condition) - set(by_condition)
+        unavailable_tokens = {
+            token_id for token_id, definition in all_by_token.items()
+            if definition.category is None
+        }
+        return cls(
+            by_condition, by_token, unavailable_conditions, unavailable_tokens,
+            time.time if clock is None else clock,
+        )
+
+    def __len__(self):
+        return len(self._by_condition)
 
 
 class StubMarketMeta:
