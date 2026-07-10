@@ -58,10 +58,11 @@ def test_production_shaped_three_services_cancel_and_close_writer_once():
         await asyncio.wait_for(all_started.wait(), timeout=1)
         runtime.request_stop()
         await asyncio.wait_for(task, timeout=1)
+        # Assert before asyncio.run() cleanup can cancel an accidentally detached task.
+        assert cancelled == started
 
     asyncio.run(scenario())
     assert started == {"clob-ws", "clob-midpoint", "data-api"}
-    assert cancelled == started
     assert writer.close_calls == 1
 
 
