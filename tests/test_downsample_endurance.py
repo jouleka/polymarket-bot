@@ -31,6 +31,18 @@ def test_projected_gib_per_day_rejects_nonpositive_elapsed(elapsed_seconds):
         projected_gib_per_day(1, elapsed_seconds)
 
 
+@pytest.mark.parametrize("elapsed_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_projected_gib_per_day_rejects_nonfinite_elapsed(elapsed_seconds):
+    with pytest.raises(ValueError, match="elapsed_seconds"):
+        projected_gib_per_day(1, elapsed_seconds)
+
+
+@pytest.mark.parametrize("total_bytes", [-1, float("nan"), float("inf"), float("-inf")])
+def test_projected_gib_per_day_rejects_invalid_total_bytes(total_bytes):
+    with pytest.raises(ValueError, match="total_bytes"):
+        projected_gib_per_day(total_bytes, 1)
+
+
 def test_footprint_includes_db_and_wal_and_ignores_missing_shm(tmp_path):
     db = tmp_path / "capture.db"
     wal = Path(f"{db}-wal")
@@ -109,6 +121,32 @@ def test_inspect_capture_rejects_rate_above_ceiling(tmp_path):
 
     assert result.passed is False
     assert any("projected rate" in failure for failure in result.failures)
+
+
+@pytest.mark.parametrize(("projected_rate", "ceiling", "reason"), [
+    (float("nan"), 0.5, "invalid projected rate"),
+    (float("inf"), 0.5, "invalid projected rate"),
+    (float("-inf"), 0.5, "invalid projected rate"),
+    (-0.01, 0.5, "invalid projected rate"),
+    (0.25, float("nan"), "invalid rate ceiling"),
+    (0.25, float("inf"), "invalid rate ceiling"),
+    (0.25, float("-inf"), "invalid rate ceiling"),
+    (0.25, 0.0, "invalid rate ceiling"),
+])
+def test_inspect_capture_fails_closed_on_invalid_rate_inputs(
+        tmp_path, projected_rate, ceiling, reason):
+    with EventStore(str(tmp_path / "capture.db")) as store:
+        store.append(_env(MIDPOINT_SOURCE, "mid:1", 1, _midpoint_content(), ("A",)))
+        store.append(_env("data-api", "/trades:t1", 2, '{"id":"t1"}'))
+
+        result = inspect_capture(
+            store,
+            projected_rate=projected_rate,
+            max_gib_per_day=ceiling,
+        )
+
+    assert result.passed is False
+    assert any(reason in failure for failure in result.failures)
 
 
 def test_inspect_capture_requires_midpoint_trade_and_usable_quote(tmp_path):
