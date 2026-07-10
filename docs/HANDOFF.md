@@ -1,10 +1,10 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-04)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-10)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
 
-> This supersedes the original POL-3 handoff (preserved in git history). It reflects everything shipped
-> through S3/POL-5 slice 2.
+> The current state is summarized in §7. Older per-slice detail below is retained as historical evidence;
+> when it conflicts with the dated 2026-07-10 update, the newer update and `AGENTS.md` win.
 
 ---
 
@@ -22,21 +22,19 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   fees/spread/slippage/lockup/adverse UMA resolution. Job #1 = **don't blow up** + **prove a net edge in
   shadow** before risking more. If nothing clears its bar in shadow → **do not deploy**.
 
-## 2. Environment / how to run (Windows host, repo in WSL)
-- **Repo:** WSL Ubuntu `/home/jurgenubuntu/projects/polymarket-bot` (GitHub `jouleka/polymarket-bot`).
-  The `~/Public/WorkRepos/...` paths in old docs are macOS and DO NOT apply here.
-- Run git/python via `wsl -d Ubuntu -- bash -lc '...'`. Edit/Read/Write files via UNC
-  `\\wsl.localhost\Ubuntu\home\jurgenubuntu\projects\polymarket-bot\...`.
-- **Venv** (gitignored; system python3.12 lacks ensurepip): `uv venv --python 3.13 .venv && uv pip install
-  --python .venv/bin/python pytest "httpx>=0.28" "websockets>=16"`. Tests: `./.venv/bin/pytest` →
-  **853 passing** (pyproject sets `pythonpath=["src"]`, no install needed; `addopts="-q"` suppresses
-  the summary line under a second `-q` — force counts with `-o addopts=""` or `--tb=no -rN`).
-- **FIRST: `git pull`** — origin is usually ahead of a fresh local clone and unfetched (it looks docs-only
-  until fetched).
-- **WSL gotchas:** `wsl bash -lc '...'` mangles single quotes / `$()` / heredoc f-strings (the wrapper is
-  single-quoted). For commit messages: write the message to a file via the Write tool, `tr -d "\015"` to
-  sanitize CRLF, then `git commit -F <file>`. UNC Read/Edit/Write usually work but intermittently throw
-  EISDIR (9p glitch) — retry. Free keyless Polygon RPC: `https://polygon-bor-rpc.publicnode.com` (UA header).
+## 2. Environment / how to run
+- **Development checkout:** `/root/projects/polymarket-bot`, canonical GitHub repository
+  `jouleka/polymarket-bot`, remote `origin`.
+- **Service checkout:** `/opt/polymarket-bot`, executed by `polybot`. It is distinct from the development
+  checkout. Before any future install, repair its stale remote to GitHub; never recreate the deleted
+  `/root/git/polymarket-bot.git` bare repository.
+- **Venv:** gitignored `.venv` with Python 3.13. Canonical verification:
+  `./.venv/bin/pytest -o addopts="" -q` → **1,313 passed** on 2026-07-10.
+- **Synchronize safely:** check status, `git fetch --prune origin`, compare ahead/behind, and fast-forward
+  only a clean non-diverged checkout. Do not blindly pull over local work.
+- **Service state:** `polymarket-ingestion.service` is stopped and disabled. Deployment, database
+  preservation/migration, and start/enable are separate owner-approved actions; see `deploy/README.md`.
+- Free keyless Polygon RPC: `https://polygon-bor-rpc.publicnode.com` (UA header).
 - **Live read-only smokes:** `scripts/{live_ingestion_check, replay_fidelity_check (+ --forced-resync),
   polygon_watch_check, news_check, shard_endurance_check}.py`.
 
@@ -76,7 +74,7 @@ Read the comments on the relevant ticket — they hold the detailed per-slice re
 kill path is tested against a wedged process AND S9 shadow proves a calibrated, net-positive, out-of-sample
 edge.
 
-## 5. What is already built (all on `origin/main` except S4.5 = local `main` pending push; all TDD'd + Opus-reviewed + live-verified; 556 tests)
+## 5. What is already built (historical per-slice detail; current summary and test count are in §7)
 - **S1 ingestion (`src/polybot/ingestion/` + `core/` + `storage/`):** Gamma normalizer · CLOB market-WS
   collector (sharding + client keepalive + mid-stream sequence-gap detection & resync) · LocalBook
   (staleness-gated) · Data API poller · Polygon on-chain log watcher (CTF ERC-1155 + Exchange,
@@ -390,7 +388,7 @@ edge.
 
 ## 7. Your task — pick based on what's ready
 
-**UPDATE 2026-07-05 — the shadow deployment has STARTED (Phase 0).** "Deploy + run shadow" decomposed into a
+**HISTORICAL UPDATE 2026-07-05 — superseded by the 2026-07-10 block below.** "Deploy + run shadow" decomposed into a
 code half + an ops half (see `docs/DESIGN-D4a-INGESTION-RUNTIME.md` + `docs/PLAN-D4a-INGESTION-RUNTIME.md`).
 **D4a — the continuous ingestion runtime — is BUILT + on `main`** (new package `src/polybot/runtime/`: self-verifying
 `IngestionConfig` + loader, `discover_universe`, the `IngestionRuntime` supervision core with durable `TaskGroup`
@@ -406,7 +404,7 @@ push-to-deploy via a `/root/git/<bot>.git` bare repo) → run ingestion → then
 state: **VPS + Hermes are up** (small model now, GPT-5.5 planned; polymarket must stay self-contained from the other
 bots); **Polymarket account exists, $0 funded** (shadow needs no funds; POL-4/live still blocked on a funded clean box).
 
-**UPDATE 2026-07-10 — D4a downsample code + release gate complete; landing/deploy approval pending.** The POL-13 feature branch
+**UPDATE 2026-07-10 — D4a downsample code + release gate complete; deployment approval pending.** The POL-13 development tree
 now keeps sharded WS books only in memory (`sink=None`), persists one strict versioned `clob-midpoint` batch every
 60 seconds, and retains the full deduplicated Data API trade tape. The ERS co-move adapter auto-selects those batches
 while explicit legacy raw replay remains available. Synthetic events are **not** reconstructable from this compact
@@ -414,7 +412,7 @@ production history and remain deferred pending a tuned live contract.
 
 The VPS kit still exists (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, system unit), but the
 service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected build has
-not been merged, pushed, installed, enabled, or started. Independent spec review passed, the final mutation battery
+not been pushed, installed, enabled, or started. Independent spec review passed, the final mutation battery
 killed 41/41, and the required 1,800-second/200-market release gate passed without loosening the **≤0.5 GiB/day**
 ceiling: elapsed 1,800.006 seconds; total DB+WAL+SHM 5,586,944 bytes; source counts
 `{"clob-midpoint":29,"data-api":3500}`; 1,800 usable quotes; exactly zero raw rows; all batches decoded; no HALT;
@@ -425,39 +423,20 @@ Any later deployment requires separate approval and must use the GitHub-authorit
 recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte
 size and SHA-256, install against a fresh `market_memory.db`, and leave the service stopped until explicit
 start/enable approval. **OWNER DECISION (2026-07-05): finish the remaining build first, then a max-2-week light
-shadow, then go live.** Build order remains **D4a-downsample → D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
+shadow, then go live.** Remaining build order is **D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
 The brain deploys as a dedicated `polymarket` Hermes profile. Go-live remains gated on POL-4 and a funded wallet on
 a clean non-Windows box.
 
-**The critical path is POL-4 (S2 signing), and it is BLOCKED on the operator:** it needs a funded Polymarket
-deposit wallet on a CLEAN non-Windows box. Keys must NEVER touch the Windows/WSL box (documented cracked-game
-malware vector). You CANNOT do POL-4 from this machine. So:
+**Next work:** finish the no-funding shadow stack in the owner-approved order. Start with **POL-14 D1
+MarketRegistry**, then POL-15 resolution/settlement, POL-16 shadow-execution wiring, POL-17 the continuous
+ERS/harness runtime, and POL-18 the isolated propose-only Hermes brain. Only after all five land and are deployed
+does the ≤2-week paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
+net-positive, out-of-sample results; otherwise do not proceed.
 
-- **If the operator has funded a deposit wallet on a clean box →** do **POL-4** (build the signer +
-  order-construction on the official Rust `Polymarket/rs-clob-client-v2` as a sandboxed sidecar; Python/TS V2
-  SDKs are broken for new deposit wallets; acceptance = empirically place + cancel ONE real min-size order —
-  prove rs 0.5.x live, don't guess). This unblocks S3 slice-2's signer seam → S4 → S6 → S9.
-
-- **If NOT funded → continue the no-funding work. ALL of S1–S9 (the entire deterministic build) is now DONE**
-  (S3 slice 3, S5/POL-7, S7/POL-9, S6/POL-8, the S4/POL-6 ENVELOPE S4.1–S4.7, S8/POL-10, AND S9/POL-11 — see §5).
-  **There is no more pure-code slice to build — what remains is DEPLOYMENT + OPERATION, most of which is gated on
-  the operator.** Recommended next, in order:
-  1. **DEPLOY + RUN THE SHADOW PERIOD (the real remaining work, needs the operator).** The S9 engine is built and
-     dormant; to produce the earn-autonomy GO it must actually run: stand up a DEPLOYED Hermes feeding the
-     propose-only facade + continuous read-only ingestion on the clean VPS, wire S9's live seams (the fills-recorder
-     into the ShadowLedger, `mark_for` = `LocalBook.midpoint()`/resolution, the re-pulled fee/reward/dispute numbers),
-     and let it accrue ≥150 honest resolutions/category. Both the calibration `k` and S8's `go` and S9's `ready` stay
-     dormant until then. **No real money until S9 shadow proves a calibrated, net-positive, OUT-OF-SAMPLE edge; if
-     nothing clears its bar → DO NOT DEPLOY (inaction is free).**
-  2. **POL-4 (S2 signing) — still the critical path, still BLOCKED on the operator funding a deposit wallet on a
-     clean non-Windows box** (keys never touch this box). Unblocks Stage-1 TINY-LIVE execution. When it lands, honor
-     the S9 POL-4 caveats (the DIVERGED-reconciler-adopts-portfolio note; re-calibrate the deploy-seam numbers).
-  - **Smaller / feeding (buildable now):** real latent-cluster assignment (S3 follow-up — makes `comove.py` bite
-    cross-event instead of the `event_id` placeholder) · GDELT slow-path · run the read-only ingestion continuously
-    to warm comove/priors · the S6 deferreds (live-Hermes MCP transport + an injection probe vs a real Hermes;
-    MarketRegistry: Gamma metadata → category/question/seconds; resolution-feedback to warm k; a true before/after
-    mid-diff for the same-source gate, DESIGN §10) · the S9-consumer glue that ANDs `RampController.decide` with the
-    calibration `k` and turns a `promote_recommended` into an actual (ceiling-clamped) cap change via the human gate.
+**POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
+wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
+empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
+viability from documentation alone.
 
 ## 8. Landmines
 - Never let Hermes compute size or touch keys (`propose_trade` is its only write tool, INSERT-only). When S6

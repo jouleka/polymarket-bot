@@ -4,7 +4,11 @@ Autonomous 24/7 Polymarket trading bot. The **Hermes** agent is the reasoning br
 **deterministic Execution & Risk Service (ERS)** is the hands. There is **no human-in-the-loop
 confirm** — deterministic guardrails replace it, with Telegram as notify + remote kill only.
 
-**Status:** Design phase — no code yet. Spec approved 2026-06-24. Build tracked in YouTrack **POL**.
+**Status (2026-07-10):** the deterministic S1–S9 engine and the corrected D4a ingestion/downsample
+runtime are implemented and independently reviewed. The current release evidence is **1,313 tests**
+plus a passing 1,800-second/200-market storage gate at **0.249755 GiB/day** with zero raw websocket
+rows. The VPS ingestion service remains **stopped and disabled**; the full paper/shadow runtime,
+deployed propose-only brain, and live signer are not complete. Build tracking is in YouTrack **POL**.
 
 ## Read first
 1. [`docs/CONTEXT.md`](docs/CONTEXT.md) — everything a human or LLM needs to onboard (verified facts,
@@ -26,12 +30,16 @@ bot has a credible profit claim. **Its first job is to not blow up, and to prove
 mode before risking more than a small test wallet.** If nothing clears its bar in shadow, the correct
 outcome is *do not deploy.*
 
-## Build order (epic POL + S1–S9)
-`S1` ingestion + Market-Memory DB → `S2` signing spike (build-gating) → `S3` ERS + propose_trade →
-`S4` safety envelope + out-of-band supervisor + reconciliation + Telegram → `S5` calibration +
-base-rate + Anchor Gate → `S6` Hermes integration + signal fusion + truth-gate → `S7`
-smart-money/insider detectors (defensive) → `S8` maker module (honest net accounting) → `S9` shadow
-harness + ramp controller.
+## Remaining build order
+
+The pure S1–S9 components are built. The owner-approved remaining sequence is:
+
+`POL-14` MarketRegistry → `POL-15` resolution/settlement feed → `POL-16` shadow-execution wiring →
+`POL-17` continuous ERS/harness runtime → `POL-18` isolated propose-only Hermes brain → ≤2-week
+paper/shadow run → `POL-4` live signing gate.
+
+POL-4 is blocked on a funded wallet on a clean non-Windows machine. Nothing in the current runtime
+signs or moves money.
 
 Nothing touches real money until **S4 is tested** (kill path against a wedged process) and **S9 has
 run a full shadow period** with net-positive, calibrated, out-of-sample results.
