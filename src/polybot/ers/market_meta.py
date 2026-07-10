@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import math
 from numbers import Real
+import re
 import time
 from types import MappingProxyType
 from typing import Any
@@ -22,6 +23,12 @@ SECONDS_TO_RESOLUTION_SENTINEL = 1_000_000_000
 
 # The single legacy category bucket. The real registry never maps unavailable provider data here.
 UNKNOWN_CATEGORY = "unknown"
+
+# datetime.fromisoformat intentionally accepts any single Unicode date/time separator. Gamma's
+# provider boundary is narrower: canonical RFC3339 with `T` and an explicit offset only.
+_RFC3339 = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
+)
 
 
 @dataclass(frozen=True)
@@ -191,9 +198,9 @@ def _parse_tokens(raw, condition_id):
 
 
 def _parse_deadline(raw, condition_id):
-    if not isinstance(raw, str) or not raw:
+    if not isinstance(raw, str) or _RFC3339.fullmatch(raw) is None:
         raise MarketSnapshotError(
-            f"Gamma market {condition_id} endDate must be a non-empty RFC3339 string"
+            f"Gamma market {condition_id} endDate must be a strict offset-aware RFC3339 string"
         )
     value = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
     try:
