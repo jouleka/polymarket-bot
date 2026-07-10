@@ -75,6 +75,7 @@ Preserve the DB and any sidecars; record byte sizes and SHA-256 checksums withou
 
 ```sh
 systemctl disable --now polymarket-ingestion.service
+test -s /opt/polymarket-bot/data/market_memory.db
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 evidence=/opt/polymarket-bot/data/raw-firehose-${stamp}
 mkdir -p "$evidence"
@@ -85,6 +86,7 @@ for path in \
 do
   if [ -e "$path" ]; then mv "$path" "$evidence/"; fi
 done
+test -s "$evidence/market_memory.db"
 find "$evidence" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort >"$evidence/SIZES.txt"
 find "$evidence" -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0 \
   | sort -z | xargs -0 sha256sum >"$evidence/SHA256SUMS"
@@ -99,9 +101,12 @@ Do not delete or overwrite this evidence. The corrected service must start with 
 
 ```sh
 systemctl disable --now polymarket-ingestion.service
+git -C /root/projects/polymarket-bot remote set-url origin https://github.com/jouleka/polymarket-bot.git
+git -C /opt/polymarket-bot remote set-url origin https://github.com/jouleka/polymarket-bot.git
+test "$(git -C /root/projects/polymarket-bot remote get-url origin)" = "https://github.com/jouleka/polymarket-bot.git"
+test "$(git -C /opt/polymarket-bot remote get-url origin)" = "https://github.com/jouleka/polymarket-bot.git"
 git -C /root/projects/polymarket-bot pull --ff-only origin main
 git -C /opt/polymarket-bot pull --ff-only origin main
-git -C /opt/polymarket-bot remote get-url origin
 bash /opt/polymarket-bot/deploy/install.sh
 systemctl is-enabled polymarket-ingestion.service   # required: disabled
 systemctl is-active polymarket-ingestion.service    # required: inactive

@@ -196,15 +196,18 @@ collector-specific signatures and is trivially fakeable in tests.*
 
 ## 5. Safety / correctness invariants
 
-1. **Read-only.** No signer, no IntentStore, no ERS. D4a cannot place, size, propose, or move anything. (Structural:
-   it imports only `ingestion/`, `storage/`, `core/`, and `ers/heartbeat.py` — never the validator/facade/signer.)
+1. **Read-only.** No signer, no IntentStore, no order path. The runtime composition root imports only ingestion,
+   storage, core, and heartbeat surfaces. The amendment's isolated `ers/comove.py` adapter reads EventStore data and
+   the midpoint decoder; it does not touch validator, service, caps, safety state, or signer behavior.
 2. **Durability:** `writer.close()` called **exactly once** on every exit path (A4/A5). No row lost except on SIGKILL.
 3. **Global ordering:** one `MonotonicStamper` for all sources → strictly-increasing unique `observed_at`
    (replay/no-look-ahead invariant from S1, preserved).
 4. **Fail loud:** config invalid → construction raises; a venue format change → HALT propagates (never silently
    swallowed); a Gamma schema change in discovery → raise, never a silently-empty universe.
-5. **Purely additive:** only `src/polybot/runtime/**` + `tests/**` are created. `git diff --stat` shows no existing
-   `src/` file modified. Baseline 1113 stays green.
+5. **File-scope evidence.** The original landed D4a runtime was additive under `src/polybot/runtime/**`. The later
+   POL-13 downsample amendment intentionally adds `src/polybot/ingestion/midpoint.py`, modifies runtime config/wiring,
+   and changes only the isolated `src/polybot/ers/comove.py` replay adapter outside those packages. Signed risk,
+   validation, service, intent, safety, and signer surfaces remain byte-identical to `main`.
 6. **Bounded footprint:** the universe is capped (top-N); the writer queue is bounded (`max_queued`); the poller is a
    single global request per interval — no unbounded fan-out.
 
@@ -242,7 +245,7 @@ ERS+harness runtime.
 | A5 | A fake service that RAISES → `run()` re-raises loudly **and** `writer.close()` still called **exactly once** (durability on crash). |
 | A6 | With a `heartbeat` configured, the heartbeat file is (re)written at least once while running. |
 | A7 | `build_ingestion_runtime` wires the REAL collectors and, in a bounded integration smoke (few seconds, live venue or a local WS fake), persists ≥1 row end-to-end through the durable store. |
-| A8 | **Additive invariant:** `git diff --name-only main` lists only `src/polybot/runtime/**`, `tests/**`, `docs/**`. Full suite: 1113 prior tests + the new ones, green, exit 0. |
+| A8 | **Historical original-runtime criterion:** the landed D4a implementation was limited to runtime/tests/docs and raised the baseline above 1113. **Amendment evidence:** the POL-13 downsample range is the explicit file surface in `DESIGN-D4a-DOWNSAMPLE.md` §6; full suite, sacred-surface hashes, and structural no-trading checks must pass. |
 
 ## 8. Sub-slice decomposition (build order — strict TDD, one implementer each, serial on the branch)
 

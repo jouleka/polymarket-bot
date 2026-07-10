@@ -73,7 +73,7 @@ def test_decode_midpoint_batch_returns_exact_quotes():
     }
 ```
 
-**Step 2 — verify RED:** 
+**Step 2 — verify RED:**
 
 ```bash
 ./.venv/bin/pytest -o addopts="" tests/test_midpoint_snapshot.py::test_decode_midpoint_batch_returns_exact_quotes -q

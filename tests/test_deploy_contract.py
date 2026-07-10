@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "deploy" / "install.sh"
 UNIT = ROOT / "deploy" / "polymarket-ingestion.service"
+RUNBOOK = ROOT / "deploy" / "README.md"
 
 
 def test_installer_leaves_service_stopped_and_disabled():
@@ -37,3 +38,35 @@ def test_unit_describes_compact_midpoint_and_trade_persistence():
     assert "trade" in description
     assert "raw" not in description
     assert "un-backfillable order-book" not in description
+
+
+def test_runbook_requires_nonempty_old_database_evidence():
+    text = RUNBOOK.read_text()
+    source_check = "test -s /opt/polymarket-bot/data/market_memory.db"
+    preserved_check = 'test -s "$evidence/market_memory.db"'
+    move_loop = "for path in"
+    checksum = 'sha256sum -c "$evidence/SHA256SUMS"'
+
+    assert source_check in text
+    assert preserved_check in text
+    assert checksum in text
+    assert text.index(source_check) < text.index(move_loop)
+    assert text.index(move_loop) < text.index(preserved_check) < text.index(checksum)
+
+
+def test_runbook_repairs_github_origin_before_service_checkout_pull():
+    text = RUNBOOK.read_text()
+    set_origin = (
+        "git -C /opt/polymarket-bot remote set-url origin "
+        "https://github.com/jouleka/polymarket-bot.git"
+    )
+    assert_origin = (
+        'test "$(git -C /opt/polymarket-bot remote get-url origin)" = '
+        '"https://github.com/jouleka/polymarket-bot.git"'
+    )
+    pull = "git -C /opt/polymarket-bot pull --ff-only origin main"
+
+    assert set_origin in text
+    assert assert_origin in text
+    assert pull in text
+    assert text.index(set_origin) < text.index(assert_origin) < text.index(pull)
