@@ -1,4 +1,6 @@
 import asyncio
+from decimal import Decimal
+
 import pytest
 from polybot.runtime.config import IngestionConfig
 from polybot.runtime.ingestion import IngestionRuntime, build_ingestion_runtime, _supervised
@@ -113,6 +115,97 @@ def test_build_structurally_disables_raw_ws_persistence(tmp_path, monkeypatch):
         assert not hasattr(ingestion, "PersistingSink")
     finally:
         rt._writer.close()
+
+
+def test_factory_end_to_end_persists_midpoints_but_no_raw_ws_rows(tmp_path, monkeypatch):
+    from polybot.ingestion.midpoint import (
+        MidpointSnapshotter as RealMidpointSnapshotter,
+        decode_midpoint_batch,
+    )
+    from polybot.runtime import ingestion
+
+    class FakeBook:
+        def __init__(self, bid, ask, mid):
+            self._bid = Decimal(bid)
+            self._ask = Decimal(ask)
+            self._mid = Decimal(mid)
+
+        def best_bid(self):
+            return self._bid
+
+        def best_ask(self):
+            return self._ask
+
+        def midpoint(self):
+            return self._mid
+
+    class FakeCollector:
+        def __init__(self, _connect, _stamper, token_ids, *, sink, **_kwargs):
+            assert sink is None
+            self._books = {
+                token_ids[0]: FakeBook("0.60", "0.62", "0.61"),
+                token_ids[1]: FakeBook("0.30", "0.34", "0.32"),
+            }
+
+        def book_for(self, token_id):
+            return self._books.get(token_id)
+
+        async def run(self, max_connections=None):
+            await asyncio.Event().wait()
+
+    db = str(tmp_path / "e2e-midpoint.db")
+
+    async def scenario():
+        first_sleep_started = asyncio.Event()
+        complete_first_interval = asyncio.Event()
+        second_sleep_started = asyncio.Event()
+        never = asyncio.Event()
+        sleep_calls = []
+
+        async def controlled_sleep(interval):
+            sleep_calls.append(interval)
+            if len(sleep_calls) == 1:
+                first_sleep_started.set()
+                await complete_first_interval.wait()
+            else:
+                second_sleep_started.set()
+                await never.wait()
+
+        class ControlledSnapshotter(RealMidpointSnapshotter):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs, sleep=controlled_sleep)
+
+        monkeypatch.setattr(ingestion, "ShardedMarketCollector", FakeCollector)
+        monkeypatch.setattr(ingestion, "MidpointSnapshotter", ControlledSnapshotter)
+        cfg = IngestionConfig(
+            db_path=db,
+            data_api_enabled=False,
+            snapshot_interval_seconds=12.5,
+        )
+        rt = build_ingestion_runtime(
+            cfg,
+            gamma_fetch=lambda params: _rows(),
+            ws_connect=object(),
+            data_fetch=object(),
+        )
+        task = asyncio.create_task(rt.run())
+        await asyncio.wait_for(first_sleep_started.wait(), timeout=1)
+        complete_first_interval.set()
+        await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
+        rt.request_stop()
+        await asyncio.wait_for(task, timeout=1)
+        assert sleep_calls == [12.5, 12.5]
+
+    asyncio.run(scenario())
+
+    with EventStore(db) as store:
+        rows = store.all()
+    assert len(rows) == 1
+    assert {row.source for row in rows} == {"clob-midpoint"}
+    assert not any(row.source == "clob-ws" for row in rows)
+    quotes = decode_midpoint_batch(rows[0].content)
+    assert quotes["t1"].midpoint == Decimal("0.61")
+    assert quotes["t2"].midpoint == Decimal("0.32")
 
 
 def test_build_supervises_all_services(tmp_path):
