@@ -172,6 +172,18 @@ def test_build_bar_series_does_not_forward_fill_omitted_midpoint():
     assert bars["B"] == {0: Decimal("0.31")}
 
 
+def test_build_bar_series_auto_never_merges_raw_and_midpoint_rows():
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        store.append(_ws_env("RAW", _book_frame("RAW", "0.90", "0.92"), 0))
+        store.append(_mid_env(10, {"A": ("0.50", "0.52", "0.51")}))
+
+        automatic = build_bar_series(store, bar_ns=1000)
+        forced_raw = build_bar_series(store, bar_ns=1000, source="clob-ws")
+
+    assert automatic == {"A": {0: Decimal("0.51")}}
+    assert forced_raw == {"RAW": {0: Decimal("0.91")}}
+
+
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))     # bar0, mid .61
