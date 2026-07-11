@@ -517,6 +517,13 @@ def test_lookup_preserves_representation_sensitive_token_strings_exactly():
         registry.metadata_for(_intent(condition_id="c1", token_id="1"))
 
 
+@pytest.mark.parametrize("token_id", ["t1", "t2"])
+def test_lookup_accepts_both_owned_token_siblings(token_id):
+    registry = _registry()
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id=token_id)).category == "politics"
+
+
 @pytest.mark.parametrize(("condition_id", "token_id"), [
     ("missing", "t1"),
     ("c1", "missing"),
@@ -631,9 +638,17 @@ def test_lookup_normalizes_wall_clock_overflow_as_unavailable():
         registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
 
 
-def test_lookup_wraps_clock_exceptions_as_unavailable():
+@pytest.mark.parametrize("clock_error", [
+    RuntimeError("clock runtime failure"),
+    ValueError("clock value failure"),
+    TypeError("clock type failure"),
+    AttributeError("clock attribute failure"),
+    OverflowError("clock overflow failure"),
+    Exception("clock base failure"),
+])
+def test_lookup_wraps_clock_exception_siblings_as_unavailable(clock_error):
     def broken_clock():
-        raise RuntimeError("clock source failed")
+        raise clock_error
 
     registry = _registry(clock=broken_clock)
     with pytest.raises(MarketMetadataUnavailable, match="clock"):
