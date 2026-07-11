@@ -358,11 +358,13 @@ def test_market_missing_from_referenced_event_is_indexed_unavailable():
         registry.metadata_for(_intent(condition_id="orphan", token_id="o1"))
 
 
-@pytest.mark.parametrize("unhashable_condition", [[], {}])
-def test_event_ignores_unrelated_unhashable_condition_before_selected_relationship(
-        unhashable_condition):
+@pytest.mark.parametrize("non_string_condition", [
+    [], {}, None, 0, False, 1.5,
+], ids=["list", "mapping", "null", "integer", "boolean", "float"])
+def test_event_ignores_unrelated_non_string_condition_before_selected_relationship(
+        non_string_condition):
     event = _event(markets=[
-        {"conditionId": unhashable_condition,
+        {"conditionId": non_string_condition,
          "clobTokenIds": '["legacy1", "legacy2"]'},
         _embedded_market("c1", ("t1", "t2")),
     ])
@@ -373,17 +375,21 @@ def test_event_ignores_unrelated_unhashable_condition_before_selected_relationsh
 def test_event_processes_every_selected_market_not_only_the_last_row():
     registry = _registry(
         markets=[_market("c1", ("t1", "t2")),
-                 _market("c2", ("t3", "t4"))],
+                 _market("c2", ("t3", "t4")),
+                 _market("c3", ("t5", "t6"))],
         events=[_event(markets=[
             _embedded_market("c1", ("t1", "t2")),
             _embedded_market("c2", ("t3", "t4")),
+            _embedded_market("c3", ("t5", "t6")),
         ])],
     )
-    assert len(registry) == 2
+    assert len(registry) == 3
     assert registry.metadata_for(
         _intent(condition_id="c1", token_id="t1")).category == "politics"
     assert registry.metadata_for(
         _intent(condition_id="c2", token_id="t3")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c3", token_id="t5")).category == "politics"
 
 
 def test_event_embedded_market_token_mismatch_fails_loud():
@@ -502,6 +508,18 @@ def test_lookup_rejects_proposal_event_mismatched_from_gamma_market_identity():
     with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
         registry.metadata_for(
             _intent(condition_id="c1", token_id="t1", event_id="forged-event"))
+
+
+def test_lookup_rejects_known_event_owned_by_a_different_gamma_market():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"), event_id="e2")],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
+        registry.metadata_for(
+            _intent(condition_id="c1", token_id="t1", event_id="e2"))
 
 
 @pytest.mark.parametrize(("condition_id", "token_id"), [
