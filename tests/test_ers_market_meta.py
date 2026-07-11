@@ -267,6 +267,10 @@ def test_registry_rejects_non_mapping_event_rows(row):
     (" ", "two"),
     (" padded", "two"),
     (123, "two"),
+    ("one", ""),
+    ("one", " "),
+    ("one", "padded "),
+    ("one", 123),
 ])
 def test_registry_rejects_bad_token_members(tokens):
     # Mirror the candidate identity in both provider snapshots so this test cannot pass vacuously
