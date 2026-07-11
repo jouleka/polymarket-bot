@@ -29,7 +29,7 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   checkout. Before any future install, repair its stale remote to GitHub; never recreate the deleted
   `/root/git/polymarket-bot.git` bare repository.
 - **Venv:** gitignored `.venv` with Python 3.13. Canonical verification:
-  `./.venv/bin/pytest -o addopts="" -q` → **1,446 passed** on the POL-14 landing candidate on
+  `./.venv/bin/pytest -o addopts="" -q` → **1,450 passed** on the POL-14 landing candidate on
   2026-07-11.
 - **Synchronize safely:** check status, `git fetch --prune origin`, compare ahead/behind, and fast-forward
   only a clean non-diverged checkout. Do not blindly pull over local work.
@@ -432,7 +432,7 @@ a clean non-Windows box.
 `pol-14-market-registry` branch replaces the production-facing stub seam with an immutable, strict
 two-snapshot Gamma registry. It validates both condition and token identity, derives category only
 from reviewed Gamma tag IDs, uses the market-owned deadline, and rejects unavailable metadata before
-forecast/component writes. The current candidate passes 1,446 tests; its 26/26 mutation battery has
+forecast/component writes. The current candidate passes 1,450 tests; its 27/27 mutation battery has
 zero survivors. A fresh independent final review, exact-head evidence reconciliation, and landing
 remain before POL-14 can be called complete. It is not deployed or runtime-composed; POL-17 owns that
 composition.

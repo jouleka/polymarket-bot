@@ -34,6 +34,7 @@ behavioral repair below was first reproduced with a focused failing test.
 | A10 validated construction only | Direct construction bypassed snapshot validation: `1 failed in 0.12s`. Captured in `/tmp/pol14-a10-private-constructor-red.log`. | Constructor/immutability/lookup targets passed; Pyright reported zero errors and Ruff passed on the changed metadata files; `7f74381`. |
 | A11 mutation-strengthening | Correct production behavior already passed; tests were added specifically to kill representation-sensitive token conversion and later-element tag-validation mutants, and to pin fusion ordering. | Four focused contract tests passed; `9314559`. |
 | A12 unrelated legacy identity | An unrelated event-contained row with an unhashable `conditionId` raised raw `TypeError` before the later valid selected relationship: `1 failed in 0.17s`. | The named regression passed, the complete metadata file reported `136 passed`, and the expanded mutation battery killed the corresponding guard-removal mutant; `68b40ba`. |
+| A13 sibling-position strength | The independent mutation review found that validating only token sibling zero survived all existing metadata tests while allowing a numeric sibling one. Production was already correct, so the isolated survivor was the RED evidence. | Four symmetric second-sibling malformed cases passed on restored production and failed under the isolated mutant for the intended missing-token-validation reason; `bffbabd`. |
 
 The first A9 test attempt used the enormous integer directly as a pytest parameter. Pytest failed
 while generating its test ID because of Python's integer-to-string digit limit. That was a harness
@@ -50,12 +51,12 @@ reached `MarketRegistry.metadata_for` and reproduced the intended raw `OverflowE
 ## Adversarial mutation result
 
 Corrected and expanded isolated-worktree battery at
-`68b40ba7cf9b1f2d09227783140019369bd32fa2`:
+`bffbabdb87c76d270dcafbc1be5295068aa362a0`:
 
-- baseline focused suite: `173 passed in 1.24s`;
-- mutations killed: `26/26`;
+- baseline focused suite: `177 passed in 1.12s`;
+- mutations killed: `27/27`;
 - survivors: none;
-- restored focused suite: `173 passed in 1.42s`;
+- restored focused suite: `177 passed in 2.03s`;
 - restored worktree status: clean;
 - mutation worktree removed and pruned.
 
@@ -65,17 +66,17 @@ market-versus-event deadline ownership, naive and Python-only timestamp acceptan
 rounding and negative time, permissive unknown-category fallback, logging before metadata rejection,
 unexpected-error swallowing, proposal-owned question substitution, multiple clock reads, registry
 mutability, event-token conflict bypass, decimal-token integer round-trip, malformed later tag
-skipping, whitespace tokens, direct-constructor bypass, and allowing an unhashable unrelated embedded
-condition to reach the selected-identity maps. The complete local ledger was captured as
-`/tmp/pol14-mutation-results.json`; temporary mutation files and the detached worktree were not added
-to the repository.
+skipping, whitespace tokens, direct-constructor bypass, allowing an unhashable unrelated embedded
+condition to reach the selected-identity maps, and validating only token sibling zero. The complete
+local ledger was captured as `/tmp/pol14-mutation-results.json`; temporary mutation files and the
+detached worktree were not added to the repository.
 
 ## Final-candidate verification
 
-The post-A12 code candidate `68b40ba7cf9b1f2d09227783140019369bd32fa2` produced:
+The post-A13 code candidate `bffbabdb87c76d270dcafbc1be5295068aa362a0` produced:
 
-- focused metadata/service/E2E suite: `173 passed in 0.87s`;
-- full repository suite: `1446 passed in 9.39s`;
+- focused metadata/service/E2E suite: `177 passed in 1.38s`;
+- full repository suite: `1450 passed in 11.99s`;
 - `python3 -m compileall -q src scripts`: pass;
 - Pyright on `src/polybot/ers/market_meta.py`: zero errors, warnings, or information diagnostics;
 - Ruff on the changed metadata implementation and focused metadata/E2E tests: pass;
