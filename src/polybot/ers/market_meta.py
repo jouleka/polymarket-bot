@@ -347,7 +347,8 @@ class MarketRegistry:
                         f"Gamma event {event_id} market row {embedded_index} must be a mapping"
                     )
                 embedded_condition = embedded.get("conditionId")
-                if embedded_condition not in selected_conditions:
+                if (not isinstance(embedded_condition, str)
+                        or embedded_condition not in selected_conditions):
                     continue
                 tokens = _parse_tokens(embedded.get("clobTokenIds"), embedded_condition)
                 previous_tokens = selected_tokens.get(embedded_condition)

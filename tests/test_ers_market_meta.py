@@ -354,6 +354,15 @@ def test_market_missing_from_referenced_event_is_indexed_unavailable():
         registry.metadata_for(_intent(condition_id="orphan", token_id="o1"))
 
 
+def test_event_ignores_unrelated_unhashable_condition_before_selected_relationship():
+    event = _event(markets=[
+        {"conditionId": [], "clobTokenIds": '["legacy1", "legacy2"]'},
+        _embedded_market("c1", ("t1", "t2")),
+    ])
+    registry = _registry(events=[event])
+    assert registry.metadata_for(_intent(condition_id="c1", token_id="t1")).category == "politics"
+
+
 def test_event_embedded_market_token_mismatch_fails_loud():
     event = _event(tokens=("wrong-yes", "wrong-no"))
     with pytest.raises(MarketSnapshotError, match="event.*token|token.*conflict|identity"):
