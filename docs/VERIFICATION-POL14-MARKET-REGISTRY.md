@@ -1,8 +1,10 @@
 # POL-14 MarketRegistry verification evidence
 
-Status: implementation branch evidence, not deployment authorization
+Status: landed release evidence, not deployment authorization
 Base: `f3331a4406d79ed2d510d62fb36ceb2d51137bac`
 Branch: `pol-14-market-registry`
+PR: [#1](https://github.com/jouleka/polymarket-bot/pull/1)
+Merge: `31f33909046a0f2f7d5bdfbaeb8e63c93dc73b17`
 
 This file makes the contemporaneously captured RED/GREEN evidence repository-visible after the
 independent review noted that the local `/tmp` logs were not visible from its clean checkout. It does
@@ -144,8 +146,8 @@ SHA-256 is `06cab93edc13aa36c94afc6d139fa97ded9652e421ceccabf8f0c20fa2f46967`.
 The exact-code mutation reviewer returned PASS. The exact-code release reviewer found no behavioral
 blocker and blocked only because repository-visible counts/evidence still described the earlier
 1,460/187 checkpoint and its own environment did not complete full/static commands. The exact-HEAD
-commands above were run independently in the active checkout; this documentation reconciliation
-records them. A final docs-only exact-HEAD review remains before push/merge.
+commands above were run independently in the active checkout. The final docs-only exact-HEAD review
+then returned PASS from both independent reviewers before push and merge.
 
 ## Required final gate
 
@@ -159,7 +161,10 @@ Before merge, record exact-HEAD evidence for:
 6. a fresh independent specification review of the final commit;
 7. clean tree, origin divergence, and inactive/disabled service state.
 
-All seven behavioral/code gates are complete on `0d17f6d`; the documentation-only reconciliation
-commit must receive a final lightweight exact-HEAD review before push/merge. POL-14 still does not
-authorize deployment, runtime composition, signing changes, database migration, or service
-activation.
+All seven behavioral/code gates completed on `0d17f6d`; the docs-only reconciliation commit
+`1b3457a` received two independent PASS verdicts. PR #1 merged by a true two-parent merge commit
+`31f3390`, with `f3331a4` and reviewed feature HEAD `1b3457a` as its parents. Post-merge `main`
+repeated the focused suite (`209 passed`), full suite (`1,482 passed`), 102-source compilation,
+Pyright, Ruff, and diff checks successfully. `polymarket-ingestion.service` remained inactive, dead,
+and disabled. POL-14 does not authorize deployment, runtime composition, signing changes, database
+migration, or service activation.

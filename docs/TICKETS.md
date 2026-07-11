@@ -22,7 +22,7 @@ context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 | **POL-11** | S9 — shadow harness + earn-autonomy controller | DONE — components are built; the real shadow run is not | S5, S6, S7, S8 |
 | **POL-12** | C2 — off-loop EventStore writes | DONE | S1 ingestion runtime |
 | **POL-13** | D4a onward — shadow deployment work-stream | OPEN — downsample code/reviews/rate gate complete; broader build/deploy stream continues | POL-11, POL-12 |
-| **POL-14** | D1 — MarketRegistry from Gamma metadata | OPEN — implementation and final code/mutation reviews complete locally; 1,482 tests, 64/64 required mutants, and 19/19 bounded sweep pass; documentation reconciliation and landing pending | POL-13 ingestion substrate |
+| **POL-14** | D1 — MarketRegistry from Gamma metadata | DONE — landed on `main` via [PR #1](https://github.com/jouleka/polymarket-bot/pull/1); merged suite 1,482 passed; 64/64 required mutants and 19/19 bounded sweep pass with zero survivors; not deployed or runtime-composed | POL-13 ingestion substrate |
 | **POL-15** | D2 — resolution / settlement feed | OPEN — required for any scored shadow outcomes | POL-13 substrate; Gamma/on-chain resolution sources |
 | **POL-16** | D3 — shadow-execution and ledger wiring | OPEN | POL-15 |
 | **POL-17** | D4b — continuous ERS + harness runtime | OPEN | POL-14, POL-15, POL-16; brain proposal seam |
@@ -32,7 +32,7 @@ context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 
 The owner-approved no-funding sequence is:
 
-`land POL-14 → POL-15 → POL-16 → POL-17 → POL-18 → ≤2-week paper/shadow run → POL-4 live gate`
+`POL-15 → POL-16 → POL-17 → POL-18 → ≤2-week paper/shadow run → POL-4 live gate`
 
 POL-15 is the evidence keystone: without resolution/settlement, forecasts and simulated fills never
 become scored outcomes. POL-14 must land first because it supplies the real market/category metadata

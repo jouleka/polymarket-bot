@@ -156,26 +156,23 @@ chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusio
 detectors, S8 maker net-of-cost economics, and S9 shadow harness + ramp controller. The corrected
 **D4a downsample** implementation is on `main` after a 41/41 mutation battery and a passing
 1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. **POL-14 D1 MarketRegistry** is
-implemented on its local landing branch with 1,482 tests passing, a 64/64 required mutation ledger,
-and a 19/19 bounded equivalent sweep with zero survivors. Documentation reconciliation and landing
-are the current gate. Nothing is installed; the ingestion service remains stopped and disabled.
+landed on `main` via PR #1 with 1,482 tests passing, a 64/64 required mutation ledger, and a 19/19
+bounded equivalent sweep with zero survivors. Nothing is installed; the ingestion service remains
+stopped and disabled.
 
 ### Build order (owner decision: finish the ENTIRE build, then a ≤2-week light shadow, then live)
 
-1. **Land POL-14 · D1 MarketRegistry** — reconcile the final evidence and merge the already
-   implemented and independently reviewed immutable Gamma metadata registry; runtime
-   fetching/composition remains POL-17.
-2. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
+1. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
    (WON/LOST/DISPUTED/VOID + value) → settle the ForecastLedger (warms k) + ShadowLedger/MakerLedger.
    Without it the shadow scores ZERO results. Read-only sources (Gamma status + on-chain UMA).
-3. **POL-16 · D3 shadow-execution wiring** — accepted paper intents → S9 `fill_sim` → ShadowLedger;
+2. **POL-16 · D3 shadow-execution wiring** — accepted paper intents → S9 `fill_sim` → ShadowLedger;
    `mark_for` = `LocalBook.midpoint()` live / resolution value at settle; feed the MakerLedger.
-4. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
+3. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
    propose→validate→shadow-execute loop continuously.
-5. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
+4. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
    EXACTLY the 5-tool grant from `deploy/hermes/config.yaml`, with the ProposeOnlyFacade as its MCP
    server.
-6. Then the **≤2-week light shadow**, then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
+5. Then the **≤2-week light shadow**, then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
    owner funding a wallet on a CLEAN box; keys never touch a compromised machine.
 
 ### Git & tickets

@@ -424,22 +424,21 @@ Any later deployment requires separate approval and must use the GitHub-authorit
 recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte
 size and SHA-256, install against a fresh `market_memory.db`, and leave the service stopped until explicit
 start/enable approval. **OWNER DECISION (2026-07-05): finish the remaining build first, then a max-2-week light
-shadow, then go live.** Remaining build order is **land D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
+shadow, then go live.** Remaining build order is **D2 → D3 → D4b → brain → 2-week shadow → live.**
 The brain deploys as a dedicated `polymarket` Hermes profile. Go-live remains gated on POL-4 and a funded wallet on
 a clean non-Windows box.
 
-**UPDATE 2026-07-11 — POL-14 implemented and independently reviewed; landing reconciliation in
-progress.** The local `pol-14-market-registry` branch replaces the production-facing stub seam with
-an immutable, strict two-snapshot Gamma registry. It validates condition, token, and Gamma-owned
-event identity, derives category only from reviewed Gamma tag IDs, uses the market-owned deadline,
-and rejects unavailable metadata before forecast/component writes. The current code/test candidate
-passes 1,482 tests, its 64/64 required mutation ledger and 19/19 bounded equivalent sweep have zero
-survivors, and final independent code/mutation reviews found no behavioral blocker. Documentation
-reconciliation and landing remain before POL-14 can be called complete. It is not deployed or
-runtime-composed; POL-17 owns that composition.
+**UPDATE 2026-07-11 — POL-14 landed on `main` via
+[PR #1](https://github.com/jouleka/polymarket-bot/pull/1).** The immutable, strict two-snapshot Gamma
+registry validates condition, token, and Gamma-owned event identity, derives category only from
+reviewed Gamma tag IDs, uses the market-owned deadline, and rejects unavailable metadata before
+forecast/component writes. Merged `main` passes 1,482 tests; the 64/64 required mutation ledger and
+19/19 bounded equivalent sweep have zero survivors. The merge commit is `31f3390`; it is not deployed
+or runtime-composed, and POL-17 owns that composition.
 
-**Next work:** finish POL-14's documentation reconciliation and landing, then start **POL-15
-resolution/settlement**.
+**Next work:** begin owner-review/design for **POL-15 resolution/settlement**; do not implement until
+its outcome model, authority hierarchy, dispute/finality rules, idempotency, and reorg behavior are
+approved.
 Continue with POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18
 the isolated propose-only Hermes brain. Only after all five land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
