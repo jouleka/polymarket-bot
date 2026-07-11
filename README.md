@@ -6,8 +6,9 @@ confirm** — deterministic guardrails replace it, with Telegram as notify + rem
 
 **Status (2026-07-11):** the deterministic S1–S9 engine and corrected D4a ingestion/downsample
 runtime are on `main`. POL-14's immutable Gamma `MarketRegistry` and fail-closed ERS integration are
-implemented on the local landing branch; the current candidate passes **1,460 tests** and is awaiting
-its final independent landing review. The VPS ingestion service remains **stopped and disabled**; the
+implemented on the local landing branch; the current code/test candidate passes **1,482 tests**, a
+**64/64 required mutation ledger**, and a **19/19 bounded equivalent sweep**. Documentation
+reconciliation and landing remain. The VPS ingestion service remains **stopped and disabled**; the
 full paper/shadow runtime, deployed propose-only brain, and live signer are not complete. Build
 tracking is in YouTrack **POL**.
 
