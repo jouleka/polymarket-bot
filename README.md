@@ -5,10 +5,10 @@ Autonomous 24/7 Polymarket trading bot. The **Hermes** agent is the reasoning br
 confirm** — deterministic guardrails replace it, with Telegram as notify + remote kill only.
 
 **Status (2026-07-11):** the deterministic S1–S9 engine and corrected D4a ingestion/downsample
-runtime are on `main`. POL-14's immutable Gamma `MarketRegistry` and fail-closed ERS integration are
-implemented on the local landing branch; the current code/test candidate passes **1,482 tests**, a
-**64/64 required mutation ledger**, and a **19/19 bounded equivalent sweep**. Documentation
-reconciliation and landing remain. The VPS ingestion service remains **stopped and disabled**; the
+runtime are on `main`. POL-14's immutable Gamma `MarketRegistry` and fail-closed ERS integration
+landed via [PR #1](https://github.com/jouleka/polymarket-bot/pull/1); merged `main` passes **1,482
+tests**, a **64/64 required mutation ledger**, and a **19/19 bounded equivalent sweep**. The VPS
+ingestion service remains **stopped and disabled**; the
 full paper/shadow runtime, deployed propose-only brain, and live signer are not complete. Build
 tracking is in YouTrack **POL**.
 
@@ -36,8 +36,8 @@ outcome is *do not deploy.*
 
 The pure S1–S9 components are built. The owner-approved remaining sequence is:
 
-land `POL-14` MarketRegistry → `POL-15` resolution/settlement feed → `POL-16` shadow-execution
-wiring → `POL-17` continuous ERS/harness runtime → `POL-18` isolated propose-only Hermes brain →
+`POL-15` resolution/settlement feed → `POL-16` shadow-execution wiring → `POL-17` continuous
+ERS/harness runtime → `POL-18` isolated propose-only Hermes brain →
 ≤2-week paper/shadow run → `POL-4` live signing gate.
 
 POL-4 is blocked on a funded wallet on a clean non-Windows machine. Nothing in the current runtime
