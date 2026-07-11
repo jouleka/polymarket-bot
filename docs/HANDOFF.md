@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-10)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-11)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -29,7 +29,8 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   checkout. Before any future install, repair its stale remote to GitHub; never recreate the deleted
   `/root/git/polymarket-bot.git` bare repository.
 - **Venv:** gitignored `.venv` with Python 3.13. Canonical verification:
-  `./.venv/bin/pytest -o addopts="" -q` → **1,313 passed** on 2026-07-10.
+  `./.venv/bin/pytest -o addopts="" -q` → **1,482 passed** on the POL-14 landing candidate on
+  2026-07-11.
 - **Synchronize safely:** check status, `git fetch --prune origin`, compare ahead/behind, and fast-forward
   only a clean non-diverged checkout. Do not blindly pull over local work.
 - **Service state:** `polymarket-ingestion.service` is stopped and disabled. Deployment, database
@@ -411,8 +412,8 @@ while explicit legacy raw replay remains available. Synthetic events are **not**
 production history and remain deferred pending a tuned live contract.
 
 The VPS kit still exists (`srv1779077`; dedicated `polybot` user, `/opt/polymarket-bot`, system unit), but the
-service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected build has
-not been pushed, installed, enabled, or started. Independent spec review passed, the final mutation battery
+service remains **STOPPED + DISABLED** after the old raw firehose measured roughly 30 GB/day. The corrected D4a
+build is on GitHub `main` but has not been installed, enabled, or started. Independent spec review passed, the final mutation battery
 killed 41/41, and the required 1,800-second/200-market release gate passed without loosening the **≤0.5 GiB/day**
 ceiling: elapsed 1,800.006 seconds; total DB+WAL+SHM 5,586,944 bytes; source counts
 `{"clob-midpoint":29,"data-api":3500}`; 1,800 usable quotes; exactly zero raw rows; all batches decoded; no HALT;
@@ -423,14 +424,25 @@ Any later deployment requires separate approval and must use the GitHub-authorit
 recreate `/root/git/polymarket-bot.git`), preserve the old raw database under an evidence filename with recorded byte
 size and SHA-256, install against a fresh `market_memory.db`, and leave the service stopped until explicit
 start/enable approval. **OWNER DECISION (2026-07-05): finish the remaining build first, then a max-2-week light
-shadow, then go live.** Remaining build order is **D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
+shadow, then go live.** Remaining build order is **land D1 → D2 → D3 → D4b → brain → 2-week shadow → live.**
 The brain deploys as a dedicated `polymarket` Hermes profile. Go-live remains gated on POL-4 and a funded wallet on
 a clean non-Windows box.
 
-**Next work:** finish the no-funding shadow stack in the owner-approved order. Start with **POL-14 D1
-MarketRegistry**, then POL-15 resolution/settlement, POL-16 shadow-execution wiring, POL-17 the continuous
-ERS/harness runtime, and POL-18 the isolated propose-only Hermes brain. Only after all five land and are deployed
-does the ≤2-week paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
+**UPDATE 2026-07-11 — POL-14 implemented and independently reviewed; landing reconciliation in
+progress.** The local `pol-14-market-registry` branch replaces the production-facing stub seam with
+an immutable, strict two-snapshot Gamma registry. It validates condition, token, and Gamma-owned
+event identity, derives category only from reviewed Gamma tag IDs, uses the market-owned deadline,
+and rejects unavailable metadata before forecast/component writes. The current code/test candidate
+passes 1,482 tests, its 64/64 required mutation ledger and 19/19 bounded equivalent sweep have zero
+survivors, and final independent code/mutation reviews found no behavioral blocker. Documentation
+reconciliation and landing remain before POL-14 can be called complete. It is not deployed or
+runtime-composed; POL-17 owns that composition.
+
+**Next work:** finish POL-14's documentation reconciliation and landing, then start **POL-15
+resolution/settlement**.
+Continue with POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18
+the isolated propose-only Hermes brain. Only after all five land and are deployed does the ≤2-week
+paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
