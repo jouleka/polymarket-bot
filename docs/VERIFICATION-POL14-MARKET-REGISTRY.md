@@ -1,7 +1,7 @@
 # POL-14 MarketRegistry verification evidence
 
-Status: implementation branch evidence, not deployment authorization  
-Base: `f3331a4406d79ed2d510d62fb36ceb2d51137bac`  
+Status: implementation branch evidence, not deployment authorization
+Base: `f3331a4406d79ed2d510d62fb36ceb2d51137bac`
 Branch: `pol-14-market-registry`
 
 This file makes the contemporaneously captured RED/GREEN evidence repository-visible after the
