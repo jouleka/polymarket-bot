@@ -35,6 +35,10 @@ behavioral repair below was first reproduced with a focused failing test.
 | A11 mutation-strengthening | Correct production behavior already passed; tests were added specifically to kill representation-sensitive token conversion and later-element tag-validation mutants, and to pin fusion ordering. | Four focused contract tests passed; `9314559`. |
 | A12 unrelated legacy identity | An unrelated event-contained row with an unhashable `conditionId` raised raw `TypeError` before the later valid selected relationship: `1 failed in 0.17s`. | The named regression passed, the complete metadata file reported `136 passed`, and the expanded mutation battery killed the corresponding guard-removal mutant; `68b40ba`. |
 | A13 sibling-position strength | The independent mutation review found that validating only token sibling zero survived all existing metadata tests while allowing a numeric sibling one. Production was already correct, so the isolated survivor was the RED evidence. | Four symmetric second-sibling malformed cases passed on restored production and failed under the isolated mutant for the intended missing-token-validation reason; `bffbabd`. |
+| A14 proposal/Gamma event identity | A forged proposal event was accepted by metadata lookup; the named direct test failed with `DID NOT RAISE MarketMetadataUnavailable`. The independent probe showed that forged event keys could fragment one canonical event across risk-cap buckets. | Lookup now requires exact Gamma-owned event identity. The direct test and real-registry E2E prove mismatch rejection before forecast/component writes or signing; `546fe83`. |
+| A15 unhashable JSON equivalence | A selective mutant handled unrelated list-valued conditions but let a dictionary reach a map lookup and raise raw `TypeError`. | The regression now covers both JSON-unhashable shapes; the selective mutant fails on the dictionary case; `546fe83`. |
+| A16 embedded-row position | A mutant processing only the last event-embedded market row passed the previous focused suite and silently omitted an earlier selected market. | A two-selected-market event test requires both rows to be indexed; the last-row-only mutant fails; `546fe83`. |
+| A17 exception taxonomy | Broadening the typed metadata-unavailable catch to `LookupError` swallowed an implementation `KeyError` as `market_meta_unavailable`. | The service test now pins both `RuntimeError` and `KeyError` to `internal_error`; the broad-catch mutant fails; `546fe83`. |
 
 The first A9 test attempt used the enormous integer directly as a pytest parameter. Pytest failed
 while generating its test ID because of Python's integer-to-string digit limit. That was a harness
@@ -51,12 +55,12 @@ reached `MarketRegistry.metadata_for` and reproduced the intended raw `OverflowE
 ## Adversarial mutation result
 
 Corrected and expanded isolated-worktree battery at
-`bffbabdb87c76d270dcafbc1be5295068aa362a0`:
+`546fe830ea53fc5ab368ae8d7720552cf84ae477`:
 
-- baseline focused suite: `177 passed in 1.12s`;
-- mutations killed: `27/27`;
+- baseline focused suite: `181 passed in 1.87s`;
+- mutations killed: `31/31`;
 - survivors: none;
-- restored focused suite: `177 passed in 2.03s`;
+- restored focused suite: `181 passed in 1.27s`;
 - restored worktree status: clean;
 - mutation worktree removed and pruned.
 
@@ -67,22 +71,25 @@ rounding and negative time, permissive unknown-category fallback, logging before
 unexpected-error swallowing, proposal-owned question substitution, multiple clock reads, registry
 mutability, event-token conflict bypass, decimal-token integer round-trip, malformed later tag
 skipping, whitespace tokens, direct-constructor bypass, allowing an unhashable unrelated embedded
-condition to reach the selected-identity maps, and validating only token sibling zero. The complete
-local ledger was captured as `/tmp/pol14-mutation-results.json`; temporary mutation files and the
-detached worktree were not added to the repository.
+condition to reach the selected-identity maps, validating only token sibling zero, bypassing canonical
+event identity, handling only one unhashable JSON shape, processing only the last embedded market,
+and broadening typed unavailability to all `LookupError` failures. The complete local ledger was
+captured as `/tmp/pol14-mutation-results.json`; temporary mutation files and the detached worktree
+were not added to the repository.
 
 ## Final-candidate verification
 
-The post-A13 code candidate `bffbabdb87c76d270dcafbc1be5295068aa362a0` produced:
+The post-A17 code candidate `546fe830ea53fc5ab368ae8d7720552cf84ae477` produced:
 
-- focused metadata/service/E2E suite: `177 passed in 1.38s`;
-- full repository suite: `1450 passed in 11.99s`;
+- focused metadata/service/E2E suite: `181 passed in 1.46s`;
+- full repository suite: `1454 passed in 10.91s`;
 - `python3 -m compileall -q src scripts`: pass;
 - Pyright on `src/polybot/ers/market_meta.py`: zero errors, warnings, or information diagnostics;
 - Ruff on the changed metadata implementation and focused metadata/E2E tests: pass;
 - `git diff --check origin/main`: pass;
-- saved-live-snapshot probe: 100 market rows + 100 event rows produced 10 usable registry rows and
-  resolved the sampled sports market's canonical 41-character question;
+- saved-live-snapshot probe: 100 market rows + 100 event rows produced 10 usable registry rows,
+  resolved the sampled sports market's canonical 41-character question and event `30615`, and
+  rejected a forged event with typed `MarketMetadataUnavailable`;
 - the eight Ruff findings in the legacy `tests/test_ers_service.py` are identical on `origin/main`
   and the candidate, so POL-14 adds no Ruff regression there;
 - `polymarket-ingestion.service`: inactive, dead, and disabled.

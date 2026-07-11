@@ -136,7 +136,7 @@ This exact process has caught a real defect on **every** slice of this project. 
   service start are separate owner-approved actions. See `deploy/README.md`.
 - **Venv (gitignored):** `uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python
   pytest "httpx>=0.28" "websockets>=16"`.
-- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **1,450 passing, exit 0** on the POL-14 landing
+- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **1,454 passing, exit 0** on the POL-14 landing
   candidate (2026-07-11). Run BARE
   (`-o addopts=""` restores the summary the pyproject `-q` hides). Trust the "NNN passed" line + exit
   0; do NOT pipe through tail/head to judge pass/fail.
@@ -156,7 +156,7 @@ chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusio
 detectors, S8 maker net-of-cost economics, and S9 shadow harness + ramp controller. The corrected
 **D4a downsample** implementation is on `main` after a 41/41 mutation battery and a passing
 1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. **POL-14 D1 MarketRegistry** is
-implemented on its local landing branch with 1,450 tests passing and a 27/27 mutation battery; its
+implemented on its local landing branch with 1,454 tests passing and a 31/31 mutation battery; its
 fresh final independent review and landing are the current gate. Nothing is installed; the ingestion
 service remains stopped and disabled.
 

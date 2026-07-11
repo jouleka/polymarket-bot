@@ -10,7 +10,8 @@
 Replace the production-facing `StubMarketMeta` seam with an immutable, network-free registry that
 re-derives a proposal's market category, canonical question, and seconds to resolution from Gamma
 metadata. This is the keystone for per-category calibration: an intent must not choose its own
-category or pair an unrelated condition with a token.
+category, pair an unrelated condition with a token, or fragment event-level risk by forging the
+Gamma-owned event identifier.
 
 POL-14 builds the pure registry and the ERS fail-closed integration. POL-17 will compose the real
 Gamma fetches into the full shadow runtime. The current ingestion service, database, deployment,
@@ -49,8 +50,9 @@ ERC-1155 `token_id`. It exposes one operation:
 metadata_for(intent) -> MarketMetadata
 ```
 
-The intent must expose both `.condition_id` and `.token_id`. Both identifiers must exist and must
-resolve to the same market. Lookup never trusts one identifier while ignoring a conflicting sibling.
+The intent must expose `.condition_id`, `.token_id`, and `.event_id`. The condition and token must
+resolve to the same market definition, and the proposal event must exactly equal that market's
+Gamma-owned event. Lookup never trusts one identifier while ignoring a conflicting sibling or event.
 
 ### 3.2 Category policy
 
@@ -95,6 +97,8 @@ tags fail closed rather than creating calibration buckets.
 - `clobTokenIds` may be Gamma's JSON-encoded string or an already-parsed list, but must contain
   exactly two distinct string token IDs. Numeric coercion is forbidden.
 - A market must name exactly one event represented by the event snapshot.
+- At lookup, the proposal's `event_id` must exactly equal that market-owned event ID; a mismatch is
+  unavailable before fusion, forecast writes, validation, or signing.
 - The referenced event must independently embed the selected `conditionId` with the exact same
   two-token sibling list before its tags may authorize a category.
 - A missing event or missing event-contained market relationship leaves that market unavailable;
@@ -118,6 +122,9 @@ REJECT market_meta_unavailable
 No forecast or component row is written. Unexpected implementation failures continue to use the
 outer `internal_error` isolation path.
 
+The exact event check also ensures the unchanged validator and placeholder cluster key receive the
+canonical market event identity, so a proposal cannot split one Gamma event across forged risk keys.
+
 `StubMarketMeta` remains only as an explicit legacy/test fixture and implements the same
 `metadata_for` contract. Production composition in POL-17 must supply `MarketRegistry`; it may not
 silently default to the stub.
@@ -137,9 +144,9 @@ silently default to the stub.
 ## 5. Acceptance criteria
 
 - Targeted tests prove the canonical category map and every precedence boundary.
-- Tests prove condition/token cross-validation, event-contained condition/token reconciliation, exact
-  string handling, duplicate conflicts, malformed snapshots, unknown events/categories, missing
-  questions/deadlines, and clock boundaries.
+- Tests prove condition/token/event cross-validation, event-contained condition/token reconciliation,
+  exact string handling, duplicate conflicts, malformed snapshots, unknown events/categories,
+  missing questions/deadlines, and clock boundaries.
 - An ERS integration test proves unavailable metadata returns `market_meta_unavailable` and writes
   neither forecast nor component rows.
 - A whole-slice test uses representative live-shaped `/markets` + `/events` fixtures and returns the

@@ -65,12 +65,13 @@ REFACTOR/VERIFY:
 - Run the smallest named test after each behavior, then the complete market-meta target.
 - Commit on green.
 
-## Task 3 — Lookup clock and dual-identifier contract
+## Task 3 — Lookup clock and three-identifier contract
 
 RED:
 
-- Both condition and token must resolve to the same definition.
-- Unknown condition, unknown token, and mismatched known siblings are unavailable.
+- Condition and token must resolve to the same definition, and proposal `event_id` must equal the
+  Gamma-owned market event.
+- Unknown condition, unknown token, mismatched known siblings, and event mismatch are unavailable.
 - Gamma question/category override proposal-owned values.
 - One wall-clock read is used per lookup.
 - Positive fractional seconds floor to an integer; at/past deadline clamps to zero.
@@ -93,6 +94,8 @@ RED:
 - Replace the three independent metadata calls with one metadata object.
 - A typed unavailable error returns `REJECT market_meta_unavailable`.
 - The unavailable path writes no forecast and no component row.
+- A forged proposal event ID is rejected before event-keyed validation/signing and cannot fragment
+  the canonical event risk cap.
 - An unexpected metadata bug still maps to `internal_error`.
 - A real-registry happy path records the canonical category/question/time and reaches the existing
   calibration/validator path.
@@ -143,6 +146,10 @@ Use a detached temporary worktree at the exact reviewed commit. At minimum mutat
 13. map unavailable metadata to `unknown`;
 14. record a forecast before metadata rejection;
 15. swallow unexpected metadata errors as the known unavailable reason.
+16. bypass proposal/Gamma event identity equality;
+17. process only one event-embedded market row;
+18. handle only one unhashable JSON identity shape;
+19. broaden the unavailable catch to include implementation `LookupError` subclasses.
 
 Each mutant must be killed by a named test for the intended behavioral reason. Probe sibling fields,
 later collection elements, duplicate-order variants, and separate clock invalid classes for equivalent

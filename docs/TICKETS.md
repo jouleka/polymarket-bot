@@ -22,7 +22,7 @@ context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 | **POL-11** | S9 — shadow harness + earn-autonomy controller | DONE — components are built; the real shadow run is not | S5, S6, S7, S8 |
 | **POL-12** | C2 — off-loop EventStore writes | DONE | S1 ingestion runtime |
 | **POL-13** | D4a onward — shadow deployment work-stream | OPEN — downsample code/reviews/rate gate complete; broader build/deploy stream continues | POL-11, POL-12 |
-| **POL-14** | D1 — MarketRegistry from Gamma metadata | OPEN — implemented locally; 1,450 tests and 27/27 mutation gate pass; final independent review and landing pending | POL-13 ingestion substrate |
+| **POL-14** | D1 — MarketRegistry from Gamma metadata | OPEN — implemented locally; 1,454 tests and 31/31 mutation gate pass; final independent review and landing pending | POL-13 ingestion substrate |
 | **POL-15** | D2 — resolution / settlement feed | OPEN — required for any scored shadow outcomes | POL-13 substrate; Gamma/on-chain resolution sources |
 | **POL-16** | D3 — shadow-execution and ledger wiring | OPEN | POL-15 |
 | **POL-17** | D4b — continuous ERS + harness runtime | OPEN | POL-14, POL-15, POL-16; brain proposal seam |
