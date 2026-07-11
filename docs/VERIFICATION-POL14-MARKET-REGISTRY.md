@@ -43,6 +43,10 @@ behavioral repair below was first reproduced with a focused failing test.
 | A19 exact known-event ownership | A mutant accepted any event ID known elsewhere in the registry, so condition `c1`/token `t1` could claim market `c2`'s event `e2`. | A two-market regression requires the exact event owned by the resolved definition; the any-known-event mutant fails; `b737e62`. |
 | A20 middle embedded row | A first-plus-last-only loop mutant survived the two-row test and silently omitted a selected middle market. | The event fixture now has three selected rows and requires all three definitions; the first/last-only mutant fails; `b737e62`. |
 | A21 LookupError siblings | A selective catch adding `IndexError` survived while the existing `KeyError` probe still reached `internal_error`. | RuntimeError, KeyError, and IndexError are independently pinned to `internal_error`; the selective catch mutant fails; `b737e62`. |
+| A22 token-index immutability | Replacing `_by_token`'s `MappingProxyType` with a mutable dictionary survived the focused suite. | The registry immutability test now mutates both `_by_condition` and `_by_token`; the isolated token-index mutant fails with `DID NOT RAISE TypeError`; `f77ba5c`. |
+| A23 first equivalent-family closure | Twelve direct contract mutants survived the 187-test suite: mutable unavailable sets/token tuples/precedence, incomplete event/tag traversal, weak event identity variants, and sibling exception swallowing. | Deep immutability, first/middle/last traversal, exact same-category/prefix/case identity, and six exception siblings are pinned; focused `195 passed`, full `1,468 passed`; `e040d75`. |
+| A24 exact identity/deadline closure | Nine further direct mutants exposed mutable nested category pairs, truncated/prefixed/whitespace event IDs, one-position token reuse and event-token comparisons, and offset/fractional deadline gaps. | Symmetric tests kill all nine; focused `202 passed`, full `1,475 passed`; `443a465`. |
+| A25 token-index/clock closure | The bounded sweep found both one-sibling public-token index mutations behaviorally killed only by broad tests, plus a genuine survivor that caught only `RuntimeError` from the injected clock. | A named both-token-siblings lookup test kills each index mutant locally; representative clock exception siblings plus base `Exception` kill the narrowed catch; focused `209 passed`, full `1,482 passed`; `0d17f6d`. |
 
 The first A9 test attempt used the enormous integer directly as a pytest parameter. Pytest failed
 while generating its test ID because of Python's integer-to-string digit limit. That was a harness
@@ -101,7 +105,47 @@ The post-A21 code candidate `b737e620e12916c0a96692049fab3e204cbed4eb` produced:
   and the candidate, so POL-14 adds no Ruff regression there;
 - `polymarket-ingestion.service`: inactive, dead, and disabled.
 
-The fresh independent final review remains the only open release gate at this checkpoint.
+That statement records the post-A21 checkpoint only. Later A22-A25 test-strength commits supersede
+its counts and review status.
+
+## Final convergence candidate
+
+Exact code/test candidate `0d17f6d3ae8f70e105f63caaca447e0270de2158` produced:
+
+- focused metadata/service/E2E suite: `209 passed`;
+- full repository suite: `1,482 passed`;
+- 102 Python sources compiled in memory: pass;
+- Pyright on `src/polybot/ers/market_meta.py`: zero errors, warnings, or information diagnostics;
+- Ruff on the changed metadata implementation and focused metadata/E2E tests: pass;
+- `git diff --check origin/main...HEAD`: pass;
+- branch divergence: zero behind, 29 ahead of `origin/main` before this documentation commit;
+- active tree: clean;
+- `polymarket-ingestion.service`: inactive, dead, and disabled;
+- the saved-live-snapshot probe remains byte-for-byte applicable: A22-A25 changed tests only, and
+  `market_meta.py`/`service.py` retain the exact probed A21 blobs
+  `ad6f3f909e6378d16d0a260cd5324d60d1c9b7b1` and
+  `bb8264e2977492b5e5281ca1693838635767da1d`.
+
+The final isolated-worktree mutation audit replayed 64 required mutants and the bounded 19-family
+equivalent sweep:
+
+- required ledger: `64/64` intended named behavioral kills;
+- bounded sweep: `19/19` killed, zero survivors;
+- invalid, harness, timeout, or unintended kills: zero;
+- pristine and restored focused suites: `209 passed`;
+- exact production blobs restored after every mutant;
+- detached review worktree removed; active checkout remained clean.
+
+Evidence is retained under
+`/tmp/pol14-0d17f6d-audit-20260711-gpt56-final-01/`. Its `results.json` SHA-256 is
+`9f75b8496adacc96de2e25e2d84f081352525e70131ca5e1cfe7f7a5d48fbc58`; its `ledger.json`
+SHA-256 is `06cab93edc13aa36c94afc6d139fa97ded9652e421ceccabf8f0c20fa2f46967`.
+
+The exact-code mutation reviewer returned PASS. The exact-code release reviewer found no behavioral
+blocker and blocked only because repository-visible counts/evidence still described the earlier
+1,460/187 checkpoint and its own environment did not complete full/static commands. The exact-HEAD
+commands above were run independently in the active checkout; this documentation reconciliation
+records them. A final docs-only exact-HEAD review remains before push/merge.
 
 ## Required final gate
 
@@ -115,5 +159,7 @@ Before merge, record exact-HEAD evidence for:
 6. a fresh independent specification review of the final commit;
 7. clean tree, origin divergence, and inactive/disabled service state.
 
-Until all seven are complete, POL-14 remains implemented but not approved for push, merge, or
-runtime activation.
+All seven behavioral/code gates are complete on `0d17f6d`; the documentation-only reconciliation
+commit must receive a final lightweight exact-HEAD review before push/merge. POL-14 still does not
+authorize deployment, runtime composition, signing changes, database migration, or service
+activation.

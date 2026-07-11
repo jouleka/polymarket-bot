@@ -136,7 +136,7 @@ This exact process has caught a real defect on **every** slice of this project. 
   service start are separate owner-approved actions. See `deploy/README.md`.
 - **Venv (gitignored):** `uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python
   pytest "httpx>=0.28" "websockets>=16"`.
-- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **1,460 passing, exit 0** on the POL-14 landing
+- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **1,482 passing, exit 0** on the POL-14 landing
   candidate (2026-07-11). Run BARE
   (`-o addopts=""` restores the summary the pyproject `-q` hides). Trust the "NNN passed" line + exit
   0; do NOT pipe through tail/head to judge pass/fail.
@@ -156,14 +156,15 @@ chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusio
 detectors, S8 maker net-of-cost economics, and S9 shadow harness + ramp controller. The corrected
 **D4a downsample** implementation is on `main` after a 41/41 mutation battery and a passing
 1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. **POL-14 D1 MarketRegistry** is
-implemented on its local landing branch with 1,460 tests passing and a 35/35 mutation battery; its
-fresh final independent review and landing are the current gate. Nothing is installed; the ingestion
-service remains stopped and disabled.
+implemented on its local landing branch with 1,482 tests passing, a 64/64 required mutation ledger,
+and a 19/19 bounded equivalent sweep with zero survivors. Documentation reconciliation and landing
+are the current gate. Nothing is installed; the ingestion service remains stopped and disabled.
 
 ### Build order (owner decision: finish the ENTIRE build, then a ≤2-week light shadow, then live)
 
-1. **Land POL-14 · D1 MarketRegistry** — finish the final independent review and merge the already
-   implemented immutable Gamma metadata registry; runtime fetching/composition remains POL-17.
+1. **Land POL-14 · D1 MarketRegistry** — reconcile the final evidence and merge the already
+   implemented and independently reviewed immutable Gamma metadata registry; runtime
+   fetching/composition remains POL-17.
 2. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
    (WON/LOST/DISPUTED/VOID + value) → settle the ForecastLedger (warms k) + ShadowLedger/MakerLedger.
    Without it the shadow scores ZERO results. Read-only sources (Gamma status + on-chain UMA).

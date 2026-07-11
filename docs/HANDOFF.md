@@ -29,7 +29,7 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   checkout. Before any future install, repair its stale remote to GitHub; never recreate the deleted
   `/root/git/polymarket-bot.git` bare repository.
 - **Venv:** gitignored `.venv` with Python 3.13. Canonical verification:
-  `./.venv/bin/pytest -o addopts="" -q` → **1,460 passed** on the POL-14 landing candidate on
+  `./.venv/bin/pytest -o addopts="" -q` → **1,482 passed** on the POL-14 landing candidate on
   2026-07-11.
 - **Synchronize safely:** check status, `git fetch --prune origin`, compare ahead/behind, and fast-forward
   only a clean non-diverged checkout. Do not blindly pull over local work.
@@ -428,16 +428,18 @@ shadow, then go live.** Remaining build order is **land D1 → D2 → D3 → D4b
 The brain deploys as a dedicated `polymarket` Hermes profile. Go-live remains gated on POL-4 and a funded wallet on
 a clean non-Windows box.
 
-**UPDATE 2026-07-11 — POL-14 implemented; final landing gate in progress.** The local
-`pol-14-market-registry` branch replaces the production-facing stub seam with an immutable, strict
-two-snapshot Gamma registry. It validates condition, token, and Gamma-owned event identity, derives
-category only from reviewed Gamma tag IDs, uses the market-owned deadline, and rejects unavailable
-metadata before forecast/component writes. The current candidate passes 1,460 tests; its 35/35
-mutation battery has zero survivors. A fresh independent final review, exact-head evidence
-reconciliation, and landing remain before POL-14 can be called complete. It is not deployed or
+**UPDATE 2026-07-11 — POL-14 implemented and independently reviewed; landing reconciliation in
+progress.** The local `pol-14-market-registry` branch replaces the production-facing stub seam with
+an immutable, strict two-snapshot Gamma registry. It validates condition, token, and Gamma-owned
+event identity, derives category only from reviewed Gamma tag IDs, uses the market-owned deadline,
+and rejects unavailable metadata before forecast/component writes. The current code/test candidate
+passes 1,482 tests, its 64/64 required mutation ledger and 19/19 bounded equivalent sweep have zero
+survivors, and final independent code/mutation reviews found no behavioral blocker. Documentation
+reconciliation and landing remain before POL-14 can be called complete. It is not deployed or
 runtime-composed; POL-17 owns that composition.
 
-**Next work:** finish POL-14's final review and landing, then start **POL-15 resolution/settlement**.
+**Next work:** finish POL-14's documentation reconciliation and landing, then start **POL-15
+resolution/settlement**.
 Continue with POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18
 the isolated propose-only Hermes brain. Only after all five land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
