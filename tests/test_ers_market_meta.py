@@ -140,9 +140,12 @@ def test_category_policy_rejects_malformed_tag_items(tags):
         DEFAULT_CATEGORY_POLICY.classify(tags)
 
 
-def test_category_policy_rejects_malformed_later_tag_item():
+@pytest.mark.parametrize("malformed_index", [0, 1, 2])
+def test_category_policy_rejects_malformed_tag_item_in_every_position(malformed_index):
+    tags = [{"id": "2"}, {"id": "21"}, {"id": "1"}]
+    tags[malformed_index] = {"id": 3}
     with pytest.raises((TypeError, ValueError), match="tag"):
-        DEFAULT_CATEGORY_POLICY.classify([{"id": "2"}, {"id": 3}])
+        DEFAULT_CATEGORY_POLICY.classify(tags)
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -165,6 +168,10 @@ def test_category_policy_rejects_invalid_or_ambiguous_definitions(kwargs):
 def test_category_policy_is_frozen():
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(DEFAULT_CATEGORY_POLICY, "precedence", ("politics",))
+    assert type(DEFAULT_CATEGORY_POLICY.precedence) is tuple
+    assert type(DEFAULT_CATEGORY_POLICY.tag_ids_by_category) is tuple
+    assert all(type(tag_ids) is frozenset
+               for _category, tag_ids in DEFAULT_CATEGORY_POLICY.tag_ids_by_category)
 
 
 @pytest.mark.parametrize(("category", "question", "seconds"), [
@@ -392,6 +399,24 @@ def test_event_processes_every_selected_market_not_only_the_last_row():
         _intent(condition_id="c3", token_id="t5")).category == "politics"
 
 
+def test_registry_processes_every_event_row_including_the_middle():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2"), event_id="e1"),
+                 _market("c2", ("t3", "t4"), event_id="e2"),
+                 _market("c3", ("t5", "t6"), event_id="e3")],
+        events=[_event("e1", condition_id="c1", tokens=("t1", "t2")),
+                _event("e2", condition_id="c2", tokens=("t3", "t4")),
+                _event("e3", condition_id="c3", tokens=("t5", "t6"))],
+    )
+    assert len(registry) == 3
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1", event_id="e1")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c2", token_id="t3", event_id="e2")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c3", token_id="t5", event_id="e3")).category == "politics"
+
+
 def test_event_embedded_market_token_mismatch_fails_loud():
     event = _event(tokens=("wrong-yes", "wrong-no"))
     with pytest.raises(MarketSnapshotError, match="event.*token|token.*conflict|identity"):
@@ -503,19 +528,20 @@ def test_lookup_rejects_known_but_mismatched_condition_and_token():
         registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
 
 
-def test_lookup_rejects_proposal_event_mismatched_from_gamma_market_identity():
+@pytest.mark.parametrize("event_id", ["forged-event", "e1-forged-suffix", "E1"])
+def test_lookup_rejects_nonexact_proposal_event_identity(event_id):
     registry = _registry()
     with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
         registry.metadata_for(
-            _intent(condition_id="c1", token_id="t1", event_id="forged-event"))
+            _intent(condition_id="c1", token_id="t1", event_id=event_id))
 
 
-def test_lookup_rejects_known_event_owned_by_a_different_gamma_market():
+def test_lookup_rejects_known_same_category_event_owned_by_a_different_gamma_market():
     registry = _registry(
         markets=[_market("c1", ("t1", "t2")),
                  _market("c2", ("t3", "t4"), event_id="e2")],
         events=[_event("e1", ("2",)),
-                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
+                _event("e2", ("2",), condition_id="c2", tokens=("t3", "t4"))],
     )
     with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
         registry.metadata_for(
@@ -597,6 +623,11 @@ def test_registry_lookup_is_repeatable_and_does_not_mutate_indices():
 
 def test_registry_object_and_indices_are_immutable():
     registry = _registry()
+    registry_with_unavailable = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("orphan", ("o1", "o2"), event_id="missing")],
+        events=[_event("mapped", condition_id="good", tokens=("g1", "g2"))],
+    )
 
     def mutate(mapping, existing_key):
         mapping["other"] = mapping[existing_key]
@@ -607,6 +638,9 @@ def test_registry_object_and_indices_are_immutable():
         mutate(registry._by_condition, "c1")
     with pytest.raises(TypeError):
         mutate(registry._by_token, "t1")
+    assert type(registry._by_condition["c1"].token_ids) is tuple
+    assert type(registry_with_unavailable._unavailable_conditions) is frozenset
+    assert type(registry_with_unavailable._unavailable_tokens) is frozenset
 
 
 def test_registry_direct_constructor_cannot_bypass_snapshot_validation():
