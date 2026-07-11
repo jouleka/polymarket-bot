@@ -598,13 +598,15 @@ def test_registry_lookup_is_repeatable_and_does_not_mutate_indices():
 def test_registry_object_and_indices_are_immutable():
     registry = _registry()
 
-    def mutate(mapping):
-        mapping["other"] = mapping["c1"]
+    def mutate(mapping, existing_key):
+        mapping["other"] = mapping[existing_key]
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(registry, "_clock", lambda: 1)
     with pytest.raises(TypeError):
-        mutate(registry._by_condition)
+        mutate(registry._by_condition, "c1")
+    with pytest.raises(TypeError):
+        mutate(registry._by_token, "t1")
 
 
 def test_registry_direct_constructor_cannot_bypass_snapshot_validation():
