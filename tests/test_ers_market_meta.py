@@ -170,6 +170,7 @@ def test_category_policy_is_frozen():
         setattr(DEFAULT_CATEGORY_POLICY, "precedence", ("politics",))
     assert type(DEFAULT_CATEGORY_POLICY.precedence) is tuple
     assert type(DEFAULT_CATEGORY_POLICY.tag_ids_by_category) is tuple
+    assert all(type(pair) is tuple for pair in DEFAULT_CATEGORY_POLICY.tag_ids_by_category)
     assert all(type(tag_ids) is frozenset
                for _category, tag_ids in DEFAULT_CATEGORY_POLICY.tag_ids_by_category)
 
@@ -417,8 +418,12 @@ def test_registry_processes_every_event_row_including_the_middle():
         _intent(condition_id="c3", token_id="t5", event_id="e3")).category == "politics"
 
 
-def test_event_embedded_market_token_mismatch_fails_loud():
-    event = _event(tokens=("wrong-yes", "wrong-no"))
+@pytest.mark.parametrize("event_tokens", [
+    ("wrong-first", "t2"),
+    ("t1", "wrong-second"),
+])
+def test_event_embedded_market_token_mismatch_fails_loud_in_either_sibling(event_tokens):
+    event = _event(tokens=event_tokens)
     with pytest.raises(MarketSnapshotError, match="event.*token|token.*conflict|identity"):
         _registry(events=[event])
 
@@ -450,15 +455,20 @@ def test_conflicting_duplicate_condition_fails_loud():
         _registry(markets=[first, second])
 
 
-def test_token_reused_across_conditions_fails_loud():
+@pytest.mark.parametrize(("first_tokens", "second_tokens"), [
+    (("shared", "t2"), ("shared", "t4")),
+    (("t1", "shared"), ("t3", "shared")),
+])
+def test_token_reused_in_either_sibling_across_conditions_fails_loud(
+        first_tokens, second_tokens):
     # Keep both event-contained identities internally consistent. The only intended failure is the
     # selected-market token reuse itself, so a mutation cannot hide behind a later event mismatch.
     with pytest.raises(MarketSnapshotError, match="token.*condition"):
         _registry(
-            markets=[_market("c1", ("shared", "t2")),
-                     _market("c2", ("shared", "t4"), event_id="e2")],
-            events=[_event("e1", condition_id="c1", tokens=("shared", "t2")),
-                    _event("e2", condition_id="c2", tokens=("shared", "t4"))],
+            markets=[_market("c1", first_tokens),
+                     _market("c2", second_tokens, event_id="e2")],
+            events=[_event("e1", condition_id="c1", tokens=first_tokens),
+                    _event("e2", condition_id="c2", tokens=second_tokens)],
         )
 
 
@@ -528,7 +538,9 @@ def test_lookup_rejects_known_but_mismatched_condition_and_token():
         registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
 
 
-@pytest.mark.parametrize("event_id", ["forged-event", "e1-forged-suffix", "E1"])
+@pytest.mark.parametrize("event_id", [
+    "forged-event", "e1-forged-suffix", "E1", "e", "forged-e1", " e1 ",
+])
 def test_lookup_rejects_nonexact_proposal_event_identity(event_id):
     registry = _registry()
     with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
@@ -588,6 +600,20 @@ def test_lookup_floors_fractional_time_and_clamps_at_or_past_deadline(now, expec
         markets=[_market(end_date="1970-01-01T00:01:40Z")], clock=lambda: now)
     assert registry.metadata_for(
         _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == expected
+
+
+def test_lookup_honors_provider_timezone_offset():
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T02:00:00+02:00")], clock=lambda: 0)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 0
+
+
+def test_lookup_floors_only_after_subtracting_fractional_deadline_and_clock():
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:00:01.900Z")], clock=lambda: 0.2)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 1
 
 
 @pytest.mark.parametrize("clock_value", [
