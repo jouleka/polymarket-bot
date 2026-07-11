@@ -170,14 +170,27 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
         pipe, ledger, clog = _build_pipeline(
             tmp_path, stamper, evstore, market_meta=registry)
         with IntentStore(str(tmp_path / "i.db"), stamper) as store:
+            signer = PaperSigner()
+            deep = _book("0.50", ask_size="100000", bid="0.49", bid_size="100000")
             ProposeOnlyFacade(store).propose_trade(
-                "i1", token_id=token, condition_id="m1", event_id="e1", side="BUY",
+                "forged", token_id=token, condition_id="m1", event_id="forged-event", side="BUY",
+                target_price="0.50", max_price="0.60", size_usd_suggestion="100",
+                p="0.95", p_confidence="0.8", resolution_summary="forged event identity",
+                thesis="...", citations=("c1", "c2"))
+            process_pending(store, book_for={token: deep}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+            forged = store.get("forged")
+            assert forged is not None and forged.status == "REJECTED"
+            assert forged.decision_reason == "market_meta_unavailable"
+            assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+            ProposeOnlyFacade(store).propose_trade(
+                "i1", token_id=token, condition_id="m1", event_id="ev-market", side="BUY",
                 target_price="0.50", max_price="0.60", size_usd_suggestion="100",
                 p="0.95", p_confidence="0.8",
                 resolution_summary="Hermes tries to call this politics",
                 thesis="...", citations=("c1", "c2"))
-            signer = PaperSigner()
-            deep = _book("0.50", ask_size="100000", bid="0.49", bid_size="100000")
             process_pending(store, book_for={token: deep}.get,
                             portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
                             signer=signer, pipeline=pipe)
