@@ -1,23 +1,29 @@
-"""StubMarketMeta (S6 / POL-8) — the MVP MarketMeta seam.
-
-Safety property under test: the stub is intentionally degenerate so that, with no real
-MarketRegistry wired, every proposal lands in ONE "unknown" category bucket (=> the
-CalibrationGate has no resolved forecasts for it => k = 0 => paper-only), the calibration
-anchor reads its question text from the proposal's own resolution_summary, and the
-seconds-to-resolution is a fixed sentinel STRICTLY past the prior-decay window so the prior
-anchor stays active. The real condition_id -> category/question/seconds feed is deferred.
-"""
+"""Market metadata seam tests (S6 / POL-8 stub; POL-14 real registry)."""
+import dataclasses
 from decimal import Decimal
+
+import pytest
 
 from polybot.calibration.config import CalibrationConfig
 from polybot.ers.intent_store import PendingIntent
-from polybot.ers.market_meta import SECONDS_TO_RESOLUTION_SENTINEL, StubMarketMeta
+from polybot.ers.market_meta import (
+    DEFAULT_CATEGORY_POLICY,
+    SECONDS_TO_RESOLUTION_SENTINEL,
+    UNKNOWN_CATEGORY,
+    CategoryPolicy,
+    MarketMetadata,
+    MarketMetadataUnavailable,
+    MarketRegistry,
+    MarketSnapshotError,
+    StubMarketMeta,
+)
 
 
-def _intent(resolution_summary="Will the incumbent win the 2026 election?"):
+def _intent(resolution_summary="Will the incumbent win the 2026 election?", *,
+            condition_id="0xabc", token_id="t1", event_id="e1"):
     return PendingIntent(
-        intent_id="i1", status="PROPOSED", token_id="t1", condition_id="0xabc",
-        event_id="e1", side="BUY", target_price=Decimal("0.55"), max_price=Decimal("0.60"),
+        intent_id="i1", status="PROPOSED", token_id=token_id, condition_id=condition_id,
+        event_id=event_id, side="BUY", target_price=Decimal("0.55"), max_price=Decimal("0.60"),
         size_usd_suggestion=Decimal("10"), p=Decimal("0.7"), p_confidence=Decimal("0.6"),
         resolution_summary=resolution_summary, thesis="thesis text",
         citations=("https://primary/1",), created_at=1,
@@ -68,3 +74,679 @@ def test_stub_is_stateless_and_repeatable():
     assert a.category_for(i) == b.category_for(i) == "unknown"
     assert a.question_text_for(i) == a.question_text_for(i) == i.resolution_summary
     assert a.seconds_to_resolution_for(i) == b.seconds_to_resolution_for(i)
+
+
+# POL-14 Task 1: frozen result + reviewed tag-ID policy -------------------------
+
+
+def test_market_metadata_is_frozen():
+    result = MarketMetadata("politics", "Will X happen?", 123)
+    assert dataclasses.asdict(result) == {
+        "category": "politics", "question_text": "Will X happen?", "seconds_to_resolution": 123,
+    }
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.category = "crypto"
+
+
+@pytest.mark.parametrize(("tag_id", "expected"), [
+    ("1", "sports"),
+    ("100265", "geopolitics"),
+    ("2", "politics"),
+    ("21", "crypto"),
+    ("120", "finance"),
+    ("107", "finance"),
+    ("100328", "econ"),
+    ("159", "econ"),
+    ("225", "econ"),
+    ("1401", "tech"),
+    ("439", "tech"),
+    ("596", "culture"),
+    ("84", "weather"),
+])
+def test_default_category_policy_uses_reviewed_tag_ids(tag_id, expected):
+    assert DEFAULT_CATEGORY_POLICY.classify([{"id": tag_id}]) == expected
+
+
+@pytest.mark.parametrize(("higher", "lower", "expected"), [
+    ("1", "100265", "sports"),
+    ("100265", "2", "geopolitics"),
+    ("2", "21", "politics"),
+    ("21", "120", "crypto"),
+    ("120", "100328", "finance"),
+    ("100328", "1401", "econ"),
+    ("1401", "596", "tech"),
+    ("596", "84", "culture"),
+])
+def test_category_precedence_is_load_bearing(higher, lower, expected):
+    # Reverse input order so this proves policy precedence, not first-tag-wins.
+    assert DEFAULT_CATEGORY_POLICY.classify([{"id": lower}, {"id": higher}]) == expected
+
+
+def test_unreviewed_id_cannot_activate_category_by_label_or_slug():
+    assert DEFAULT_CATEGORY_POLICY.classify([
+        {"id": "not-reviewed", "label": "Politics", "slug": "politics"},
+    ]) is None
+
+
+@pytest.mark.parametrize("tags", [None, {}, "not-a-list", ({"id": "2"},)])
+def test_category_policy_rejects_non_list_tag_container(tags):
+    with pytest.raises(TypeError, match="tags"):
+        DEFAULT_CATEGORY_POLICY.classify(tags)
+
+
+@pytest.mark.parametrize("tags", [["2"], [None], [{"slug": "politics"}], [{"id": 2}]])
+def test_category_policy_rejects_malformed_tag_items(tags):
+    with pytest.raises((TypeError, ValueError), match="tag"):
+        DEFAULT_CATEGORY_POLICY.classify(tags)
+
+
+@pytest.mark.parametrize("malformed_index", [0, 1, 2])
+def test_category_policy_rejects_malformed_tag_item_in_every_position(malformed_index):
+    tags = [{"id": "2"}, {"id": "21"}, {"id": "1"}]
+    tags[malformed_index] = {"id": 3}
+    with pytest.raises((TypeError, ValueError), match="tag"):
+        DEFAULT_CATEGORY_POLICY.classify(tags)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"precedence": (), "tag_ids_by_category": ()},
+    {"precedence": ("politics", "politics"),
+     "tag_ids_by_category": (("politics", frozenset({"2"})),)},
+    {"precedence": ("politics",),
+     "tag_ids_by_category": (("crypto", frozenset({"21"})),)},
+    {"precedence": ("politics", "crypto"),
+     "tag_ids_by_category": (
+         ("politics", frozenset({"2"})), ("crypto", frozenset({"2"})))},
+    {"precedence": ("politics",),
+     "tag_ids_by_category": (("politics", {"2"}),)},
+])
+def test_category_policy_rejects_invalid_or_ambiguous_definitions(kwargs):
+    with pytest.raises(ValueError, match="category|precedence|tag"):
+        CategoryPolicy(**kwargs)
+
+
+def test_category_policy_is_frozen():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(DEFAULT_CATEGORY_POLICY, "precedence", ("politics",))
+    assert type(DEFAULT_CATEGORY_POLICY.precedence) is tuple
+    assert type(DEFAULT_CATEGORY_POLICY.tag_ids_by_category) is tuple
+    assert all(type(pair) is tuple for pair in DEFAULT_CATEGORY_POLICY.tag_ids_by_category)
+    assert all(type(tag_ids) is frozenset
+               for _category, tag_ids in DEFAULT_CATEGORY_POLICY.tag_ids_by_category)
+
+
+@pytest.mark.parametrize(("category", "question", "seconds"), [
+    ("", "question", 1),
+    (1, "question", 1),
+    ("politics", None, 1),
+    ("politics", "question", -1),
+    ("politics", "question", True),
+    ("politics", "question", 1.5),
+])
+def test_market_metadata_rejects_invalid_result_values(category, question, seconds):
+    with pytest.raises((TypeError, ValueError), match="category|question|seconds"):
+        MarketMetadata(category, question, seconds)
+
+
+# POL-14 Task 2: strict two-snapshot construction + identity indices -----------
+
+
+def _embedded_market(condition_id="c1", tokens=("t1", "t2"), *, encoded=True):
+    values = list(tokens)
+    if encoded:
+        import json
+        values = json.dumps(values)
+    return {"conditionId": condition_id, "clobTokenIds": values}
+
+
+def _event(event_id="e1", tag_ids=("2",), *, condition_id="c1",
+           tokens=("t1", "t2"), markets=None):
+    embedded = [_embedded_market(condition_id, tokens)] if markets is None else markets
+    return {
+        "id": event_id,
+        "tags": [{"id": tag_id} for tag_id in tag_ids],
+        "markets": embedded,
+    }
+
+
+def _market(condition_id="c1", tokens=("t1", "t2"), *, event_id="e1",
+            question="Will X happen?", end_date="2030-01-01T00:00:00Z", encoded=True):
+    clob_tokens = list(tokens)
+    if encoded:
+        import json
+        clob_tokens = json.dumps(clob_tokens)
+    return {
+        "conditionId": condition_id,
+        "question": question,
+        "endDate": end_date,
+        "clobTokenIds": clob_tokens,
+        "events": [{"id": event_id}],
+    }
+
+
+def _registry(markets=None, events=None, *, clock=None):
+    return MarketRegistry.from_gamma_snapshots(
+        [_market()] if markets is None else markets,
+        [_event()] if events is None else events,
+        clock=(lambda: 0) if clock is None else clock,
+    )
+
+
+def test_registry_builds_from_json_string_and_parsed_token_arrays():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"), event_id="e2", encoded=False)],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
+    )
+    assert len(registry) == 2
+
+
+@pytest.mark.parametrize(("markets", "events"), [
+    (None, [_event()]),
+    ({}, [_event()]),
+    ((_market(),), [_event()]),
+    ([_market()], None),
+    ([_market()], {}),
+    ([_market()], (_event(),)),
+])
+def test_registry_rejects_non_list_snapshot_containers(markets, events):
+    with pytest.raises(MarketSnapshotError, match="snapshot.*list"):
+        MarketRegistry.from_gamma_snapshots(markets, events, clock=lambda: 0)
+
+
+@pytest.mark.parametrize("row", [None, "market", []])
+def test_registry_rejects_non_mapping_market_rows(row):
+    with pytest.raises(MarketSnapshotError, match="market row"):
+        _registry(markets=[row])
+
+
+@pytest.mark.parametrize("row", [None, "event", []])
+def test_registry_rejects_non_mapping_event_rows(row):
+    with pytest.raises(MarketSnapshotError, match="event row"):
+        _registry(events=[row])
+
+
+@pytest.mark.parametrize("tokens", [
+    ("only-one",),
+    ("one", "two", "three"),
+    ("same", "same"),
+    ("", "two"),
+    (" ", "two"),
+    (" padded", "two"),
+    (123, "two"),
+    ("one", ""),
+    ("one", " "),
+    ("one", "padded "),
+    ("one", 123),
+])
+def test_registry_rejects_bad_token_members(tokens):
+    # Mirror the candidate identity in both provider snapshots so this test cannot pass vacuously
+    # from a later market/event mismatch after the token-shape guard is mutated away.
+    with pytest.raises(MarketSnapshotError, match="token"):
+        _registry(
+            markets=[_market(tokens=tokens, encoded=False)],
+            events=[_event(tokens=tokens)],
+        )
+
+
+@pytest.mark.parametrize("wire", [None, {}, "not-json", "{}", "[1, 2]"])
+def test_registry_rejects_bad_token_wire_shapes(wire):
+    row = _market()
+    row["clobTokenIds"] = wire
+    with pytest.raises(MarketSnapshotError, match="clobTokenIds|token"):
+        _registry(markets=[row])
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("conditionId", None),
+    ("conditionId", ""),
+    ("conditionId", 123),
+    ("question", None),
+    ("question", "   "),
+    ("question", 123),
+    ("endDate", None),
+    ("endDate", "2030-01-01T00:00:00"),
+    ("endDate", "2030-01-01X00:00:00+00:00"),
+    ("endDate", "2030-01-01🙂00:00:00+00:00"),
+    ("endDate", "not-a-date"),
+])
+def test_registry_rejects_missing_or_malformed_market_fields(field, value):
+    row = _market()
+    row[field] = value
+    with pytest.raises(MarketSnapshotError, match=field):
+        _registry(markets=[row])
+
+
+@pytest.mark.parametrize("events_field", [None, [], [{"id": "e1"}, {"id": "e2"}], ["e1"], [{"id": 1}]])
+def test_registry_rejects_ambiguous_or_malformed_market_event_link(events_field):
+    row = _market()
+    row["events"] = events_field
+    with pytest.raises(MarketSnapshotError, match="event"):
+        _registry(markets=[row])
+
+
+@pytest.mark.parametrize(("field", "value"), [("id", None), ("id", ""), ("id", 1), ("tags", None)])
+def test_registry_rejects_missing_or_malformed_event_fields(field, value):
+    event = _event()
+    event[field] = value
+    with pytest.raises(MarketSnapshotError, match="event|tag"):
+        _registry(events=[event])
+
+
+def test_missing_event_and_unmapped_event_are_skipped_when_another_market_is_usable():
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("missing", ("m1", "m2"), event_id="not-returned"),
+                 _market("unmapped", ("u1", "u2"), event_id="unknown-tag")],
+        events=[_event("mapped", ("2",), condition_id="good", tokens=("g1", "g2")),
+                _event("unknown-tag", ("999999",),
+                       condition_id="unmapped", tokens=("u1", "u2"))],
+    )
+    assert len(registry) == 1
+
+
+@pytest.mark.parametrize("markets_value", [None, {}, "not-a-list"])
+def test_referenced_event_requires_embedded_market_list(markets_value):
+    event = _event()
+    event["markets"] = markets_value
+    with pytest.raises(MarketSnapshotError, match="event.*markets|market list"):
+        _registry(events=[event])
+
+
+def test_market_missing_from_referenced_event_is_indexed_unavailable():
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("orphan", ("o1", "o2"), event_id="orphan-event")],
+        events=[_event("mapped", condition_id="good", tokens=("g1", "g2")),
+                _event("orphan-event", condition_id="different", tokens=("d1", "d2"))],
+    )
+    assert len(registry) == 1
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.metadata_for(_intent(condition_id="orphan", token_id="o1"))
+
+
+@pytest.mark.parametrize("non_string_condition", [
+    [], {}, None, 0, False, 1.5,
+], ids=["list", "mapping", "null", "integer", "boolean", "float"])
+def test_event_ignores_unrelated_non_string_condition_before_selected_relationship(
+        non_string_condition):
+    event = _event(markets=[
+        {"conditionId": non_string_condition,
+         "clobTokenIds": '["legacy1", "legacy2"]'},
+        _embedded_market("c1", ("t1", "t2")),
+    ])
+    registry = _registry(events=[event])
+    assert registry.metadata_for(_intent(condition_id="c1", token_id="t1")).category == "politics"
+
+
+def test_event_processes_every_selected_market_not_only_the_last_row():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4")),
+                 _market("c3", ("t5", "t6"))],
+        events=[_event(markets=[
+            _embedded_market("c1", ("t1", "t2")),
+            _embedded_market("c2", ("t3", "t4")),
+            _embedded_market("c3", ("t5", "t6")),
+        ])],
+    )
+    assert len(registry) == 3
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c2", token_id="t3")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c3", token_id="t5")).category == "politics"
+
+
+def test_registry_processes_every_event_row_including_the_middle():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2"), event_id="e1"),
+                 _market("c2", ("t3", "t4"), event_id="e2"),
+                 _market("c3", ("t5", "t6"), event_id="e3")],
+        events=[_event("e1", condition_id="c1", tokens=("t1", "t2")),
+                _event("e2", condition_id="c2", tokens=("t3", "t4")),
+                _event("e3", condition_id="c3", tokens=("t5", "t6"))],
+    )
+    assert len(registry) == 3
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1", event_id="e1")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c2", token_id="t3", event_id="e2")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c3", token_id="t5", event_id="e3")).category == "politics"
+
+
+@pytest.mark.parametrize("event_tokens", [
+    ("wrong-first", "t2"),
+    ("t1", "wrong-second"),
+])
+def test_event_embedded_market_token_mismatch_fails_loud_in_either_sibling(event_tokens):
+    event = _event(tokens=event_tokens)
+    with pytest.raises(MarketSnapshotError, match="event.*token|token.*conflict|identity"):
+        _registry(events=[event])
+
+
+def test_event_duplicate_embedded_condition_with_conflicting_tokens_fails_loud():
+    event = _event(markets=[
+        _embedded_market("c1", ("t1", "t2")),
+        _embedded_market("c1", ("t1", "other")),
+    ])
+    with pytest.raises(MarketSnapshotError, match="event.*token|condition.*conflict|identity"):
+        _registry(events=[event])
+
+
+def test_event_duplicate_identical_embedded_condition_is_idempotent():
+    embedded = _embedded_market("c1", ("t1", "t2"))
+    event = _event(markets=[embedded, dict(embedded)])
+    assert len(_registry(events=[event])) == 1
+
+
+def test_identical_duplicate_market_rows_are_idempotent():
+    row = _market()
+    assert len(_registry(markets=[row, dict(row)])) == 1
+
+
+def test_conflicting_duplicate_condition_fails_loud():
+    first = _market(question="Will X happen?")
+    second = _market(question="Will Y happen?")
+    with pytest.raises(MarketSnapshotError, match="condition.*conflict"):
+        _registry(markets=[first, second])
+
+
+@pytest.mark.parametrize(("first_tokens", "second_tokens"), [
+    (("shared", "t2"), ("shared", "t4")),
+    (("t1", "shared"), ("t3", "shared")),
+])
+def test_token_reused_in_either_sibling_across_conditions_fails_loud(
+        first_tokens, second_tokens):
+    # Keep both event-contained identities internally consistent. The only intended failure is the
+    # selected-market token reuse itself, so a mutation cannot hide behind a later event mismatch.
+    with pytest.raises(MarketSnapshotError, match="token.*condition"):
+        _registry(
+            markets=[_market("c1", first_tokens),
+                     _market("c2", second_tokens, event_id="e2")],
+            events=[_event("e1", condition_id="c1", tokens=first_tokens),
+                    _event("e2", condition_id="c2", tokens=second_tokens)],
+        )
+
+
+def test_conflicting_duplicate_event_category_fails_loud():
+    with pytest.raises(MarketSnapshotError, match="event.*conflict"):
+        _registry(events=[_event("e1", ("2",)), _event("e1", ("21",))])
+
+
+@pytest.mark.parametrize(("markets", "events"), [
+    ([_market(event_id="missing")], [_event("e1", ("2",))]),
+    ([_market()], [_event("e1", ("999999",))]),
+    ([], [_event()]),
+])
+def test_registry_fails_when_no_market_is_usable(markets, events):
+    with pytest.raises(MarketSnapshotError, match="no usable"):
+        _registry(markets=markets, events=events)
+
+
+# POL-14 Task 3: lookup clock + dual-identifier contract -----------------------
+
+
+def test_lookup_returns_gamma_owned_metadata_not_proposal_values():
+    registry = _registry(
+        markets=[_market(question="Gamma canonical question",
+                         end_date="1970-01-01T00:01:40Z")],
+        clock=lambda: 10.25,
+    )
+    result = registry.metadata_for(_intent(
+        "proposal-owned summary", condition_id="c1", token_id="t1"))
+    assert result == MarketMetadata(
+        category="politics",
+        question_text="Gamma canonical question",
+        seconds_to_resolution=89,
+    )
+
+
+def test_lookup_preserves_representation_sensitive_token_strings_exactly():
+    tokens = ("001", "0002")
+    registry = _registry(
+        markets=[_market(tokens=tokens)],
+        events=[_event(tokens=tokens)],
+    )
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="001")).category == "politics"
+    with pytest.raises(MarketMetadataUnavailable, match="token"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="1"))
+
+
+@pytest.mark.parametrize("token_id", ["t1", "t2"])
+def test_lookup_accepts_both_owned_token_siblings(token_id):
+    registry = _registry()
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id=token_id)).category == "politics"
+
+
+@pytest.mark.parametrize(("condition_id", "token_id"), [
+    ("missing", "t1"),
+    ("c1", "missing"),
+])
+def test_lookup_rejects_unknown_condition_or_token(condition_id, token_id):
+    registry = _registry()
+    with pytest.raises(MarketMetadataUnavailable, match="condition|token"):
+        registry.metadata_for(_intent(condition_id=condition_id, token_id=token_id))
+
+
+def test_lookup_rejects_known_but_mismatched_condition_and_token():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"), event_id="e2")],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("21",), condition_id="c2", tokens=("t3", "t4"))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
+
+
+@pytest.mark.parametrize("event_id", [
+    "forged-event", "e1-forged-suffix", "E1", "e", "forged-e1", " e1 ",
+])
+def test_lookup_rejects_nonexact_proposal_event_identity(event_id):
+    registry = _registry()
+    with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
+        registry.metadata_for(
+            _intent(condition_id="c1", token_id="t1", event_id=event_id))
+
+
+def test_lookup_rejects_known_same_category_event_owned_by_a_different_gamma_market():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"), event_id="e2")],
+        events=[_event("e1", ("2",)),
+                _event("e2", ("2",), condition_id="c2", tokens=("t3", "t4"))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
+        registry.metadata_for(
+            _intent(condition_id="c1", token_id="t1", event_id="e2"))
+
+
+@pytest.mark.parametrize(("condition_id", "token_id"), [
+    ("unmapped", "u1"),
+    ("unmapped", "u2"),
+])
+def test_lookup_rejects_known_market_with_unmapped_category(condition_id, token_id):
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("unmapped", ("u1", "u2"), event_id="other")],
+        events=[_event("mapped", ("2",), condition_id="good", tokens=("g1", "g2")),
+                _event("other", ("999999",),
+                       condition_id="unmapped", tokens=("u1", "u2"))],
+    )
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.metadata_for(_intent(condition_id=condition_id, token_id=token_id))
+
+
+def test_lookup_reads_wall_clock_exactly_once():
+    calls = []
+
+    def clock():
+        calls.append("read")
+        return 10
+
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:01:40Z")], clock=clock)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 90
+    assert calls == ["read"]
+
+
+@pytest.mark.parametrize(("now", "expected"), [
+    (99.1, 0),
+    (100, 0),
+    (100.1, 0),
+])
+def test_lookup_floors_fractional_time_and_clamps_at_or_past_deadline(now, expected):
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:01:40Z")], clock=lambda: now)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == expected
+
+
+def test_lookup_honors_provider_timezone_offset():
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T02:00:00+02:00")], clock=lambda: 0)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 0
+
+
+def test_lookup_floors_only_after_subtracting_fractional_deadline_and_clock():
+    registry = _registry(
+        markets=[_market(end_date="1970-01-01T00:00:01.900Z")], clock=lambda: 0.2)
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).seconds_to_resolution == 1
+
+
+@pytest.mark.parametrize("clock_value", [
+    None, "10", True, float("nan"), float("inf"), float("-inf"),
+])
+def test_lookup_rejects_invalid_wall_clock_values(clock_value):
+    registry = _registry(clock=lambda: clock_value)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+def test_lookup_normalizes_wall_clock_overflow_as_unavailable():
+    registry = _registry(clock=lambda: 10**10000)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+@pytest.mark.parametrize("clock_error", [
+    RuntimeError("clock runtime failure"),
+    ValueError("clock value failure"),
+    TypeError("clock type failure"),
+    AttributeError("clock attribute failure"),
+    OverflowError("clock overflow failure"),
+    Exception("clock base failure"),
+])
+def test_lookup_wraps_clock_exception_siblings_as_unavailable(clock_error):
+    def broken_clock():
+        raise clock_error
+
+    registry = _registry(clock=broken_clock)
+    with pytest.raises(MarketMetadataUnavailable, match="clock"):
+        registry.metadata_for(_intent(condition_id="c1", token_id="t1"))
+
+
+def test_registry_lookup_is_repeatable_and_does_not_mutate_indices():
+    registry = _registry(clock=lambda: 0)
+    intent = _intent(condition_id="c1", token_id="t1")
+    assert registry.metadata_for(intent) == registry.metadata_for(intent)
+    assert len(registry) == 1
+
+
+def test_registry_object_and_indices_are_immutable():
+    registry = _registry()
+    registry_with_unavailable = _registry(
+        markets=[_market("good", ("g1", "g2"), event_id="mapped"),
+                 _market("orphan", ("o1", "o2"), event_id="missing")],
+        events=[_event("mapped", condition_id="good", tokens=("g1", "g2"))],
+    )
+
+    def mutate(mapping, existing_key):
+        mapping["other"] = mapping[existing_key]
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(registry, "_clock", lambda: 1)
+    with pytest.raises(TypeError):
+        mutate(registry._by_condition, "c1")
+    with pytest.raises(TypeError):
+        mutate(registry._by_token, "t1")
+    assert type(registry._by_condition["c1"].token_ids) is tuple
+    assert type(registry_with_unavailable._unavailable_conditions) is frozenset
+    assert type(registry_with_unavailable._unavailable_tokens) is frozenset
+
+
+def test_registry_direct_constructor_cannot_bypass_snapshot_validation():
+    with pytest.raises(MarketSnapshotError, match="from_gamma_snapshots"):
+        MarketRegistry({}, {}, frozenset(), frozenset(), lambda: 0)
+
+
+def test_stub_implements_single_metadata_result_contract():
+    intent = _intent("legacy proposal summary")
+    assert StubMarketMeta().metadata_for(intent) == MarketMetadata(
+        UNKNOWN_CATEGORY, "legacy proposal summary", SECONDS_TO_RESOLUTION_SENTINEL)
+
+
+# POL-14 Task 5: representative live-shaped whole-slice contract ---------------
+
+
+def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_deadline():
+    yes = "7704407378332423580507141839985172615515196706624243524491048428567892599013"
+    no = "1959412866692185789324499315644486550124994570117004262795754352991182983341"
+    crypto_yes = "114083367175349101587118456512209157494315102378898420654169806682644264287063"
+    crypto_no = "87004704450340662630452254179921033526720310358232052759253551781798129052057"
+    markets = [
+        {
+            "conditionId": "0xgeo",
+            "question": "Gamma geopolitical question",
+            "category": "politics",  # documented-but-stale field must NOT override reviewed tags
+            "endDate": "1970-01-01T00:01:40Z",
+            "clobTokenIds": f'["{yes}", "{no}"]',
+            "events": [{"id": "678139", "title": "container"}],
+        },
+        {
+            "conditionId": "0xcrypto",
+            "question": "Gamma crypto-finance question",
+            "endDate": "1970-01-01T00:03:20Z",
+            "clobTokenIds": [crypto_yes, crypto_no],
+            "events": [{"id": "16183"}],
+        },
+    ]
+    events = [
+        {"id": "678139", "endDate": "1970-01-01T00:00:20Z", "tags": [
+            {"id": "2", "label": "Politics", "slug": "politics"},
+            {"id": "100265", "label": "Geopolitics", "slug": "geopolitics"},
+        ], "markets": [
+            {"conditionId": "0xgeo", "clobTokenIds": f'["{yes}", "{no}"]'},
+        ]},
+        {"id": "16183", "tags": [
+            {"id": "120", "label": "Finance", "slug": "finance"},
+            {"id": "21", "label": "Crypto", "slug": "crypto"},
+        ], "markets": [
+            {"conditionId": "0xcrypto", "clobTokenIds": [crypto_yes, crypto_no]},
+        ]},
+    ]
+    registry = MarketRegistry.from_gamma_snapshots(markets, events, clock=lambda: 10.25)
+
+    geo = registry.metadata_for(_intent(
+        "proposal text must lose", condition_id="0xgeo", token_id=yes, event_id="678139"))
+    # 89 comes from the selected MARKET endDate=100, never the conflicting event endDate=20.
+    assert geo == MarketMetadata("geopolitics", "Gamma geopolitical question", 89)
+    crypto = registry.metadata_for(_intent(
+        "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no,
+        event_id="16183"))
+    assert crypto == MarketMetadata("crypto", "Gamma crypto-finance question", 189)
+    assert len(crypto_no) == 77
+    assert _intent(condition_id="0xcrypto", token_id=crypto_no).token_id == crypto_no
+
+    with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
+        registry.metadata_for(_intent(
+            condition_id="0xgeo", token_id=crypto_yes, event_id="678139"))

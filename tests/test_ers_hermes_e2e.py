@@ -39,7 +39,7 @@ from polybot.detectors.orchestrator import DetectorInputs, DetectorOrchestrator
 from polybot.ers.caps import RiskCaps
 from polybot.ers.facade import ProposeOnlyFacade
 from polybot.ers.intent_store import IntentStore
-from polybot.ers.market_meta import StubMarketMeta
+from polybot.ers.market_meta import MarketRegistry, StubMarketMeta
 from polybot.ers.service import HermesPipeline, PaperSigner, process_pending
 from polybot.ers.validator import Portfolio
 from polybot.fusion.component_log import ComponentLog
@@ -80,7 +80,7 @@ def _truth_config():
                            thin_book_move=Decimal("0.02"))
 
 
-def _build_pipeline(tmp_path, stamper, event_store):
+def _build_pipeline(tmp_path, stamper, event_store, *, market_meta=None):
     """A real HermesPipeline with ALL real collaborators (DEFAULT_ALLOWLIST has fed-press=
     federalreserve.gov and sec-press=sec.gov as two DISTINCT PRIMARY publisher_groups -> two
     independent citations corroborate)."""
@@ -93,7 +93,7 @@ def _build_pipeline(tmp_path, stamper, event_store):
         detectors=DetectorOrchestrator(DetectorConfig()),
         forecast_ledger=ledger,
         component_log=clog,
-        market_meta=StubMarketMeta(),
+        market_meta=market_meta or StubMarketMeta(),
         allowlist=DEFAULT_ALLOWLIST,
         event_store=event_store,
         stamper=stamper,
@@ -139,6 +139,66 @@ def test_e2e_clean_corroborated_proposal_skips_on_k0_with_logging(tmp_path):
             assert len(comps) == 1
             assert comps[0].corroborated is True
             assert comps[0].w_news_effective == 0.20
+
+
+# POL-14 whole-slice composition: real registry metadata reaches the real S6 ledger.
+def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
+    token = "7704407378332423580507141839985172615515196706624243524491048428567892599013"
+    sibling = "1959412866692185789324499315644486550124994570117004262795754352991182983341"
+    registry = MarketRegistry.from_gamma_snapshots(
+        [{
+            "conditionId": "m1",
+            "question": "Will Bitcoin reach the Gamma threshold?",
+            "endDate": "2100-01-01T00:00:00Z",
+            "clobTokenIds": f'["{token}", "{sibling}"]',
+            "events": [{"id": "ev-market"}],
+        }],
+        [{"id": "ev-market", "tags": [
+            {"id": "120", "label": "Finance"},
+            {"id": "21", "label": "Crypto"},
+        ], "markets": [{
+            "conditionId": "m1",
+            "clobTokenIds": f'["{token}", "{sibling}"]',
+        }]}],
+        clock=lambda: 0,
+    )
+
+    stamper = MonotonicStamper()
+    with EventStore(str(tmp_path / "ev.db")) as evstore:
+        _seed(evstore, stamper, source="fed-press", event_id="c1")
+        _seed(evstore, stamper, source="sec-press", event_id="c2")
+        pipe, ledger, clog = _build_pipeline(
+            tmp_path, stamper, evstore, market_meta=registry)
+        with IntentStore(str(tmp_path / "i.db"), stamper) as store:
+            signer = PaperSigner()
+            deep = _book("0.50", ask_size="100000", bid="0.49", bid_size="100000")
+            ProposeOnlyFacade(store).propose_trade(
+                "forged", token_id=token, condition_id="m1", event_id="forged-event", side="BUY",
+                target_price="0.50", max_price="0.60", size_usd_suggestion="100",
+                p="0.95", p_confidence="0.8", resolution_summary="forged event identity",
+                thesis="...", citations=("c1", "c2"))
+            process_pending(store, book_for={token: deep}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+            forged = store.get("forged")
+            assert forged is not None and forged.status == "REJECTED"
+            assert forged.decision_reason == "market_meta_unavailable"
+            assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+            ProposeOnlyFacade(store).propose_trade(
+                "i1", token_id=token, condition_id="m1", event_id="ev-market", side="BUY",
+                target_price="0.50", max_price="0.60", size_usd_suggestion="100",
+                p="0.95", p_confidence="0.8",
+                resolution_summary="Hermes tries to call this politics",
+                thesis="...", citations=("c1", "c2"))
+            process_pending(store, book_for={token: deep}.get,
+                            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(),
+                            signer=signer, pipeline=pipe)
+
+            assert store.get("i1").status == "SKIPPED"  # crypto bucket is cold -> k=0
+            assert ledger.get("i1").category == "crypto"  # reviewed tags, not proposal text
+            assert len(clog.all()) == 1
+            assert signer.placed == []
 
 
 def test_e2e_injection_proposal_rejected_same_source_collusion_never_signs(tmp_path):
