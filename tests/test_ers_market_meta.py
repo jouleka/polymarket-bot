@@ -20,10 +20,10 @@ from polybot.ers.market_meta import (
 
 
 def _intent(resolution_summary="Will the incumbent win the 2026 election?", *,
-            condition_id="0xabc", token_id="t1"):
+            condition_id="0xabc", token_id="t1", event_id="e1"):
     return PendingIntent(
         intent_id="i1", status="PROPOSED", token_id=token_id, condition_id=condition_id,
-        event_id="e1", side="BUY", target_price=Decimal("0.55"), max_price=Decimal("0.60"),
+        event_id=event_id, side="BUY", target_price=Decimal("0.55"), max_price=Decimal("0.60"),
         size_usd_suggestion=Decimal("10"), p=Decimal("0.7"), p_confidence=Decimal("0.6"),
         resolution_summary=resolution_summary, thesis="thesis text",
         citations=("https://primary/1",), created_at=1,
@@ -358,13 +358,32 @@ def test_market_missing_from_referenced_event_is_indexed_unavailable():
         registry.metadata_for(_intent(condition_id="orphan", token_id="o1"))
 
 
-def test_event_ignores_unrelated_unhashable_condition_before_selected_relationship():
+@pytest.mark.parametrize("unhashable_condition", [[], {}])
+def test_event_ignores_unrelated_unhashable_condition_before_selected_relationship(
+        unhashable_condition):
     event = _event(markets=[
-        {"conditionId": [], "clobTokenIds": '["legacy1", "legacy2"]'},
+        {"conditionId": unhashable_condition,
+         "clobTokenIds": '["legacy1", "legacy2"]'},
         _embedded_market("c1", ("t1", "t2")),
     ])
     registry = _registry(events=[event])
     assert registry.metadata_for(_intent(condition_id="c1", token_id="t1")).category == "politics"
+
+
+def test_event_processes_every_selected_market_not_only_the_last_row():
+    registry = _registry(
+        markets=[_market("c1", ("t1", "t2")),
+                 _market("c2", ("t3", "t4"))],
+        events=[_event(markets=[
+            _embedded_market("c1", ("t1", "t2")),
+            _embedded_market("c2", ("t3", "t4")),
+        ])],
+    )
+    assert len(registry) == 2
+    assert registry.metadata_for(
+        _intent(condition_id="c1", token_id="t1")).category == "politics"
+    assert registry.metadata_for(
+        _intent(condition_id="c2", token_id="t3")).category == "politics"
 
 
 def test_event_embedded_market_token_mismatch_fails_loud():
@@ -476,6 +495,13 @@ def test_lookup_rejects_known_but_mismatched_condition_and_token():
     )
     with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
         registry.metadata_for(_intent(condition_id="c1", token_id="t3"))
+
+
+def test_lookup_rejects_proposal_event_mismatched_from_gamma_market_identity():
+    registry = _registry()
+    with pytest.raises(MarketMetadataUnavailable, match="event.*mismatch"):
+        registry.metadata_for(
+            _intent(condition_id="c1", token_id="t1", event_id="forged-event"))
 
 
 @pytest.mark.parametrize(("condition_id", "token_id"), [
@@ -616,14 +642,16 @@ def test_live_shaped_two_snapshot_whole_slice_uses_exact_ids_tags_question_and_d
     registry = MarketRegistry.from_gamma_snapshots(markets, events, clock=lambda: 10.25)
 
     geo = registry.metadata_for(_intent(
-        "proposal text must lose", condition_id="0xgeo", token_id=yes))
+        "proposal text must lose", condition_id="0xgeo", token_id=yes, event_id="678139"))
     # 89 comes from the selected MARKET endDate=100, never the conflicting event endDate=20.
     assert geo == MarketMetadata("geopolitics", "Gamma geopolitical question", 89)
     crypto = registry.metadata_for(_intent(
-        "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no))
+        "proposal text must lose", condition_id="0xcrypto", token_id=crypto_no,
+        event_id="16183"))
     assert crypto == MarketMetadata("crypto", "Gamma crypto-finance question", 189)
     assert len(crypto_no) == 77
     assert _intent(condition_id="0xcrypto", token_id=crypto_no).token_id == crypto_no
 
     with pytest.raises(MarketMetadataUnavailable, match="mismatch"):
-        registry.metadata_for(_intent(condition_id="0xgeo", token_id=crypto_yes))
+        registry.metadata_for(_intent(
+            condition_id="0xgeo", token_id=crypto_yes, event_id="678139"))

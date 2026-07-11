@@ -422,13 +422,16 @@ class MarketRegistry:
         return len(self._by_condition)
 
     def metadata_for(self, intent):
-        """Resolve one intent by BOTH trusted identity keys and one injected wall-clock read."""
+        """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
         condition_id = getattr(intent, "condition_id", None)
         token_id = getattr(intent, "token_id", None)
+        event_id = getattr(intent, "event_id", None)
         if not isinstance(condition_id, str) or not condition_id:
             raise MarketMetadataUnavailable("market condition identifier is unavailable")
         if not isinstance(token_id, str) or not token_id:
             raise MarketMetadataUnavailable("market token identifier is unavailable")
+        if not isinstance(event_id, str) or not event_id:
+            raise MarketMetadataUnavailable("market event identifier is unavailable")
 
         condition_definition = self._by_condition.get(condition_id)
         if condition_definition is None:
@@ -441,6 +444,10 @@ class MarketRegistry:
         if condition_definition is not token_definition:
             raise MarketMetadataUnavailable(
                 f"market condition/token identity mismatch: {condition_id!r}, {token_id!r}"
+            )
+        if event_id != condition_definition.event_id:
+            raise MarketMetadataUnavailable(
+                f"market event identity mismatch: {event_id!r}, {condition_definition.event_id!r}"
             )
 
         try:

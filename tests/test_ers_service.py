@@ -11,6 +11,8 @@ cross-intent fold contract.
 
 from decimal import Decimal
 
+import pytest
+
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
@@ -452,8 +454,12 @@ def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp
         assert pipe.calib_gate.clamp_calls == []
 
 
-def test_pipeline_unexpected_metadata_bug_stays_internal_error(tmp_path, monkeypatch):
-    meta = _RecordingMeta(raises=RuntimeError("implementation bug"))
+@pytest.mark.parametrize("bug", [
+    RuntimeError("implementation bug"),
+    KeyError("implementation lookup bug"),
+])
+def test_pipeline_unexpected_metadata_bug_stays_internal_error(tmp_path, monkeypatch, bug):
+    meta = _RecordingMeta(raises=bug)
     pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
     with _store(str(tmp_path / "i.db")) as store:
         store.propose_trade("i1", **_P)
