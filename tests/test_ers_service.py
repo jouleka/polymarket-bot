@@ -457,6 +457,7 @@ def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp
 @pytest.mark.parametrize("bug", [
     RuntimeError("implementation bug"),
     KeyError("implementation lookup bug"),
+    IndexError("implementation index bug"),
 ])
 def test_pipeline_unexpected_metadata_bug_stays_internal_error(tmp_path, monkeypatch, bug):
     meta = _RecordingMeta(raises=bug)
