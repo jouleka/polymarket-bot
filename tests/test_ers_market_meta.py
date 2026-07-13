@@ -15,6 +15,7 @@ from polybot.ers.market_meta import (
     MarketMetadataUnavailable,
     MarketRegistry,
     MarketSnapshotError,
+    ResolutionSubjectMetadata,
     StubMarketMeta,
 )
 
@@ -488,6 +489,29 @@ def test_registry_fails_when_no_market_is_usable(markets, events):
 
 
 # POL-14 Task 3: lookup clock + dual-identifier contract -----------------------
+
+
+def test_registry_returns_resolution_subject_after_three_identifier_check():
+    registry = _registry()
+
+    assert registry.resolution_subject_for(
+        _intent(condition_id="c1", token_id="t2", event_id="e1")
+    ) == ResolutionSubjectMetadata(
+        event_id="e1",
+        condition_id="c1",
+        category="politics",
+        token_id="t2",
+        outcome_slot=1,
+        sibling_token_ids=("t1", "t2"),
+    )
+
+    for intent in (
+        _intent(condition_id="missing", token_id="t2", event_id="e1"),
+        _intent(condition_id="c1", token_id="missing", event_id="e1"),
+        _intent(condition_id="c1", token_id="t2", event_id="forged"),
+    ):
+        with pytest.raises(MarketMetadataUnavailable):
+            registry.resolution_subject_for(intent)
 
 
 def test_lookup_returns_gamma_owned_metadata_not_proposal_values():

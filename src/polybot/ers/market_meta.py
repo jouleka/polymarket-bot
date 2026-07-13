@@ -52,6 +52,18 @@ class MarketMetadata:
 
 
 @dataclass(frozen=True)
+class ResolutionSubjectMetadata:
+    """Canonical binary market identity retained for eventual settlement."""
+
+    event_id: str
+    condition_id: str
+    category: str
+    token_id: str
+    outcome_slot: int
+    sibling_token_ids: tuple[str, str]
+
+
+@dataclass(frozen=True)
 class CategoryPolicy:
     """Immutable allowlist from reviewed Gamma tag IDs to canonical calibration categories.
 
@@ -421,8 +433,8 @@ class MarketRegistry:
     def __len__(self):
         return len(self._by_condition)
 
-    def metadata_for(self, intent):
-        """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
+    def _definition_for(self, intent):
+        """Resolve one intent only after condition, token, and event identity agree."""
         condition_id = getattr(intent, "condition_id", None)
         token_id = getattr(intent, "token_id", None)
         event_id = getattr(intent, "event_id", None)
@@ -449,6 +461,26 @@ class MarketRegistry:
             raise MarketMetadataUnavailable(
                 f"market event identity mismatch: {event_id!r}, {condition_definition.event_id!r}"
             )
+        return condition_definition, token_id
+
+    def resolution_subject_for(self, intent):
+        """Return settlement identity without consulting the wall clock."""
+        definition, token_id = self._definition_for(intent)
+        category = definition.category
+        if category is None:  # defensive invariant: unavailable rows never enter the public indices
+            raise MarketMetadataUnavailable("market category is unavailable")
+        return ResolutionSubjectMetadata(
+            event_id=definition.event_id,
+            condition_id=definition.condition_id,
+            category=category,
+            token_id=token_id,
+            outcome_slot=definition.token_ids.index(token_id),
+            sibling_token_ids=definition.token_ids,
+        )
+
+    def metadata_for(self, intent):
+        """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
+        condition_definition, _token_id = self._definition_for(intent)
 
         try:
             now = self._clock()
