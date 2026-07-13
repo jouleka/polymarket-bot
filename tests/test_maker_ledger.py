@@ -13,6 +13,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
+from polybot.resolution.errors import SettlementConflict
 
 
 def _ledger(path):
@@ -74,6 +75,30 @@ def test_maker_terminal_projects_clear_and_excluded_values(tmp_path):
             record = ledger.all()[0]
             assert record.status == "DISPUTED" and record.resolution_value is None
             assert record.terminal_id == terminal.terminal_id
+
+
+def test_maker_terminal_conflict_rolls_back_every_row_and_receipt(tmp_path):
+    condition_id = "0x" + "24" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "conflict.db")) as ledger:
+        for fill_id, event_id, slot, token in (
+            ("first", "event-1", 0, "101"),
+            ("later-conflict", "wrong-event", 1, "202"),
+        ):
+            ledger.record_fill(
+                fill_id, token_id=token, condition_id=condition_id, category="politics",
+                side="BUY", shares=Decimal("10"), price_exec=Decimal("0.48"),
+                fill_mid=Decimal("0.50"), reward_accrued=Decimal("0.25"),
+                event_id=event_id, outcome_slot=slot, sibling_token_ids=("101", "202"),
+            )
+
+        with pytest.raises(SettlementConflict, match="identity"):
+            ledger.apply_terminal(terminal)
+
+        assert all(row.status is None and row.terminal_id is None for row in ledger.all())
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM resolution_receipts"
+        ).fetchone()[0] == 0
 
 
 def test_maker_v0_database_migrates_to_nullable_identity(tmp_path):

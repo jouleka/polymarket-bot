@@ -18,6 +18,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
+from polybot.resolution.errors import SettlementConflict
 
 # Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
 # dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the maker's net-PnL.
@@ -200,16 +201,36 @@ class MakerLedger:
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            stored_rows = self._conn.execute(
+                "SELECT fill_id, token_id, category, event_id, outcome_slot, "
+                "sibling_token_ids, status FROM maker_fills "
+                "WHERE condition_id=? AND terminal_id IS NULL",
+                (terminal.subject.condition_id,),
+            ).fetchall()
+            rows = []
+            for (fill_id, token_id, category, event_id, slot, sibling_json,
+                 status) in stored_rows:
+                identity = (event_id, slot, sibling_json)
+                if all(value is None for value in identity):
+                    continue
+                if any(value is None for value in identity) or status is not None:
+                    raise SettlementConflict("maker identity is incomplete or not pending")
+                try:
+                    siblings = tuple(json.loads(sibling_json))
+                except (TypeError, ValueError) as exc:
+                    raise SettlementConflict("maker identity has invalid siblings") from exc
+                subject = terminal.subject
+                if (category != subject.category or event_id != subject.event_id
+                        or siblings != subject.token_ids
+                        or isinstance(slot, bool) or slot not in (0, 1)
+                        or subject.token_ids[slot] != token_id):
+                    raise SettlementConflict("maker identity contradicts terminal subject")
+                rows.append((fill_id, slot))
             self._conn.execute(
                 "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
                 "VALUES (?, ?, ?)",
                 (terminal.subject.condition_id, terminal_id, terminal.canonical_bytes),
             )
-            rows = self._conn.execute(
-                "SELECT fill_id, outcome_slot FROM maker_fills "
-                "WHERE condition_id=? AND terminal_id IS NULL",
-                (terminal.subject.condition_id,),
-            ).fetchall()
             for fill_id, slot in rows:
                 numerator = terminal.payout.numerators[slot]
                 denominator = terminal.payout.denominator
