@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from polybot.core.clock import MonotonicStamper
+from polybot.resolution.errors import ResolutionUnavailable
 from polybot.resolution.feed import PollDisposition, ResolutionFeed
 from polybot.resolution.models import (
     DisputeState,
@@ -44,9 +45,13 @@ class _Provider:
 
     def observe(self, subject, block_number):
         self.observe_calls.append((subject, block_number))
-        if isinstance(self._observation, Exception):
-            raise self._observation
-        return self._observation
+        observation = (
+            self._observation.get(subject.condition_id)
+            if isinstance(self._observation, dict) else self._observation
+        )
+        if isinstance(observation, Exception):
+            raise observation
+        return observation
 
 
 def _subject(condition_byte="81"):
@@ -229,3 +234,40 @@ def test_poll_accepts_classified_excluded_terminal(tmp_path, classified):
         assert [record.role for record in store.pending_outbox(10)] == [
             "FORECAST", "MAKER", "SHADOW"
         ]
+
+
+def test_poll_isolates_retryable_unavailability_in_input_order(tmp_path):
+    unavailable_subject = _subject("8a")
+    later_subject = _subject("8b")
+    block_hash = "0x" + "aa" * 32
+    later_observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.UNRESOLVED, payout=None, dispute=DisputeState.UNKNOWN,
+        collateral_address=None, derived_token_ids=None, adapter_address=None,
+        question_id=None, audit_event_ids=(),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash,
+        observation={
+            unavailable_subject.condition_id: ResolutionUnavailable("provider timeout"),
+            later_subject.condition_id: later_observation,
+        },
+    )
+    second = _Provider(
+        "archive-b", head=20, block_hash=block_hash,
+        observation={
+            later_subject.condition_id: replace(later_observation, provider_id="archive-b"),
+        },
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        results = ResolutionFeed(store, (first, second)).poll(
+            (unavailable_subject, later_subject)
+        )
+        assert [result.condition_id for result in results] == [
+            unavailable_subject.condition_id, later_subject.condition_id
+        ]
+        assert [result.disposition for result in results] == [
+            PollDisposition.UNAVAILABLE, PollDisposition.UNRESOLVED
+        ]
+        assert store.assessment_for(unavailable_subject.condition_id) is None
+        assert store.assessment_for(later_subject.condition_id) is not None
