@@ -12,6 +12,7 @@ tests stay green). pipeline supplied -> the S6 chain plus the POL-14 metadata ga
 calib_score is IGNORED in favor of the per-intent k = pipeline.calib_gate.k_for(category).
 """
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -110,27 +111,44 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             # and keep processing the rest.
             decision = Decision("REJECT", None, None, "internal_error")
             trade_intent = None
-        store.record_decision(intent.intent_id, decision)
-        if decision.verdict == "ACCEPT":
-            signer.place(intent, decision)
-            portfolio = _fold(portfolio, trade_intent, decision)
-            if gtd_for is not None:
-                # Pre-stage the protective GTD exit for the just-folded position (the passive
-                # backstop), enforcing caps.gtd_bracket_aggregate via the derivation. The folded
-                # position is the last one. NOTE (shadow limitation): standing sums the append-only
-                # gtd_exits, which is never decremented on exit/flatten -- it's CUMULATIVE, not
-                # currently-standing, so over a long shadow run it can over-approximate and
-                # fail-CLOSED (refuse a legitimate new bracket). Safe (never over-stages); the live
-                # POL-4 signer must track currently-STANDING exits, not the cumulative total.
-                position = portfolio.positions[-1]
-                standing = sum((Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0))
-                bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
-                signer.place_gtd_bracket(position, exit_price=bracket.exit_price,
-                                         expiry=bracket.expiry)
-            if fill_sink is not None:
-                # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded position.
-                # fill_sink=None (the default) => no fills row => byte-for-byte today's behavior.
-                fill_sink(intent, decision, portfolio.positions[-1])
+        guard = nullcontext()
+        if decision.verdict == "ACCEPT" and pipeline is not None:
+            guard = pipeline.forecast_ledger.signing_guard(intent.condition_id)
+        try:
+            with guard:
+                store.record_decision(intent.intent_id, decision)
+                if decision.verdict == "ACCEPT":
+                    signer.place(intent, decision)
+                    portfolio = _fold(portfolio, trade_intent, decision)
+                    if gtd_for is not None:
+                        # Pre-stage the protective GTD exit for the just-folded position (the
+                        # passive backstop), enforcing caps.gtd_bracket_aggregate via the
+                        # derivation. The folded position is the last one. NOTE (shadow
+                        # limitation): standing sums the append-only gtd_exits, which is never
+                        # decremented on exit/flatten -- it's CUMULATIVE, not currently-standing,
+                        # so over a long shadow run it can over-approximate and fail-CLOSED (refuse
+                        # a legitimate new bracket). Safe (never over-stages); the live POL-4
+                        # signer must track currently-STANDING exits, not the cumulative total.
+                        position = portfolio.positions[-1]
+                        standing = sum(
+                            (Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0)
+                        )
+                        bracket = gtd_for(
+                            decision, position, caps=caps, standing_exit_total=standing
+                        )
+                        signer.place_gtd_bracket(
+                            position, exit_price=bracket.exit_price, expiry=bracket.expiry
+                        )
+                    if fill_sink is not None:
+                        # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded
+                        # position. fill_sink=None (the default) => no fills row => byte-for-byte
+                        # today's behavior.
+                        fill_sink(intent, decision, portfolio.positions[-1])
+        except ConditionAlreadyTerminal:
+            # A terminal receipt won after the estimate was logged but before the final signing
+            # fence. The signing guard raises before the intent decision or any order side effect.
+            decision = Decision("REJECT", None, None, REASON_MARKET_RESOLVED)
+            store.record_decision(intent.intent_id, decision)
     return portfolio
 
 

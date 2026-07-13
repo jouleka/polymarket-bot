@@ -534,6 +534,35 @@ def test_ers_terminal_race_never_writes_forecast_or_reaches_signing(tmp_path, mo
         assert signer.placed == [] and final.positions == ()
 
 
+def test_ers_post_forecast_terminal_race_cannot_reach_signing(tmp_path, monkeypatch):
+    calib = _FakeCalibGate(k=Decimal("1"), clamp_to=Decimal("0.90"))
+    pipe, ledger, _clog = _pipeline(tmp_path, monkeypatch, calib=calib)
+
+    def resolve_during_calibration(category):
+        ledger._conn.execute(
+            "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+            "VALUES (?, ?, ?)",
+            ("m1", "racing-terminal", b"terminal"),
+        )
+        ledger._conn.commit()
+        return Decimal("1")
+
+    calib.k_for = resolve_during_calibration
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert ledger.get("i1") is not None  # the race deliberately wins after this commit
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "market_resolved"
+        assert signer.placed == [] and final.positions == ()
+
+
 def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):
     meta = _RecordingMeta(raises=MarketMetadataUnavailable("missing Gamma metadata"))
     pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
