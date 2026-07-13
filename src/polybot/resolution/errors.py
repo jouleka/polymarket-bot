@@ -19,3 +19,7 @@ class SettlementConflict(ResolutionError):
 
 class IntegrityHalted(ResolutionError):
     """The central resolution store has persistently halted on a contradiction."""
+
+
+class RecoveryRequired(ResolutionError):
+    """Pending terminal delivery is fenced until restart recovery completes."""

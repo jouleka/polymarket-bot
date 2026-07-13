@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from polybot.core.clock import MonotonicStamper
-from polybot.resolution.errors import IntegrityHalted, SettlementConflict
+from polybot.resolution.errors import IntegrityHalted, RecoveryRequired, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -180,3 +180,27 @@ def test_integrity_halt_persists_and_blocks_mutators(tmp_path):
         with pytest.raises(IntegrityHalted, match="first immutable contradiction"):
             reopened.require_healthy()
         assert reopened.pending_outbox(10)[0].sequence == 1
+
+
+def test_reopened_pending_outbox_requires_complete_recovery(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    first = _terminal("78")
+    second = _terminal("79")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        assert store.recovery_required is False
+        store.accept_terminal(first)
+        store.accept_terminal(second)
+        assert store.recovery_required is False
+        assert store.acknowledge(1, first.terminal_id, "FORECAST") is True
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        assert reopened.recovery_required is True
+        assert reopened.pending_terminals() == (first, second)
+        with pytest.raises(RecoveryRequired, match="recovery"):
+            reopened.acknowledge(2, first.terminal_id, "MAKER")
+        with pytest.raises(RecoveryRequired, match="exact"):
+            reopened._complete_recovery((second.terminal_id, first.terminal_id))
+        assert reopened.recovery_required is True
+        reopened._complete_recovery((first.terminal_id, second.terminal_id))
+        assert reopened.recovery_required is False
+        assert reopened.acknowledge(2, first.terminal_id, "MAKER") is True
