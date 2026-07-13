@@ -13,7 +13,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
-from polybot.resolution.store import ResolutionAssessment, ResolutionStore
+from polybot.resolution.store import OutboxRecord, ResolutionAssessment, ResolutionStore
 
 
 def _subject(condition_byte, *, event_id="event-1"):
@@ -124,3 +124,32 @@ def test_store_preserves_first_terminal_bytes(tmp_path):
         assert store._conn.execute(
             "SELECT COUNT(*) FROM resolution_outbox"
         ).fetchone()[0] == 3
+
+
+def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
+    first = _terminal("74")
+    second = _terminal("75")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        store.accept_terminal(first)
+        store.accept_terminal(second)
+        pending = store.pending_outbox(4)
+        assert all(isinstance(record, OutboxRecord) for record in pending)
+        assert [(record.sequence, record.terminal.terminal_id, record.role)
+                for record in pending] == [
+            (1, first.terminal_id, "FORECAST"),
+            (2, first.terminal_id, "MAKER"),
+            (3, first.terminal_id, "SHADOW"),
+            (4, second.terminal_id, "FORECAST"),
+        ]
+        with pytest.raises(ValueError, match="limit"):
+            store.pending_outbox(0)
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.acknowledge(1, second.terminal_id, "FORECAST")
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.acknowledge(1, first.terminal_id, "MAKER")
+        assert store.acknowledge(1, first.terminal_id, "FORECAST") is True
+        assert store.acknowledge(1, first.terminal_id, "FORECAST") is False
+        assert [(record.sequence, record.role) for record in store.pending_outbox(10)] == [
+            (2, "MAKER"), (3, "SHADOW"), (4, "FORECAST"),
+            (5, "MAKER"), (6, "SHADOW"),
+        ]
