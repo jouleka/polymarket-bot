@@ -2,7 +2,7 @@
 
 Append-only, point-in-time SQLite store of the harness's SIMULATED maker trades and their
 eventual resolutions -- the substrate ``pnl.window_net`` and the evidence evaluator window
-over. Mirrors the S8 ``MakerLedger`` exactly (WAL + synchronous=NORMAL, stamper timestamps,
+over. Mirrors the S8 ``MakerLedger`` exactly (WAL + synchronous=FULL, stamper timestamps,
 Decimals stored as exact strings, INSERT OR IGNORE idempotency) so a shadow trade is
 recorded with the same no-backfill honesty as a real maker fill: garbage must never enter,
 and DISPUTED/VOID rows are kept but excluded from the honest net sample downstream
@@ -70,7 +70,7 @@ class ShadowLedger:
         self._stamper = stamper
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS shadow_trades (

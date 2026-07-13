@@ -2,7 +2,7 @@
 
 Append-only, point-in-time SQLite store of the maker's OWN fills and their eventual
 settlements -- the substrate MakerTracker derives every net-PnL leg from. Mirrors the
-calibration ForecastLedger exactly (WAL + synchronous=NORMAL, stamper timestamps,
+calibration ForecastLedger exactly (WAL + synchronous=FULL, stamper timestamps,
 Decimals stored as exact strings). Like that ledger it cannot be backfilled, so garbage
 must never enter it; DISPUTED/VOID rows are kept but excluded from the honest net
 sample by the tracker (whale-flip immunity).
@@ -67,7 +67,7 @@ class MakerLedger:
         self._stamper = stamper
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS maker_fills (

@@ -1,5 +1,6 @@
 """Cross-ledger POL-15 target authority fences."""
 
+import sqlite3
 from decimal import Decimal
 
 import pytest
@@ -29,6 +30,44 @@ def _terminal(condition_id):
         audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
         provider_ids=("archive-a", "archive-b"),
     )
+
+
+@pytest.mark.parametrize(("ledger_type", "ddl"), [
+    (ForecastLedger, """
+        CREATE TABLE forecasts (
+            forecast_id TEXT PRIMARY KEY, category TEXT NOT NULL, condition_id TEXT NOT NULL,
+            p TEXT NOT NULL, market_mid TEXT NOT NULL, created_at INTEGER NOT NULL,
+            resolution_status TEXT, resolved_at INTEGER
+        )
+    """),
+    (MakerLedger, """
+        CREATE TABLE maker_fills (
+            fill_id TEXT PRIMARY KEY, token_id TEXT NOT NULL, condition_id TEXT NOT NULL,
+            category TEXT NOT NULL, side TEXT NOT NULL, shares TEXT NOT NULL,
+            price_exec TEXT NOT NULL, fill_mid TEXT NOT NULL, reward_accrued TEXT NOT NULL,
+            created_at INTEGER NOT NULL, status TEXT, resolution_value TEXT, settled_at INTEGER
+        )
+    """),
+    (ShadowLedger, """
+        CREATE TABLE shadow_trades (
+            trade_id TEXT PRIMARY KEY, token_id TEXT NOT NULL, condition_id TEXT NOT NULL,
+            category TEXT NOT NULL, side TEXT NOT NULL, shares TEXT NOT NULL,
+            fill_price TEXT NOT NULL, fill_mid TEXT NOT NULL, reward_accrued TEXT NOT NULL,
+            created_at INTEGER NOT NULL, status TEXT, resolution_value TEXT, settled_at INTEGER
+        )
+    """),
+])
+def test_target_ledgers_use_full_synchronous_durability(tmp_path, ledger_type, ddl):
+    for generation in ("fresh", "migrated"):
+        path = str(tmp_path / f"{ledger_type.__name__}-{generation}.db")
+        if generation == "migrated":
+            conn = sqlite3.connect(path)
+            conn.execute(ddl)
+            conn.commit()
+            conn.close()
+        with ledger_type(path, MonotonicStamper()) as ledger:
+            assert ledger._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+            assert ledger._conn.execute("PRAGMA synchronous").fetchone()[0] == 2
 
 
 def test_legacy_settlement_mutators_reject_canonical_pending_rows(tmp_path):
