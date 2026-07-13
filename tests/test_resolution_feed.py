@@ -196,3 +196,36 @@ def test_poll_accepts_matching_clear_terminal(tmp_path):
         assert [record.role for record in store.pending_outbox(10)] == [
             "FORECAST", "MAKER", "SHADOW"
         ]
+
+
+@pytest.mark.parametrize("classified", [DisputeState.DISPUTED, DisputeState.MANUAL])
+def test_poll_accepts_classified_excluded_terminal(tmp_path, classified):
+    subject = _subject("87" if classified is DisputeState.DISPUTED else "89")
+    block_hash = "0x" + "99" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((3, 1), 4),
+        dispute=classified, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        ),
+    )
+    providers = (
+        _Provider("archive-a", head=20, block_hash=block_hash, observation=observation),
+        _Provider(
+            "archive-b", head=20, block_hash=block_hash,
+            observation=replace(observation, provider_id="archive-b"),
+        ),
+    )
+    with ResolutionStore(str(tmp_path / f"{classified.value}.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, providers).poll((subject,))
+        terminal = store.terminal_for(subject.condition_id)
+        assert result.disposition is PollDisposition.ACCEPTED
+        assert result.dispute is classified and result.terminal_id == terminal.terminal_id
+        assert terminal.dispute is classified
+        assert [record.role for record in store.pending_outbox(10)] == [
+            "FORECAST", "MAKER", "SHADOW"
+        ]
