@@ -258,6 +258,15 @@ def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
         ]
 
 
+def test_outbox_record_validates_its_public_identity():
+    record = OutboxRecord(1, _terminal("7d"), "FORECAST")
+    for change in (
+        {"sequence": 0}, {"sequence": True}, {"terminal": object()}, {"role": "INVALID"},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            replace(record, **change)
+
+
 def test_integrity_halt_persists_and_blocks_mutators(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminal = _terminal("76")
