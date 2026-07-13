@@ -12,7 +12,7 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
-from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.models import DisputeState, ResolutionSubject, TerminalResolution
 from polybot.resolution.errors import ConditionAlreadyTerminal
 
 # Honest win/loss vs the two non-honest outcomes excluded from Brier/k: a whale-captured UMA
@@ -173,6 +173,54 @@ class ForecastLedger:
         self._conn.commit()
         if cur.rowcount == 0:
             raise KeyError(f"no forecast {forecast_id!r} to resolve")
+
+    def apply_terminal(self, terminal):
+        """Apply one CLEAR terminal and its immutable receipt in a single transaction."""
+        if not isinstance(terminal, TerminalResolution):
+            raise TypeError("terminal must be a TerminalResolution")
+        if terminal.dispute is not DisputeState.CLEAR:
+            raise ValueError("forecast terminal must use the CLEAR path")
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(
+                "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+                "VALUES (?, ?, ?)",
+                (
+                    terminal.subject.condition_id,
+                    terminal.terminal_id,
+                    terminal.canonical_bytes,
+                ),
+            )
+            rows = self._conn.execute(
+                "SELECT forecast_id, outcome_slot FROM forecasts "
+                "WHERE condition_id=? AND terminal_id IS NULL",
+                (terminal.subject.condition_id,),
+            ).fetchall()
+            for forecast_id, slot in rows:
+                numerator = terminal.payout.numerators[slot]
+                denominator = terminal.payout.denominator
+                if numerator == denominator:
+                    status = "WON"
+                elif numerator == 0:
+                    status = "LOST"
+                else:
+                    status = "VOID"
+                self._conn.execute(
+                    "UPDATE forecasts SET resolution_status=?, resolved_at=?, "
+                    "resolution_value=?, resolution_numerator=?, resolution_denominator=?, "
+                    "terminal_id=? WHERE forecast_id=?",
+                    (
+                        status, self._stamper.stamp(), str(terminal.payout.decimal_for(slot)),
+                        str(numerator), str(denominator), terminal.terminal_id, forecast_id,
+                    ),
+                )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        return len(rows)
 
     def resolved(self, category=None):
         sql = f"SELECT {_COLUMNS} FROM forecasts WHERE resolution_status IS NOT NULL"
