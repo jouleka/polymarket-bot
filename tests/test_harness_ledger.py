@@ -61,6 +61,38 @@ def test_shadow_v0_database_migrates_to_nullable_identity(tmp_path):
         )]
 
 
+def test_shadow_canonical_identity_is_all_or_none_and_slot_matches_token(tmp_path):
+    condition_id = "0x" + "ab" * 32
+    siblings = ("11", "22")
+    base = {
+        "token_id": "22", "condition_id": condition_id, "category": "politics",
+        "side": "BUY", "shares": Decimal("10"), "fill_price": Decimal("0.48"),
+        "fill_mid": Decimal("0.50"), "reward_accrued": Decimal("0.25"),
+    }
+    with _ledger(str(tmp_path / "s.db")) as ledger:
+        assert ledger.record_trade(
+            "canonical", **base, event_id="e1", outcome_slot=1,
+            sibling_token_ids=siblings,
+        ) is True
+        record = ledger.all()[0]
+        assert (
+            record.event_id, record.outcome_slot, record.sibling_token_ids
+        ) == ("e1", 1, siblings)
+        assert ledger._conn.execute(
+            "SELECT sibling_token_ids FROM shadow_trades WHERE trade_id='canonical'"
+        ).fetchone()[0] == '["11","22"]'
+
+        for trade_id, identity in (
+            ("mixed", {"event_id": "e1", "outcome_slot": 1}),
+            ("wrong-slot", {
+                "event_id": "e1", "outcome_slot": 0, "sibling_token_ids": siblings,
+            }),
+        ):
+            with pytest.raises(ValueError, match="identity|slot|token"):
+                ledger.record_trade(trade_id, **base, **identity)
+            assert [row.trade_id for row in ledger.all()] == ["canonical"]
+
+
 def test_record_trade_round_trips_every_field_via_all(tmp_path):
     with _ledger(str(tmp_path / "s.db")) as l:
         assert _trade(l, "d1") is True
