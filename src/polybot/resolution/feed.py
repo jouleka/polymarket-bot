@@ -17,6 +17,7 @@ from polybot.resolution.store import ResolutionAssessment, ResolutionStore
 
 
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
+_TERMINAL_ID = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class PollDisposition(str, Enum):
@@ -34,6 +35,35 @@ class PollResult:
     dispute: DisputeState | None
     terminal_id: str | None
     detail: str
+
+    def __post_init__(self):
+        if (not isinstance(self.condition_id, str)
+                or _BYTES32.fullmatch(self.condition_id) is None):
+            raise ValueError("poll condition_id must be a canonical lowercase bytes32")
+        if not isinstance(self.disposition, PollDisposition):
+            raise TypeError("poll disposition must be a PollDisposition")
+        if self.dispute is not None and not isinstance(self.dispute, DisputeState):
+            raise TypeError("poll dispute must be a DisputeState or None")
+        if (self.terminal_id is not None
+                and (not isinstance(self.terminal_id, str)
+                     or _TERMINAL_ID.fullmatch(self.terminal_id) is None)):
+            raise ValueError("poll terminal_id must be a lowercase SHA-256 hex string")
+        if (not isinstance(self.detail, str) or not self.detail
+                or self.detail != self.detail.strip()):
+            raise ValueError("poll detail must be a non-empty exact string")
+
+        if self.disposition is PollDisposition.UNAVAILABLE:
+            if self.dispute is not None or self.terminal_id is not None:
+                raise ValueError("unavailable results cannot carry authority")
+        elif self.disposition in (
+                PollDisposition.UNRESOLVED, PollDisposition.UNKNOWN):
+            if (self.dispute is not DisputeState.UNKNOWN
+                    or self.terminal_id is not None):
+                raise ValueError("non-terminal results require UNKNOWN without terminal")
+        elif (self.dispute not in (
+                DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL)
+              or self.terminal_id is None):
+            raise ValueError("terminal results require classified terminal authority")
 
 
 class ResolutionFeed:
