@@ -175,6 +175,13 @@ class ResolutionFeed:
             raise TypeError("terminal must be a TerminalResolution")
         self._store.require_healthy()
         try:
+            provider_ids = tuple(sorted(
+                provider.provider_id for provider in self._providers
+            ))
+            if provider_ids != terminal.provider_ids:
+                raise SettlementConflict(
+                    "terminal provider authority does not match configured providers"
+                )
             for provider in self._providers:
                 provider.verify_terminal(terminal)
         except SettlementConflict as exc:
