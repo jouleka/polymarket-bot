@@ -7,6 +7,7 @@ EventStore it cannot be backfilled. The forecast SOURCE (the ERS on a real propo
 wired in S6; here the ledger is built + tested standalone.
 """
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
@@ -16,7 +17,20 @@ from decimal import Decimal
 VALID_STATUSES = ("WON", "LOST", "DISPUTED_LOST", "VOID")
 
 _COLUMNS = ("forecast_id, category, condition_id, p, market_mid, created_at, "
-            "resolution_status, resolved_at")
+            "resolution_status, resolved_at, event_id, token_id, outcome_slot, "
+            "sibling_token_ids, resolution_value, resolution_numerator, "
+            "resolution_denominator, terminal_id")
+
+_POL15_COLUMNS = (
+    ("event_id", "TEXT"),
+    ("token_id", "TEXT"),
+    ("outcome_slot", "INTEGER"),
+    ("sibling_token_ids", "TEXT"),
+    ("resolution_value", "TEXT"),
+    ("resolution_numerator", "TEXT"),
+    ("resolution_denominator", "TEXT"),
+    ("terminal_id", "TEXT"),
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +43,14 @@ class ForecastRecord:
     created_at: int
     resolution_status: str | None = None
     resolved_at: int | None = None
+    event_id: str | None = None
+    token_id: str | None = None
+    outcome_slot: int | None = None
+    sibling_token_ids: tuple[str, str] | None = None
+    resolution_value: Decimal | None = None
+    resolution_numerator: int | None = None
+    resolution_denominator: int | None = None
+    terminal_id: str | None = None
 
 
 class ForecastLedger:
@@ -47,10 +69,24 @@ class ForecastLedger:
                 market_mid        TEXT    NOT NULL,
                 created_at        INTEGER NOT NULL,
                 resolution_status TEXT,
-                resolved_at       INTEGER
+                resolved_at       INTEGER,
+                event_id          TEXT,
+                token_id          TEXT,
+                outcome_slot      INTEGER,
+                sibling_token_ids TEXT,
+                resolution_value  TEXT,
+                resolution_numerator TEXT,
+                resolution_denominator TEXT,
+                terminal_id       TEXT
             )
             """
         )
+        existing = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(forecasts)").fetchall()
+        }
+        for name, sql_type in _POL15_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE forecasts ADD COLUMN {name} {sql_type}")
         self._conn.commit()
 
     def record_forecast(self, forecast_id, *, category, condition_id, p, market_mid):
@@ -117,4 +153,9 @@ class ForecastLedger:
         return ForecastRecord(
             forecast_id=r[0], category=r[1], condition_id=r[2], p=Decimal(r[3]),
             market_mid=Decimal(r[4]), created_at=r[5], resolution_status=r[6], resolved_at=r[7],
+            event_id=r[8], token_id=r[9], outcome_slot=r[10],
+            sibling_token_ids=None if r[11] is None else tuple(json.loads(r[11])),
+            resolution_value=None if r[12] is None else Decimal(r[12]),
+            resolution_numerator=None if r[13] is None else int(r[13]),
+            resolution_denominator=None if r[14] is None else int(r[14]), terminal_id=r[15],
         )
