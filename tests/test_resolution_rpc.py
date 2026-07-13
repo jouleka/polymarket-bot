@@ -51,6 +51,25 @@ class _Rpc:
         return self._results.pop(0)
 
 
+class _TransitionRpc:
+    def __init__(self, preparation_block, resolution_block):
+        self.preparation_block = preparation_block
+        self.resolution_block = resolution_block
+        self.calls = []
+
+    def call(self, method, params):
+        self.calls.append((method, params))
+        selector = params[0]["data"][:10]
+        block_number = int(params[1], 16)
+        if selector == "0xd42dc0c2":
+            value = 2 if block_number >= self.preparation_block else 0
+        elif selector == "0xdd34de67":
+            value = 4 if block_number >= self.resolution_block else 0
+        else:
+            raise AssertionError(f"unexpected transition selector {selector}")
+        return "0x" + f"{value:064x}"
+
+
 def test_rpc_correlates_monotonic_request_id():
     http = _HttpClient(
         {"jsonrpc": "2.0", "id": 1, "result": "0x89"},
@@ -264,3 +283,38 @@ def test_provider_derives_pusd_positions_in_slot_order():
         ))
         with pytest.raises(ResolutionUnavailable, match="token"):
             mismatched._derive_positions(subject, 99)
+
+
+def test_provider_binary_searches_exact_preparation_and_resolution_transitions():
+    condition_id = "0x" + "14" * 32
+    preparation_block = 30_123_456
+    resolution_block = 49_876_543
+    acceptance_block = 50_000_000
+    rpc = _TransitionRpc(preparation_block, resolution_block)
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+
+    assert provider._transition_blocks(condition_id, acceptance_block) == (
+        preparation_block, resolution_block
+    )
+    slot_blocks = [
+        int(params[1], 16) for _, params in rpc.calls
+        if params[0]["data"].startswith("0xd42dc0c2")
+    ]
+    denominator_blocks = [
+        int(params[1], 16) for _, params in rpc.calls
+        if params[0]["data"].startswith("0xdd34de67")
+    ]
+    assert min(slot_blocks + denominator_blocks) >= CTF_DEPLOYMENT_BLOCK
+    assert len(slot_blocks) <= 28
+    assert len(denominator_blocks) <= 28
+
+    too_early_rpc = _TransitionRpc(preparation_block, resolution_block)
+    too_early = JsonRpcResolutionProvider("archive-a", too_early_rpc)
+    with pytest.raises(ResolutionUnavailable, match="deployment"):
+        too_early._transition_blocks(condition_id, CTF_DEPLOYMENT_BLOCK - 1)
+    assert too_early_rpc.calls == []
+
+    reversed_rpc = _TransitionRpc(49_900_000, 49_800_000)
+    reversed_provider = JsonRpcResolutionProvider("archive-a", reversed_rpc)
+    with pytest.raises(ResolutionUnavailable, match="transition"):
+        reversed_provider._transition_blocks(condition_id, acceptance_block)
