@@ -168,10 +168,11 @@ def test_target_decoders_require_exact_canonical_sibling_array(
 ])
 @pytest.mark.parametrize("terminal_case", [
     "binary", "fractional", "disputed", "manual", "fractional_disputed",
-    "fractional_manual",
+    "fractional_manual", "half", "half_disputed", "half_manual",
 ])
+@pytest.mark.parametrize("outcome_slot", [0, 1])
 def test_target_terminal_replay_validates_settled_rows(
-        tmp_path, kind, corruption, terminal_case):
+        tmp_path, kind, corruption, terminal_case, outcome_slot):
     condition_id = "0x" + "52" * 32
     if terminal_case.startswith("fractional"):
         dispute = {
@@ -180,6 +181,14 @@ def test_target_terminal_replay_validates_settled_rows(
         }.get(terminal_case, DisputeState.CLEAR)
         terminal = _terminal(
             condition_id, payout=PayoutVector((1, 2), 3), dispute=dispute
+        )
+    elif terminal_case.startswith("half"):
+        dispute = {
+            "half_disputed": DisputeState.DISPUTED,
+            "half_manual": DisputeState.MANUAL,
+        }.get(terminal_case, DisputeState.CLEAR)
+        terminal = _terminal(
+            condition_id, payout=PayoutVector((1, 1), 2), dispute=dispute
         )
     elif terminal_case == "disputed":
         terminal = _terminal(condition_id, dispute=DisputeState.DISPUTED)
@@ -190,36 +199,39 @@ def test_target_terminal_replay_validates_settled_rows(
     stamper = MonotonicStamper()
     if kind == "forecast":
         ledger = ForecastLedger(
-            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+            str(tmp_path / f"{kind}-{terminal_case}-{outcome_slot}-{corruption}.db"), stamper
         )
         ledger.record_forecast(
             "row", category="politics", condition_id=condition_id,
             p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
-            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+            token_id=terminal.subject.token_ids[outcome_slot], outcome_slot=outcome_slot,
+            sibling_token_ids=terminal.subject.token_ids,
         )
         table, key = "forecasts", "forecast_id"
         status_column, settled_column = "resolution_status", "resolved_at"
     elif kind == "maker":
         ledger = MakerLedger(
-            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+            str(tmp_path / f"{kind}-{terminal_case}-{outcome_slot}-{corruption}.db"), stamper
         )
         ledger.record_fill(
-            "row", token_id="101", condition_id=condition_id, category="politics",
+            "row", token_id=terminal.subject.token_ids[outcome_slot],
+            condition_id=condition_id, category="politics",
             side="BUY", shares=Decimal("10"), price_exec=Decimal("0.4"),
             fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
-            outcome_slot=0, sibling_token_ids=("101", "202"),
+            outcome_slot=outcome_slot, sibling_token_ids=terminal.subject.token_ids,
         )
         table, key = "maker_fills", "fill_id"
         status_column, settled_column = "status", "settled_at"
     else:
         ledger = ShadowLedger(
-            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+            str(tmp_path / f"{kind}-{terminal_case}-{outcome_slot}-{corruption}.db"), stamper
         )
         ledger.record_trade(
-            "row", token_id="101", condition_id=condition_id, category="politics",
+            "row", token_id=terminal.subject.token_ids[outcome_slot],
+            condition_id=condition_id, category="politics",
             side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
             fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
-            outcome_slot=0, sibling_token_ids=("101", "202"),
+            outcome_slot=outcome_slot, sibling_token_ids=terminal.subject.token_ids,
         )
         table, key = "shadow_trades", "trade_id"
         status_column, settled_column = "status", "settled_at"
@@ -227,11 +239,11 @@ def test_target_terminal_replay_validates_settled_rows(
         assert ledger.apply_terminal(terminal) == 1
         if corruption == "resolution_value":
             ledger._conn.execute(
-                f"UPDATE {table} SET resolution_value='0' WHERE {key}='row'"
+                f"UPDATE {table} SET resolution_value='9' WHERE {key}='row'"
             )
         elif corruption == "status":
             ledger._conn.execute(
-                f"UPDATE {table} SET {status_column}='LOST' WHERE {key}='row'"
+                f"UPDATE {table} SET {status_column}='BROKEN' WHERE {key}='row'"
             )
         elif corruption in ("resolution_numerator", "resolution_denominator"):
             ledger._conn.execute(
