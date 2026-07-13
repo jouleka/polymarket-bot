@@ -217,6 +217,43 @@ class JsonRpcResolutionProvider:
             raise ResolutionUnavailable("CTF payout vector is malformed") from exc
         return LifecyclePhase.FINALIZED, payout
 
+    def _transition_blocks(self, condition_id, acceptance_block):
+        if (isinstance(acceptance_block, bool)
+                or not isinstance(acceptance_block, int)
+                or acceptance_block < CTF_DEPLOYMENT_BLOCK):
+            raise ResolutionUnavailable(
+                "acceptance block precedes the frozen CTF deployment"
+            )
+        preparation = self._first_positive_block(
+            lambda block: self._outcome_slot_count(condition_id, block),
+            acceptance_block,
+            "preparation",
+        )
+        resolution = self._first_positive_block(
+            lambda block: self._payout_denominator(condition_id, block),
+            acceptance_block,
+            "resolution",
+        )
+        if preparation > resolution:
+            raise ResolutionUnavailable(
+                "CTF preparation/resolution transition order is invalid"
+            )
+        return preparation, resolution
+
+    @staticmethod
+    def _first_positive_block(reader, upper_block, label):
+        if reader(upper_block) <= 0:
+            raise ResolutionUnavailable(f"CTF {label} transition is unavailable")
+        lower = CTF_DEPLOYMENT_BLOCK
+        upper = upper_block
+        while lower < upper:
+            middle = (lower + upper) // 2
+            if reader(middle) > 0:
+                upper = middle
+            else:
+                lower = middle + 1
+        return lower
+
     def _payout_denominator(self, condition_id, block_number):
         data = "0xdd34de67" + _bytes32_word(condition_id)
         return int.from_bytes(self._ctf_static_word(data, block_number))
