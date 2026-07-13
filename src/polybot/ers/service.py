@@ -200,9 +200,13 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         metadata = pipeline.market_meta.metadata_for(intent)
     except MarketMetadataUnavailable:
         return Decision("REJECT", None, None, REASON_MARKET_META_UNAVAILABLE), trade_intent
+    subject_for = getattr(pipeline.market_meta, "resolution_subject_for", None)
+    resolution_subject = subject_for(intent) if callable(subject_for) else None
     category = metadata.category
     question_text = metadata.question_text
     seconds = metadata.seconds_to_resolution
+    if resolution_subject is not None and resolution_subject.category != category:
+        raise ValueError("market metadata and resolution subject categories disagree")
 
     # 6. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
     #    p_base/p_micro/p_flow are ERS-derived; at MVP p_base = mid (no base-rate model wired here
@@ -233,7 +237,13 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         w_news_effective=fusion_result.w_news_effective, corroborated=truth.corroborated, mid=mid)
     pipeline.forecast_ledger.record_forecast(
         forecast_id, category=category, condition_id=intent.condition_id,
-        p=p_clamped, market_mid=mid)
+        p=p_clamped, market_mid=mid,
+        event_id=None if resolution_subject is None else resolution_subject.event_id,
+        token_id=None if resolution_subject is None else resolution_subject.token_id,
+        outcome_slot=None if resolution_subject is None else resolution_subject.outcome_slot,
+        sibling_token_ids=(
+            None if resolution_subject is None else resolution_subject.sibling_token_ids
+        ))
 
     # 9. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
     k = pipeline.calib_gate.k_for(category)
