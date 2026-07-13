@@ -385,6 +385,26 @@ def test_verify_terminal_halts_on_any_original_authority_change(tmp_path, change
             store.require_healthy()
 
 
+@pytest.mark.parametrize("entrypoint", ["poll", "recovery"])
+def test_terminal_verification_requires_original_provider_pair(tmp_path, entrypoint):
+    path = str(tmp_path / f"{entrypoint}.db")
+    terminal = _terminal("93" if entrypoint == "poll" else "94")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        feed = ResolutionFeed(
+            reopened, (_Provider("archive-c"), _Provider("archive-d"))
+        )
+        with pytest.raises(SettlementConflict, match="provider"):
+            if entrypoint == "poll":
+                feed.poll((terminal.subject,))
+            else:
+                feed.recover_pending()
+        with pytest.raises(IntegrityHalted, match="provider"):
+            reopened.require_healthy()
+
+
 def test_recover_pending_verifies_all_before_clearing_barrier(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminals = (_terminal("8e"), _terminal("8f"))
