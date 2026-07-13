@@ -46,6 +46,24 @@ class DisputeState(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+_DISPUTE_PRECEDENCE = {
+    DisputeState.CLEAR: 0,
+    DisputeState.UNKNOWN: 1,
+    DisputeState.DISPUTED: 2,
+    DisputeState.MANUAL: 3,
+}
+
+
+def fold_dispute(states):
+    if not isinstance(states, tuple):
+        raise TypeError("dispute states must be a tuple")
+    if not states:
+        raise ValueError("cannot fold an empty dispute-state tuple")
+    if any(not isinstance(state, DisputeState) for state in states):
+        raise TypeError("every path value must be a DisputeState")
+    return max(states, key=_DISPUTE_PRECEDENCE.__getitem__)
+
+
 @dataclass(frozen=True)
 class ResolutionSubject:
     """Gamma candidate identity whose token ordering must still be proved on chain."""
