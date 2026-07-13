@@ -128,6 +128,7 @@ class ResolutionStore:
             """
         )
         self._conn.commit()
+        self._validate_outbox_integrity()
         self._recovery_required = self._conn.execute(
             "SELECT 1 FROM resolution_outbox WHERE state='PENDING' LIMIT 1"
         ).fetchone() is not None
@@ -241,6 +242,7 @@ class ResolutionStore:
                 if (existing[0] != terminal.terminal_id
                         or bytes(existing[1]) != terminal.canonical_bytes):
                     raise SettlementConflict("stored terminal contradicts new terminal bytes")
+                self._validate_outbox_integrity(terminal.terminal_id)
                 self._conn.commit()
                 return False
             self._conn.execute(
@@ -280,6 +282,7 @@ class ResolutionStore:
         return _decode_terminal(row[0], row[1])
 
     def pending_terminals(self):
+        self._validate_outbox_integrity()
         rows = self._pending_terminal_rows()
         return tuple(_decode_terminal(terminal_id, payload) for terminal_id, payload in rows)
 
@@ -298,6 +301,7 @@ class ResolutionStore:
     def pending_outbox(self, limit):
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("outbox limit must be a positive integer")
+        self._validate_outbox_integrity()
         rows = self._conn.execute(
             """
             SELECT o.sequence, o.role, t.terminal_id, t.payload
@@ -326,6 +330,7 @@ class ResolutionStore:
             self._require_healthy_in_transaction()
             if self._recovery_required:
                 raise RecoveryRequired("resolution outbox requires restart recovery")
+            self._validate_outbox_integrity()
             row = self._conn.execute(
                 "SELECT terminal_id, role, state FROM resolution_outbox WHERE sequence=?",
                 (sequence,),
@@ -396,6 +401,32 @@ class ResolutionStore:
 
     def _before_terminal_commit(self):
         """Failure-injection seam for the terminal/outbox transaction."""
+
+    def _validate_outbox_integrity(self, terminal_id=None):
+        parameters = () if terminal_id is None else (terminal_id,)
+        where = "" if terminal_id is None else " WHERE terminal_id=?"
+        terminals = self._conn.execute(
+            "SELECT terminal_id FROM resolution_terminals" + where, parameters
+        ).fetchall()
+        for (stored_terminal_id,) in terminals:
+            rows = self._conn.execute(
+                "SELECT role, state, delivered_at FROM resolution_outbox "
+                "WHERE terminal_id=? ORDER BY sequence",
+                (stored_terminal_id,),
+            ).fetchall()
+            if tuple(row[0] for row in rows) != _ROLES:
+                raise SettlementConflict("terminal outbox roles are missing or out of order")
+            for _, state, delivered_at in rows:
+                if ((state == "PENDING" and delivered_at is not None)
+                        or (state == "DELIVERED" and delivered_at is None)
+                        or state not in ("PENDING", "DELIVERED")):
+                    raise SettlementConflict("terminal outbox state is not canonical")
+        orphan = self._conn.execute(
+            "SELECT 1 FROM resolution_outbox AS o LEFT JOIN resolution_terminals AS t "
+            "USING (terminal_id) WHERE t.terminal_id IS NULL LIMIT 1"
+        ).fetchone()
+        if orphan is not None:
+            raise SettlementConflict("outbox row has no terminal authority")
 
     def _ensure_subject(self, subject):
         token_json = json.dumps(

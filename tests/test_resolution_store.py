@@ -148,6 +148,32 @@ def test_store_preserves_first_terminal_bytes(tmp_path):
         ).fetchone()[0] == 3
 
 
+@pytest.mark.parametrize("corruption", ["missing_role", "invalid_state"])
+def test_store_rejects_structurally_corrupt_outbox(tmp_path, corruption):
+    path = str(tmp_path / f"{corruption}.db")
+    terminal = _terminal("7a")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        if corruption == "missing_role":
+            store._conn.execute(
+                "DELETE FROM resolution_outbox WHERE role='SHADOW'"
+            )
+        else:
+            store._conn.execute("PRAGMA ignore_check_constraints=ON")
+            store._conn.execute(
+                "UPDATE resolution_outbox SET state='BROKEN' WHERE role='SHADOW'"
+            )
+            store._conn.execute("PRAGMA ignore_check_constraints=OFF")
+        store._conn.commit()
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.accept_terminal(terminal)
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.pending_outbox(10)
+
+    with pytest.raises(SettlementConflict, match="outbox"):
+        ResolutionStore(path, MonotonicStamper())
+
+
 def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
     first = _terminal("74")
     second = _terminal("75")
