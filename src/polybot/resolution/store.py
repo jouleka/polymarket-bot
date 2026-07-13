@@ -204,11 +204,15 @@ class ResolutionStore:
             self._conn.execute("BEGIN IMMEDIATE")
             self._ensure_subject(terminal.subject)
             existing = self._conn.execute(
-                "SELECT 1 FROM resolution_terminals WHERE condition_id=?",
+                "SELECT terminal_id, payload FROM resolution_terminals WHERE condition_id=?",
                 (terminal.subject.condition_id,),
             ).fetchone()
             if existing is not None:
-                raise SettlementConflict("condition already has an immutable terminal")
+                if (existing[0] != terminal.terminal_id
+                        or bytes(existing[1]) != terminal.canonical_bytes):
+                    raise SettlementConflict("stored terminal contradicts new terminal bytes")
+                self._conn.commit()
+                return False
             self._conn.execute(
                 "INSERT INTO resolution_terminals "
                 "(condition_id, terminal_id, payload, accepted_at) VALUES (?, ?, ?, ?)",

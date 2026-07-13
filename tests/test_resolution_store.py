@@ -105,3 +105,22 @@ def test_terminal_atomically_creates_three_ordered_outbox_rows(tmp_path):
         assert store._conn.execute(
             "SELECT COUNT(*) FROM resolution_outbox"
         ).fetchone()[0] == 3
+
+
+def test_store_preserves_first_terminal_bytes(tmp_path):
+    terminal = _terminal("73")
+    changed = replace(
+        terminal, block_number=201, block_hash="0x" + "77" * 32
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        assert store.accept_terminal(terminal) is True
+        assert store.accept_terminal(terminal) is False
+        with pytest.raises(SettlementConflict, match="terminal"):
+            store.accept_terminal(changed)
+        assert store.terminal_for(terminal.subject.condition_id) == terminal
+        assert store._conn.execute(
+            "SELECT terminal_id, payload FROM resolution_terminals"
+        ).fetchall() == [(terminal.terminal_id, terminal.canonical_bytes)]
+        assert store._conn.execute(
+            "SELECT COUNT(*) FROM resolution_outbox"
+        ).fetchone()[0] == 3
