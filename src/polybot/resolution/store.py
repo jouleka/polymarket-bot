@@ -5,7 +5,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from polybot.resolution.errors import IntegrityHalted, SettlementConflict
+from polybot.resolution.errors import IntegrityHalted, RecoveryRequired, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -126,6 +126,13 @@ class ResolutionStore:
             """
         )
         self._conn.commit()
+        self._recovery_required = self._conn.execute(
+            "SELECT 1 FROM resolution_outbox WHERE state='PENDING' LIMIT 1"
+        ).fetchone() is not None
+
+    @property
+    def recovery_required(self):
+        return self._recovery_required
 
     def record_assessment(self, assessment):
         if not isinstance(assessment, ResolutionAssessment):
@@ -268,6 +275,22 @@ class ResolutionStore:
             return None
         return _decode_terminal(row[0], row[1])
 
+    def pending_terminals(self):
+        rows = self._pending_terminal_rows()
+        return tuple(_decode_terminal(terminal_id, payload) for terminal_id, payload in rows)
+
+    def _pending_terminal_rows(self):
+        return self._conn.execute(
+            """
+            SELECT t.terminal_id, t.payload
+            FROM resolution_terminals AS t
+            JOIN resolution_outbox AS o USING (terminal_id)
+            WHERE o.state='PENDING'
+            GROUP BY t.terminal_id, t.payload
+            ORDER BY MIN(o.sequence)
+            """
+        ).fetchall()
+
     def pending_outbox(self, limit):
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise ValueError("outbox limit must be a positive integer")
@@ -297,6 +320,8 @@ class ResolutionStore:
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             self._require_healthy_in_transaction()
+            if self._recovery_required:
+                raise RecoveryRequired("resolution outbox requires restart recovery")
             row = self._conn.execute(
                 "SELECT terminal_id, role, state FROM resolution_outbox WHERE sequence=?",
                 (sequence,),
@@ -345,7 +370,25 @@ class ResolutionStore:
             raise IntegrityHalted(f"resolution integrity halted: {row[0]}")
 
     def _complete_recovery(self, terminal_ids):
-        self.require_healthy()
+        if not isinstance(terminal_ids, tuple):
+            raise TypeError("recovered terminal IDs must be a tuple")
+        if any(not isinstance(value, str) or _TERMINAL_ID.fullmatch(value) is None
+               for value in terminal_ids):
+            raise ValueError("recovered terminal IDs must be lowercase SHA-256 hex strings")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._require_healthy_in_transaction()
+            current = tuple(row[0] for row in self._pending_terminal_rows())
+            if terminal_ids != current:
+                raise RecoveryRequired(
+                    "recovery requires the exact current pending terminal-ID tuple"
+                )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        self._recovery_required = False
 
     def _before_terminal_commit(self):
         """Failure-injection seam for the terminal/outbox transaction."""
