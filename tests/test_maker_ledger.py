@@ -120,6 +120,25 @@ def test_maker_zero_row_receipt_blocks_later_creation(tmp_path):
         assert ledger.all() == []
 
 
+def test_maker_receipt_replay_is_idempotent_and_payload_conflict_fails(tmp_path):
+    condition_id = "0x" + "26" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "replay.db")) as ledger:
+        assert ledger.apply_terminal(terminal) == 0
+        assert ledger.apply_terminal(terminal) == 0
+
+        ledger._conn.execute(
+            "UPDATE resolution_receipts SET payload=? WHERE condition_id=?",
+            (b"changed-payload", condition_id),
+        )
+        ledger._conn.commit()
+        with pytest.raises(SettlementConflict, match="receipt|payload"):
+            ledger.apply_terminal(terminal)
+        assert ledger._conn.execute(
+            "SELECT payload FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()[0] == b"changed-payload"
+
+
 def test_maker_v0_database_migrates_to_nullable_identity(tmp_path):
     path = str(tmp_path / "maker-v0.db")
     conn = sqlite3.connect(path)
