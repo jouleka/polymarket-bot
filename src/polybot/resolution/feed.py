@@ -2,9 +2,13 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 
 from polybot.resolution.models import DisputeState, ResolutionSubject
 from polybot.resolution.store import ResolutionStore
+
+
+_BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
 
 
 class PollDisposition(str, Enum):
@@ -48,7 +52,25 @@ class ResolutionFeed:
             return self._unavailable(subjects, "provider chain unavailable")
         if any(isinstance(chain_id, bool) or chain_id != 137 for chain_id in chain_ids):
             return self._unavailable(subjects, "provider chain is not Polygon 137")
-        return self._unavailable(subjects, "acceptance coordinate unavailable")
+        try:
+            heads = tuple(provider.latest_block() for provider in self._providers)
+            if any(isinstance(head, bool) or not isinstance(head, int) or head < 0
+                   for head in heads):
+                raise ValueError("provider head is not a non-negative integer")
+            acceptance_block = min(heads) - 5
+            if acceptance_block < 0:
+                return self._unavailable(subjects, "five-confirmation block is unavailable")
+            block_hashes = tuple(
+                provider.block_hash(acceptance_block) for provider in self._providers
+            )
+            if (any(not isinstance(value, str) or _BYTES32.fullmatch(value) is None
+                    for value in block_hashes) or block_hashes[0] != block_hashes[1]):
+                return self._unavailable(subjects, "provider acceptance block hashes disagree")
+        except Exception:
+            return self._unavailable(subjects, "provider acceptance coordinate unavailable")
+        return self._unavailable(
+            subjects, f"condition observation unavailable at block {acceptance_block}"
+        )
 
     @staticmethod
     def _validate_subjects(subjects):
@@ -68,4 +90,3 @@ class ResolutionFeed:
             )
             for subject in subjects
         )
-

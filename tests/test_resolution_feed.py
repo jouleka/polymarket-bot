@@ -9,17 +9,26 @@ from polybot.resolution.store import ResolutionStore
 
 
 class _Provider:
-    def __init__(self, provider_id, *, chain=137):
+    def __init__(self, provider_id, *, chain=137, head=None, block_hash=None):
         self.provider_id = provider_id
         self._chain = chain
+        self._head = head
+        self._block_hash = block_hash
         self.head_calls = 0
+        self.hash_calls = []
 
     def chain_id(self):
         return self._chain
 
     def latest_block(self):
         self.head_calls += 1
-        raise AssertionError("head must not be read after a chain mismatch")
+        if self._head is None:
+            raise AssertionError("head must not be read after a chain mismatch")
+        return self._head
+
+    def block_hash(self, block_number):
+        self.hash_calls.append(block_number)
+        return self._block_hash
 
 
 def _subject(condition_byte="81"):
@@ -50,3 +59,26 @@ def test_feed_requires_exactly_two_distinct_polygon_providers(tmp_path):
         assert store.terminal_for(_subject().condition_id) is None
         assert store.pending_outbox(10) == ()
 
+
+def test_feed_uses_lower_head_minus_exactly_five(tmp_path):
+    agreed_hash = "0x" + "11" * 32
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        low = _Provider("archive-a", head=20, block_hash=agreed_hash)
+        high = _Provider("archive-b", head=22, block_hash=agreed_hash)
+        result, = ResolutionFeed(store, (low, high)).poll((_subject(),))
+        assert low.hash_calls == high.hash_calls == [15]
+        assert result.disposition is PollDisposition.UNAVAILABLE
+
+        negative_a = _Provider("negative-a", head=4, block_hash=agreed_hash)
+        negative_b = _Provider("negative-b", head=10, block_hash=agreed_hash)
+        result, = ResolutionFeed(store, (negative_a, negative_b)).poll((_subject("82"),))
+        assert result.disposition is PollDisposition.UNAVAILABLE
+        assert negative_a.hash_calls == negative_b.hash_calls == []
+
+        disagree_a = _Provider("disagree-a", head=20, block_hash=agreed_hash)
+        disagree_b = _Provider("disagree-b", head=20, block_hash="0x" + "22" * 32)
+        result, = ResolutionFeed(store, (disagree_a, disagree_b)).poll((_subject("83"),))
+        assert result.disposition is PollDisposition.UNAVAILABLE
+        assert disagree_a.hash_calls == disagree_b.hash_calls == [15]
+        assert store.assessment_for(_subject().condition_id) is None
+        assert store.pending_outbox(10) == ()
