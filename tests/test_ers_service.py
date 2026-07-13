@@ -459,25 +459,38 @@ def test_only_explicit_stub_market_meta_may_write_legacy_forecast(tmp_path, monk
         assert ledger.all() == [] and clog.all() == () and signer.placed == []
 
 
+@pytest.mark.parametrize("mismatch", ["event_id", "condition_id", "category", "token_id"])
 def test_typed_resolution_subject_must_match_the_intent_before_component_write(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, mismatch):
+    condition_id = "0x" + "ab" * 32
+    intent_values = dict(_P, token_id="101", condition_id=condition_id)
+
     class MismatchedMeta:
         def metadata_for(self, intent):
             return MarketMetadata("politics", "canonical question", 123)
 
         def resolution_subject_for(self, intent):
-            return ResolutionSubjectMetadata(
-                event_id="other-event", condition_id="0x" + "ab" * 32,
-                category="politics", token_id="101", outcome_slot=0,
-                sibling_token_ids=("101", "202"),
+            values = dict(
+                event_id="e1", condition_id=condition_id, category="politics",
+                token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
             )
+            if mismatch == "event_id":
+                values["event_id"] = "other-event"
+            elif mismatch == "condition_id":
+                values["condition_id"] = "0x" + "cd" * 32
+            elif mismatch == "category":
+                values["category"] = "sports"
+            else:
+                values["token_id"] = "202"
+                values["outcome_slot"] = 1
+            return ResolutionSubjectMetadata(**values)
 
     pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=MismatchedMeta())
-    with _store(str(tmp_path / "i.db")) as store:
-        store.propose_trade("i1", **_P)
+    with _store(str(tmp_path / f"{mismatch}.db")) as store:
+        store.propose_trade("i1", **intent_values)
         signer = PaperSigner()
         process_pending(
-            store, book_for={"t1": _book("0.50")}.get,
+            store, book_for={"101": _book("0.50")}.get,
             portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
             pipeline=pipe,
         )
