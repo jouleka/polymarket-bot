@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 from fractions import Fraction
+import hashlib
 import re
 
+from polybot.resolution.canonical import canonical_bytes
 from polybot.resolution.errors import ResolutionUnavailable
 
 
@@ -18,6 +20,7 @@ _AUDIT_EVENT = re.compile(
 _UINT256_MAX = 2**256 - 1
 _PROJECTION_CONTEXT = Context(prec=78, rounding=ROUND_HALF_EVEN)
 PUSD_ADDRESS = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
+CTF_ADDRESS = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
 
 
 def _exact_nonempty(value, name):
@@ -191,6 +194,44 @@ class TerminalResolution:
     question_id: str
     audit_event_ids: tuple[str, ...]
     provider_ids: tuple[str, str]
+
+    @property
+    def payload(self):
+        return {
+            "acceptance": {
+                "block_hash": self.block_hash,
+                "block_number": self.block_number,
+            },
+            "authority": {
+                "adapter_address": self.adapter_address,
+                "audit_event_ids": list(self.audit_event_ids),
+                "chain_id": 137,
+                "collateral_address": PUSD_ADDRESS,
+                "ctf_address": CTF_ADDRESS,
+                "question_id": self.question_id,
+            },
+            "path": self.dispute.value,
+            "payout": {
+                "denominator": self.payout.denominator,
+                "numerators": list(self.payout.numerators),
+            },
+            "providers": list(sorted(self.provider_ids)),
+            "subject": {
+                "category": self.subject.category,
+                "condition_id": self.subject.condition_id,
+                "event_id": self.subject.event_id,
+                "token_ids": list(self.subject.token_ids),
+            },
+            "version": 1,
+        }
+
+    @property
+    def canonical_bytes(self):
+        return canonical_bytes(self.payload)
+
+    @property
+    def terminal_id(self):
+        return hashlib.sha256(self.canonical_bytes).hexdigest()
 
     @classmethod
     def from_observations(cls, subject, first, second):

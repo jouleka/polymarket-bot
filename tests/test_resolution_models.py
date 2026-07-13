@@ -4,6 +4,8 @@ import pytest
 from dataclasses import replace
 from decimal import getcontext
 from fractions import Fraction
+import hashlib
+import json
 
 from polybot.resolution.models import (
     DisputeState,
@@ -15,6 +17,7 @@ from polybot.resolution.models import (
     fold_dispute,
 )
 from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.canonical import canonical_bytes
 
 
 _CONDITION = "0x" + "11" * 32
@@ -161,3 +164,50 @@ def test_terminal_requires_two_distinct_matching_finalized_observations():
             subject, replace(first, dispute=DisputeState.UNKNOWN),
             replace(second, dispute=DisputeState.UNKNOWN),
         )
+
+
+def test_terminal_v1_canonical_bytes_and_hash():
+    terminal = TerminalResolution(
+        subject=ResolutionSubject(
+            "event-1", "0x" + "11" * 32, ("101", "202"), "política"),
+        payout=PayoutVector((3, 1), 4), dispute=DisputeState.CLEAR,
+        block_number=100, block_hash="0x" + "22" * 32,
+        adapter_address="0x157ce2d672854c848c9b79c49a8cc6cc89176a49",
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "90:1:" + "0x" + "33" * 32 + ":CONDITION_PREPARATION",
+            "99:2:" + "0x" + "44" * 32 + ":CONDITION_RESOLUTION",
+            "99:3:" + "0x" + "44" * 32 + ":QUESTION_RESOLVED",
+        ),
+        provider_ids=("archive-b", "archive-a"),
+    )
+    expected_primitive = {
+        "acceptance": {"block_hash": "0x" + "22" * 32, "block_number": 100},
+        "authority": {
+            "adapter_address": "0x157ce2d672854c848c9b79c49a8cc6cc89176a49",
+            "audit_event_ids": list(terminal.audit_event_ids),
+            "chain_id": 137,
+            "collateral_address": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+            "ctf_address": "0x4d97dcd97ec945f40cf65f87097ace5ea0476045",
+            "question_id": "0x" + "66" * 32,
+        },
+        "path": "CLEAR",
+        "payout": {"denominator": 4, "numerators": [3, 1]},
+        "providers": ["archive-a", "archive-b"],
+        "subject": {
+            "category": "política", "condition_id": "0x" + "11" * 32,
+            "event_id": "event-1", "token_ids": ["101", "202"],
+        },
+        "version": 1,
+    }
+    expected = json.dumps(expected_primitive, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, allow_nan=False).encode("utf-8")
+    assert len(expected) == 997
+    assert hashlib.sha256(expected).hexdigest() == (
+        "499af1bbfcdd6989ffbcf31a2d8898b78a1b573e1db20619c635285310f3759b")
+    assert terminal.payload == expected_primitive
+    assert terminal.canonical_bytes == expected
+    assert terminal.terminal_id == hashlib.sha256(expected).hexdigest()
+    assert canonical_bytes(dict(reversed(list(expected_primitive.items())))) == expected
+    with pytest.raises(TypeError):
+        canonical_bytes({"value": 0.5})
