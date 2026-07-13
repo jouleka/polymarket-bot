@@ -1,6 +1,7 @@
 """POL-15 durable resolution authority store."""
 
 from dataclasses import replace
+import sqlite3
 
 import pytest
 
@@ -67,6 +68,16 @@ def test_assessment_round_trips_and_replaces_only_same_subject(tmp_path):
         assert reopened.assessment_for(independent.subject.condition_id) == independent
         with pytest.raises(SettlementConflict, match="subject"):
             reopened.record_assessment(conflicting)
+
+
+def test_outbox_foreign_key_rejects_orphan_terminal(tmp_path):
+    with ResolutionStore(str(tmp_path / "foreign-key.db"), MonotonicStamper()) as store:
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            store._conn.execute(
+                "INSERT INTO resolution_outbox (terminal_id, role, state) "
+                "VALUES (?, 'FORECAST', 'PENDING')",
+                ("f" * 64,),
+            )
 
 
 def test_assessment_write_rolls_back_on_precommit_failure(tmp_path):
