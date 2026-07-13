@@ -129,30 +129,46 @@ class ResolutionFeed:
                 )
                 first = observations[0]
                 if first.phase is LifecyclePhase.UNRESOLVED:
-                    detail = "providers agree condition is unresolved"
-                    self._store.record_assessment(ResolutionAssessment(
-                        subject, first.phase, first.dispute, first.payout,
-                        first.block_number, first.block_hash, detail,
-                    ))
-                    results[subject.condition_id] = PollResult(
-                        subject.condition_id, PollDisposition.UNRESOLVED,
-                        DisputeState.UNKNOWN, None, detail,
-                    )
+                    classification = PollDisposition.UNRESOLVED
+                    terminal = None
                 elif first.dispute is DisputeState.UNKNOWN:
-                    detail = "providers agree finalized path is unknown"
-                    self._store.record_assessment(ResolutionAssessment(
-                        subject, first.phase, first.dispute, first.payout,
-                        first.block_number, first.block_hash, detail,
-                    ))
-                    results[subject.condition_id] = PollResult(
-                        subject.condition_id, PollDisposition.UNKNOWN,
-                        DisputeState.UNKNOWN, None, detail,
-                    )
+                    classification = PollDisposition.UNKNOWN
+                    terminal = None
                 elif first.dispute in (
                         DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
                     terminal = TerminalResolution.from_observations(
                         subject, observations[0], observations[1]
                     )
+                    classification = PollDisposition.ACCEPTED
+                else:
+                    raise ValueError("classified terminal reconciliation is unavailable")
+            except SettlementConflict as exc:
+                self._store.halt(str(exc) or "resolution authority contradiction")
+                raise
+            except Exception:
+                results[subject.condition_id] = PollResult(
+                    subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
+                    "provider observation unavailable",
+                )
+                continue
+
+            try:
+                if classification in (
+                        PollDisposition.UNRESOLVED, PollDisposition.UNKNOWN):
+                    detail = (
+                        "providers agree condition is unresolved"
+                        if classification is PollDisposition.UNRESOLVED
+                        else "providers agree finalized path is unknown"
+                    )
+                    self._store.record_assessment(ResolutionAssessment(
+                        subject, first.phase, first.dispute, first.payout,
+                        first.block_number, first.block_hash, detail,
+                    ))
+                    results[subject.condition_id] = PollResult(
+                        subject.condition_id, classification,
+                        DisputeState.UNKNOWN, None, detail,
+                    )
+                else:
                     created = self._store.accept_terminal(terminal)
                     disposition = (
                         PollDisposition.ACCEPTED if created
@@ -162,19 +178,9 @@ class ResolutionFeed:
                         subject.condition_id, disposition, terminal.dispute,
                         terminal.terminal_id, "providers agree terminal authority",
                     )
-                else:
-                    results[subject.condition_id] = PollResult(
-                        subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
-                        "classified terminal reconciliation is unavailable",
-                    )
             except SettlementConflict as exc:
                 self._store.halt(str(exc) or "resolution authority contradiction")
                 raise
-            except Exception:
-                results[subject.condition_id] = PollResult(
-                    subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
-                    "provider observation unavailable",
-                )
         return tuple(results[subject.condition_id] for subject in subjects)
 
     def verify_terminal(self, terminal):
