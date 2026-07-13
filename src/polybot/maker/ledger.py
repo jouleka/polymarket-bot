@@ -18,7 +18,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import ConditionAlreadyTerminal, SettlementConflict
 
 # Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
 # dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the maker's net-PnL.
@@ -110,6 +110,15 @@ class MakerLedger:
         )
         self._conn.commit()
 
+    def require_condition_open(self, condition_id):
+        receipt = self._conn.execute(
+            "SELECT 1 FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()
+        if receipt is not None:
+            raise ConditionAlreadyTerminal(
+                f"condition {condition_id!r} already has a terminal receipt"
+            )
+
     def record_fill(self, fill_id, *, token_id, condition_id, category, side, shares,
                     price_exec, fill_mid, reward_accrued, event_id=None,
                     outcome_slot=None, sibling_token_ids=None):
@@ -149,16 +158,23 @@ class MakerLedger:
             )
         else:
             sibling_json = None
-        cur = self._conn.execute(
-            "INSERT OR IGNORE INTO maker_fills "
-            "(fill_id, token_id, condition_id, category, side, shares, price_exec, "
-            "fill_mid, reward_accrued, created_at, event_id, outcome_slot, sibling_token_ids) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (fill_id, token_id, condition_id, category, side, str(shares),
-             str(price_exec), str(fill_mid), str(reward_accrued), self._stamper.stamp(),
-             event_id, outcome_slot, sibling_json),
-        )
-        self._conn.commit()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self.require_condition_open(condition_id)
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO maker_fills "
+                "(fill_id, token_id, condition_id, category, side, shares, price_exec, "
+                "fill_mid, reward_accrued, created_at, event_id, outcome_slot, "
+                "sibling_token_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (fill_id, token_id, condition_id, category, side, str(shares),
+                 str(price_exec), str(fill_mid), str(reward_accrued), self._stamper.stamp(),
+                 event_id, outcome_slot, sibling_json),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
         return cur.rowcount > 0
 
     def record_settlement(self, fill_id, *, status, resolution_value):
