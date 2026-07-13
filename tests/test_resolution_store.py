@@ -232,7 +232,10 @@ def test_terminal_replay_independently_checks_stored_id_and_payload(tmp_path, co
                 operation()
 
 
-@pytest.mark.parametrize("corruption", ["missing_role", "invalid_state"])
+@pytest.mark.parametrize("corruption", [
+    "missing_role", "role_order", "invalid_state", "pending_timestamp",
+    "delivered_without_timestamp", "orphan",
+])
 def test_store_rejects_structurally_corrupt_outbox(tmp_path, corruption):
     path = str(tmp_path / f"{corruption}.db")
     terminal = _terminal("7a")
@@ -242,12 +245,38 @@ def test_store_rejects_structurally_corrupt_outbox(tmp_path, corruption):
             store._conn.execute(
                 "DELETE FROM resolution_outbox WHERE role='SHADOW'"
             )
-        else:
+        elif corruption == "role_order":
+            store._conn.execute(
+                "UPDATE resolution_outbox SET sequence=99 WHERE role='FORECAST'"
+            )
+            store._conn.execute(
+                "UPDATE resolution_outbox SET sequence=1 WHERE role='MAKER'"
+            )
+            store._conn.execute(
+                "UPDATE resolution_outbox SET sequence=2 WHERE role='FORECAST'"
+            )
+        elif corruption == "invalid_state":
             store._conn.execute("PRAGMA ignore_check_constraints=ON")
             store._conn.execute(
                 "UPDATE resolution_outbox SET state='BROKEN' WHERE role='SHADOW'"
             )
             store._conn.execute("PRAGMA ignore_check_constraints=OFF")
+        elif corruption == "pending_timestamp":
+            store._conn.execute(
+                "UPDATE resolution_outbox SET delivered_at=999 WHERE role='SHADOW'"
+            )
+        elif corruption == "delivered_without_timestamp":
+            store._conn.execute(
+                "UPDATE resolution_outbox SET state='DELIVERED' WHERE role='SHADOW'"
+            )
+        else:
+            store._conn.execute("PRAGMA foreign_keys=OFF")
+            store._conn.execute(
+                "INSERT INTO resolution_outbox (terminal_id, role, state) "
+                "VALUES (?, 'FORECAST', 'PENDING')",
+                ("f" * 64,),
+            )
+            store._conn.execute("PRAGMA foreign_keys=ON")
         store._conn.commit()
         with pytest.raises(SettlementConflict, match="outbox"):
             store.accept_terminal(terminal)
