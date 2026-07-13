@@ -11,6 +11,7 @@ and DISPUTED/VOID rows are kept but excluded from the honest net sample downstre
 ``settled_at`` then ``rowid`` (a shadow trade's *resolution* time is its window key).
 """
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
@@ -20,7 +21,18 @@ from decimal import Decimal
 VALID_STATUSES = ("WON", "LOST", "DISPUTED", "VOID")
 
 _COLUMNS = ("trade_id, token_id, condition_id, category, side, shares, fill_price, "
-            "fill_mid, reward_accrued, created_at, status, resolution_value, settled_at")
+            "fill_mid, reward_accrued, created_at, status, resolution_value, settled_at, "
+            "event_id, outcome_slot, sibling_token_ids, resolution_numerator, "
+            "resolution_denominator, terminal_id")
+
+_POL15_COLUMNS = (
+    ("event_id", "TEXT"),
+    ("outcome_slot", "INTEGER"),
+    ("sibling_token_ids", "TEXT"),
+    ("resolution_numerator", "TEXT"),
+    ("resolution_denominator", "TEXT"),
+    ("terminal_id", "TEXT"),
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +50,12 @@ class ShadowTradeRecord:
     status: str | None = None
     resolution_value: Decimal | None = None
     settled_at: int | None = None
+    event_id: str | None = None
+    outcome_slot: int | None = None
+    sibling_token_ids: tuple[str, str] | None = None
+    resolution_numerator: int | None = None
+    resolution_denominator: int | None = None
+    terminal_id: str | None = None
 
 
 class ShadowLedger:
@@ -61,10 +79,22 @@ class ShadowLedger:
                 created_at       INTEGER NOT NULL,
                 status           TEXT,
                 resolution_value TEXT,
-                settled_at       INTEGER
+                settled_at       INTEGER,
+                event_id         TEXT,
+                outcome_slot     INTEGER,
+                sibling_token_ids TEXT,
+                resolution_numerator TEXT,
+                resolution_denominator TEXT,
+                terminal_id      TEXT
             )
             """
         )
+        existing = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(shadow_trades)").fetchall()
+        }
+        for name, sql_type in _POL15_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {name} {sql_type}")
         self._conn.commit()
 
     def record_trade(self, trade_id, *, token_id, condition_id, category, side, shares,
@@ -157,4 +187,8 @@ class ShadowLedger:
             shares=Decimal(r[5]), fill_price=Decimal(r[6]), fill_mid=Decimal(r[7]),
             reward_accrued=Decimal(r[8]), created_at=r[9], status=r[10],
             resolution_value=None if r[11] is None else Decimal(r[11]), settled_at=r[12],
+            event_id=r[13], outcome_slot=r[14],
+            sibling_token_ids=None if r[15] is None else tuple(json.loads(r[15])),
+            resolution_numerator=None if r[16] is None else int(r[16]),
+            resolution_denominator=None if r[17] is None else int(r[17]), terminal_id=r[18],
         )
