@@ -191,6 +191,7 @@ class ResolutionStore:
                     self._stamper.stamp(),
                 ),
             )
+            self._before_assessment_commit()
         except Exception:
             self._conn.rollback()
             raise
@@ -422,6 +423,9 @@ class ResolutionStore:
 
     def _before_terminal_commit(self):
         """Failure-injection seam for the terminal/outbox transaction."""
+
+    def _before_assessment_commit(self):
+        """Failure-injection seam for the assessment transaction."""
 
     def _validate_outbox_integrity(self, terminal_id=None):
         parameters = () if terminal_id is None else (terminal_id,)
