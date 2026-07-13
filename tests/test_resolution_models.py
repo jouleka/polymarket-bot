@@ -193,8 +193,19 @@ def test_terminal_direct_construction_enforces_public_authority_contract():
         {"adapter_address": "0x33"},
         {"question_id": "0x44"},
         {"audit_event_ids": ()},
+        {"audit_event_ids": ("not-a-canonical-audit-event",)},
+        {"audit_event_ids": (
+            f"9:1:{_BLOCK_HASH}:CONDITION_RESOLUTION",
+            f"9:1:{_TX_HASH}:QUESTION_RESOLVED",
+        )},
+        {"audit_event_ids": (
+            f"10:1:{_BLOCK_HASH}:QUESTION_RESOLVED",
+            f"9:1:{_TX_HASH}:CONDITION_RESOLUTION",
+        )},
         {"provider_ids": ("archive-a", "archive-a")},
         {"provider_ids": ("archive-a",)},
+        {"provider_ids": ("archive-a", " ")},
+        {"provider_ids": ("archive-a", 7)},
     ):
         with pytest.raises((TypeError, ValueError)):
             replace(terminal, **change)
