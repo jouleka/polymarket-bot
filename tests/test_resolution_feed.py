@@ -108,6 +108,15 @@ def test_feed_requires_exactly_two_distinct_polygon_providers(tmp_path):
         assert store.terminal_for(_subject().condition_id) is None
         assert store.pending_outbox(10) == ()
 
+        for malformed_chain in (137.0, "137", True):
+            malformed = _Provider("malformed", chain=malformed_chain)
+            valid = _Provider("valid", chain=137)
+            result, = ResolutionFeed(store, (malformed, valid)).poll(
+                (_subject("92"),)
+            )
+            assert result.disposition is PollDisposition.UNAVAILABLE
+            assert malformed.head_calls == valid.head_calls == 0
+
 
 def test_feed_uses_lower_head_minus_exactly_five(tmp_path):
     agreed_hash = "0x" + "11" * 32

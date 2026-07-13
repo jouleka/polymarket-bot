@@ -57,7 +57,8 @@ class ResolutionFeed:
             chain_ids = tuple(provider.chain_id() for provider in self._providers)
         except Exception:
             return self._unavailable(subjects, "provider chain unavailable")
-        if any(isinstance(chain_id, bool) or chain_id != 137 for chain_id in chain_ids):
+        if any(isinstance(chain_id, bool) or not isinstance(chain_id, int)
+               or chain_id != 137 for chain_id in chain_ids):
             return self._unavailable(subjects, "provider chain is not Polygon 137")
 
         results = {}
