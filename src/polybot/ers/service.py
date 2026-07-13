@@ -25,7 +25,11 @@ from polybot.ers.validator import (
     evaluate_intent,
 )
 from polybot.fusion.engine import FusionError
-from polybot.ers.market_meta import MarketMetadataUnavailable
+from polybot.ers.market_meta import (
+    MarketMetadataUnavailable,
+    ResolutionSubjectMetadata,
+    StubMarketMeta,
+)
 from polybot.detectors.orchestrator import DetectorInputs, REASON_DETECTOR_AVOID
 
 _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move model is wired
@@ -33,6 +37,7 @@ _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move
 # New S6/POL-14 Decision.reason codes (free-form strings; no validator change).
 REASON_ANCHOR_ERROR = "anchor_error"
 REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
+REASON_RESOLUTION_IDENTITY_UNAVAILABLE = "resolution_identity_unavailable"
 
 
 @dataclass(frozen=True)
@@ -200,8 +205,23 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         metadata = pipeline.market_meta.metadata_for(intent)
     except MarketMetadataUnavailable:
         return Decision("REJECT", None, None, REASON_MARKET_META_UNAVAILABLE), trade_intent
-    subject_for = getattr(pipeline.market_meta, "resolution_subject_for", None)
-    resolution_subject = subject_for(intent) if callable(subject_for) else None
+    resolution_subject = None
+    if not isinstance(pipeline.market_meta, StubMarketMeta):
+        subject_for = getattr(pipeline.market_meta, "resolution_subject_for", None)
+        if not callable(subject_for):
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
+        try:
+            resolution_subject = subject_for(intent)
+        except MarketMetadataUnavailable:
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
+        if not isinstance(resolution_subject, ResolutionSubjectMetadata):
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
     category = metadata.category
     question_text = metadata.question_text
     seconds = metadata.seconds_to_resolution
