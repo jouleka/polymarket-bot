@@ -175,11 +175,12 @@ class ForecastLedger:
             raise KeyError(f"no forecast {forecast_id!r} to resolve")
 
     def apply_terminal(self, terminal):
-        """Apply one CLEAR terminal and its immutable receipt in a single transaction."""
+        """Apply one classified terminal and its immutable receipt in one transaction."""
         if not isinstance(terminal, TerminalResolution):
             raise TypeError("terminal must be a TerminalResolution")
-        if terminal.dispute is not DisputeState.CLEAR:
-            raise ValueError("forecast terminal must use the CLEAR path")
+        if terminal.dispute not in (
+                DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
+            raise ValueError("forecast terminal path must be classified")
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
@@ -200,18 +201,23 @@ class ForecastLedger:
             for forecast_id, slot in rows:
                 numerator = terminal.payout.numerators[slot]
                 denominator = terminal.payout.denominator
-                if numerator == denominator:
-                    status = "WON"
-                elif numerator == 0:
-                    status = "LOST"
+                if terminal.dispute is not DisputeState.CLEAR:
+                    status = "DISPUTED_LOST"
+                    resolution_value = None
                 else:
-                    status = "VOID"
+                    resolution_value = str(terminal.payout.decimal_for(slot))
+                    if numerator == denominator:
+                        status = "WON"
+                    elif numerator == 0:
+                        status = "LOST"
+                    else:
+                        status = "VOID"
                 self._conn.execute(
                     "UPDATE forecasts SET resolution_status=?, resolved_at=?, "
                     "resolution_value=?, resolution_numerator=?, resolution_denominator=?, "
                     "terminal_id=? WHERE forecast_id=?",
                     (
-                        status, self._stamper.stamp(), str(terminal.payout.decimal_for(slot)),
+                        status, self._stamper.stamp(), resolution_value,
                         str(numerator), str(denominator), terminal.terminal_id, forecast_id,
                     ),
                 )

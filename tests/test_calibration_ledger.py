@@ -76,6 +76,25 @@ def test_forecast_clear_terminal_projects_exact_slot_value(tmp_path):
         assert record.terminal_id == fractional.terminal_id
 
 
+def test_forecast_disputed_or_manual_terminal_is_non_economic(tmp_path):
+    for byte, dispute in (("13", DisputeState.DISPUTED), ("14", DisputeState.MANUAL)):
+        condition_id = "0x" + byte * 32
+        terminal = _terminal(
+            condition_id, PayoutVector((3, 1), 4), dispute=dispute
+        )
+        with _ledger(str(tmp_path / f"{dispute.value}.db")) as ledger:
+            ledger.record_forecast(
+                dispute.value, category="politics", condition_id=condition_id,
+                p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+                token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+            )
+            assert ledger.apply_terminal(terminal) == 1
+            record = ledger.get(dispute.value)
+            assert record.resolution_status == "DISPUTED_LOST"
+            assert record.resolution_value is None
+            assert record.terminal_id == terminal.terminal_id
+
+
 def test_forecast_v0_database_migrates_to_nullable_identity(tmp_path):
     path = str(tmp_path / "forecast-v0.db")
     conn = sqlite3.connect(path)
