@@ -233,6 +233,36 @@ def test_poll_store_authority_conflict_halts_instead_of_becoming_unavailable(tmp
             store.require_healthy()
 
 
+@pytest.mark.parametrize("entrypoint", ["poll_lookup", "recovery_lookup"])
+def test_store_lookup_conflict_persistently_halts_feed(
+        tmp_path, monkeypatch, entrypoint):
+    path = str(tmp_path / f"{entrypoint}.db")
+    terminal = _terminal("96")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        feed = ResolutionFeed(
+            reopened, (_Provider("archive-a"), _Provider("archive-b"))
+        )
+
+        def conflict(*_args):
+            raise SettlementConflict("stored authority corrupt")
+
+        if entrypoint == "poll_lookup":
+            monkeypatch.setattr(reopened, "terminal_for", conflict)
+        else:
+            monkeypatch.setattr(reopened, "pending_terminals", conflict)
+
+        with pytest.raises(SettlementConflict, match="corrupt"):
+            if entrypoint == "poll_lookup":
+                feed.poll((terminal.subject,))
+            else:
+                feed.recover_pending()
+        with pytest.raises(IntegrityHalted, match="corrupt"):
+            reopened.require_healthy()
+
+
 def test_poll_accepts_matching_clear_terminal(tmp_path):
     subject = _subject("86")
     block_hash = "0x" + "88" * 32
