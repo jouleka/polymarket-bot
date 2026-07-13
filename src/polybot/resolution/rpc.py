@@ -4,6 +4,7 @@ import httpx
 import re
 
 from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.models import CTF_ADDRESS, PUSD_ADDRESS
 
 
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)\Z")
@@ -31,6 +32,24 @@ def decode_fixed_bytes(value, width):
             f"JSON-RPC value is not canonical bytes{width}"
         )
     return bytes.fromhex(value[2:])
+
+
+def _encode_quantity(value):
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or not 0 <= value <= _UINT256_MAX):
+        raise ValueError("JSON-RPC quantity value must be a non-negative uint256")
+    return hex(value)
+
+
+def _bytes32_word(value):
+    return decode_fixed_bytes(value, 32).hex()
+
+
+def _uint256_word(value):
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or not 0 <= value <= _UINT256_MAX):
+        raise ValueError("ABI uint256 value is invalid")
+    return f"{value:064x}"
 
 
 class JsonRpcClient:
@@ -89,3 +108,49 @@ class JsonRpcClient:
                 or not error["message"]):
             raise ResolutionUnavailable("JSON-RPC error envelope is malformed")
         raise ResolutionUnavailable(f"JSON-RPC error: {error['message']}")
+
+
+class JsonRpcResolutionProvider:
+    def __init__(self, provider_id: str, rpc: JsonRpcClient):
+        if (not isinstance(provider_id, str) or not provider_id
+                or provider_id != provider_id.strip()):
+            raise ValueError("provider_id must be a non-empty exact string")
+        if not callable(getattr(rpc, "call", None)):
+            raise TypeError("rpc must provide call")
+        self.provider_id = provider_id
+        self._rpc = rpc
+
+    def _outcome_slot_count(self, condition_id, block_number):
+        data = "0xd42dc0c2" + _bytes32_word(condition_id)
+        return int.from_bytes(self._ctf_static_word(data, block_number))
+
+    def _payout_denominator(self, condition_id, block_number):
+        data = "0xdd34de67" + _bytes32_word(condition_id)
+        return int.from_bytes(self._ctf_static_word(data, block_number))
+
+    def _payout_numerator(self, condition_id, slot, block_number):
+        data = (
+            "0x0504c814" + _bytes32_word(condition_id) + _uint256_word(slot)
+        )
+        return int.from_bytes(self._ctf_static_word(data, block_number))
+
+    def _collection_id(self, condition_id, index_set, block_number):
+        data = (
+            "0x856296f7" + "00" * 32 + _bytes32_word(condition_id)
+            + _uint256_word(index_set)
+        )
+        return "0x" + self._ctf_static_word(data, block_number).hex()
+
+    def _position_id(self, collection_id, block_number):
+        collateral_word = "00" * 12 + decode_fixed_bytes(PUSD_ADDRESS, 20).hex()
+        data = (
+            "0x39dd7530" + collateral_word + _bytes32_word(collection_id)
+        )
+        return int.from_bytes(self._ctf_static_word(data, block_number))
+
+    def _ctf_static_word(self, data, block_number):
+        result = self._rpc.call(
+            "eth_call",
+            [{"to": CTF_ADDRESS, "data": data}, _encode_quantity(block_number)],
+        )
+        return decode_fixed_bytes(result, 32)
