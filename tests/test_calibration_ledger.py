@@ -2,6 +2,7 @@
 
 import sqlite3
 from decimal import Decimal
+from threading import Event, Thread
 
 import pytest
 
@@ -37,6 +38,59 @@ def _terminal(condition_id, payout, *, dispute=DisputeState.CLEAR):
         audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
         provider_ids=("archive-a", "archive-b"),
     )
+
+
+def test_signing_guard_serializes_a_competing_terminal_writer(tmp_path):
+    path = str(tmp_path / "guard.db")
+    attempted = Event()
+    blocked = Event()
+    retry = Event()
+    completed = Event()
+    errors = []
+
+    def settlement_writer():
+        conn = sqlite3.connect(path, timeout=0)
+        try:
+            attempted.set()
+            try:
+                conn.execute(
+                    "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+                    "VALUES (?, ?, ?)", ("condition", "terminal", b"payload")
+                )
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                conn.rollback()
+                if "locked" not in str(exc):
+                    raise
+                blocked.set()
+                if not retry.wait(2):
+                    raise AssertionError("signing guard never released the settlement retry")
+                conn.execute(
+                    "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+                    "VALUES (?, ?, ?)", ("condition", "terminal", b"payload")
+                )
+                conn.commit()
+            else:
+                raise AssertionError("settlement committed while the signing guard was held")
+        except Exception as exc:  # surfaced in the owning test thread below
+            errors.append(exc)
+        finally:
+            conn.close()
+            completed.set()
+
+    with _ledger(path) as ledger:
+        worker = Thread(target=settlement_writer)
+        with ledger.signing_guard("condition"):
+            worker.start()
+            assert attempted.wait(2)
+            assert blocked.wait(2)
+            assert not completed.is_set()
+        retry.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert errors == []
+        with pytest.raises(ConditionAlreadyTerminal):
+            ledger.require_condition_open("condition")
 
 
 def test_forecast_clear_terminal_projects_exact_slot_value(tmp_path):
