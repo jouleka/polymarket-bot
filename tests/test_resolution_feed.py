@@ -170,6 +170,7 @@ def test_feed_uses_lower_head_minus_exactly_five(tmp_path):
         result, = ResolutionFeed(store, (disagree_a, disagree_b)).poll((_subject("83"),))
         assert result.disposition is PollDisposition.UNAVAILABLE
         assert disagree_a.hash_calls == disagree_b.hash_calls == [15]
+        assert disagree_a.observe_calls == disagree_b.observe_calls == []
         assert store.assessment_for(_subject().condition_id) is None
         assert store.pending_outbox(10) == ()
 
