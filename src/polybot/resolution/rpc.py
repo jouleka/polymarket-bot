@@ -5,7 +5,12 @@ import httpx
 import re
 
 from polybot.resolution.errors import ResolutionUnavailable
-from polybot.resolution.models import CTF_ADDRESS, PUSD_ADDRESS
+from polybot.resolution.models import (
+    CTF_ADDRESS,
+    LifecyclePhase,
+    PUSD_ADDRESS,
+    PayoutVector,
+)
 
 
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)\Z")
@@ -193,6 +198,23 @@ class JsonRpcResolutionProvider:
     def _outcome_slot_count(self, condition_id, block_number):
         data = "0xd42dc0c2" + _bytes32_word(condition_id)
         return int.from_bytes(self._ctf_static_word(data, block_number))
+
+    def _read_payout(self, condition_id, block_number):
+        slot_count = self._outcome_slot_count(condition_id, block_number)
+        if slot_count != 2:
+            raise ResolutionUnavailable("CTF payout is not binary")
+        denominator = self._payout_denominator(condition_id, block_number)
+        if denominator == 0:
+            return LifecyclePhase.UNRESOLVED, None
+        numerators = tuple(
+            self._payout_numerator(condition_id, slot, block_number)
+            for slot in (0, 1)
+        )
+        try:
+            payout = PayoutVector(numerators, denominator)
+        except (TypeError, ValueError) as exc:
+            raise ResolutionUnavailable("CTF payout vector is malformed") from exc
+        return LifecyclePhase.FINALIZED, payout
 
     def _payout_denominator(self, condition_id, block_number):
         data = "0xdd34de67" + _bytes32_word(condition_id)
