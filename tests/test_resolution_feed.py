@@ -18,6 +18,7 @@ from polybot.resolution.models import (
     PayoutVector,
     ProviderObservation,
     ResolutionSubject,
+    TerminalResolution,
 )
 from polybot.resolution.store import ResolutionStore
 
@@ -68,6 +69,20 @@ class _Provider:
 def _subject(condition_byte="81"):
     return ResolutionSubject(
         "event-1", "0x" + condition_byte * 32, ("101", "202"), "politics"
+    )
+
+
+def _terminal(condition_byte):
+    return TerminalResolution(
+        subject=_subject(condition_byte), payout=PayoutVector((1, 0), 1),
+        dispute=DisputeState.CLEAR, block_number=15,
+        block_hash="0x" + "dd" * 32, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        ),
+        provider_ids=("archive-a", "archive-b"),
     )
 
 
@@ -359,3 +374,20 @@ def test_verify_terminal_halts_on_any_original_authority_change(tmp_path, change
             feed.verify_terminal(terminal)
         with pytest.raises(IntegrityHalted, match=changed):
             store.require_healthy()
+
+
+def test_recover_pending_verifies_all_before_clearing_barrier(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    terminals = (_terminal("8e"), _terminal("8f"))
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        for terminal in terminals:
+            store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        assert reopened.recovery_required is True
+        first = _Provider("archive-a")
+        second = _Provider("archive-b")
+        feed = ResolutionFeed(reopened, (first, second))
+        assert feed.recover_pending() == 2
+        assert reopened.recovery_required is False
+        assert first.verify_calls == second.verify_calls == list(terminals)
