@@ -16,7 +16,11 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
-from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.models import (
+    DisputeState,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 # Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
 # dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the shadow net-PnL.
@@ -97,6 +101,15 @@ class ShadowLedger:
         for name, sql_type in _POL15_COLUMNS:
             if name not in existing:
                 self._conn.execute(f"ALTER TABLE shadow_trades ADD COLUMN {name} {sql_type}")
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS resolution_receipts (
+                condition_id TEXT PRIMARY KEY,
+                terminal_id  TEXT UNIQUE NOT NULL,
+                payload      BLOB NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def record_trade(self, trade_id, *, token_id, condition_id, category, side, shares,
@@ -179,6 +192,57 @@ class ShadowLedger:
         self._conn.commit()
         if cur.rowcount == 0:
             raise KeyError(f"no shadow trade {trade_id!r} to settle")
+
+    def apply_terminal(self, terminal):
+        """Project a classified terminal into shadow rows and an immutable receipt."""
+        if not isinstance(terminal, TerminalResolution):
+            raise TypeError("terminal must be a TerminalResolution")
+        if terminal.dispute not in (
+                DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
+            raise ValueError("shadow terminal path must be classified")
+        terminal_id = terminal.terminal_id
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(
+                "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+                "VALUES (?, ?, ?)",
+                (terminal.subject.condition_id, terminal_id, terminal.canonical_bytes),
+            )
+            rows = self._conn.execute(
+                "SELECT trade_id, outcome_slot FROM shadow_trades "
+                "WHERE condition_id=? AND terminal_id IS NULL",
+                (terminal.subject.condition_id,),
+            ).fetchall()
+            for trade_id, slot in rows:
+                numerator = terminal.payout.numerators[slot]
+                denominator = terminal.payout.denominator
+                if terminal.dispute is not DisputeState.CLEAR:
+                    status = "DISPUTED"
+                    resolution_value = None
+                else:
+                    resolution_value = str(terminal.payout.decimal_for(slot))
+                    if numerator == denominator:
+                        status = "WON"
+                    elif numerator == 0:
+                        status = "LOST"
+                    else:
+                        status = "SETTLED"
+                self._conn.execute(
+                    "UPDATE shadow_trades SET status=?, resolution_value=?, settled_at=?, "
+                    "resolution_numerator=?, resolution_denominator=?, terminal_id=? "
+                    "WHERE trade_id=?",
+                    (
+                        status, resolution_value, self._stamper.stamp(), str(numerator),
+                        str(denominator), terminal_id, trade_id,
+                    ),
+                )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        return len(rows)
 
     def settled(self, category=None):
         sql = f"SELECT {_COLUMNS} FROM shadow_trades WHERE status IS NOT NULL"
