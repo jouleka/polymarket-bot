@@ -17,7 +17,11 @@ from polybot.core.clock import MonotonicStamper
 from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
-from polybot.ers.market_meta import MarketMetadata, MarketMetadataUnavailable
+from polybot.ers.market_meta import (
+    MarketMetadata,
+    MarketMetadataUnavailable,
+    StubMarketMeta,
+)
 from polybot.ers.service import PaperSigner, process_pending
 from polybot.ers.validator import ClusterView, OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
@@ -295,7 +299,7 @@ class _AnchorResult:
         self.reason = "within_band"
 
 
-class _StubMeta:
+class _StubMeta(StubMarketMeta):
     def __init__(self, category="unknown", seconds=10**12):
         self._cat = category
         self._secs = seconds
@@ -415,7 +419,7 @@ def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monk
 # POL-14: one real metadata result, typed fail-closed rejection before logging.
 
 
-class _RecordingMeta:
+class _RecordingMeta(StubMarketMeta):
     def __init__(self, result=None, raises=None):
         self.result = result or MarketMetadata("politics", "Gamma canonical question", 123)
         self.raises = raises
@@ -426,6 +430,32 @@ class _RecordingMeta:
         if self.raises is not None:
             raise self.raises
         return self.result
+
+
+def test_only_explicit_stub_market_meta_may_write_legacy_forecast(tmp_path, monkeypatch):
+    class DuckTypedMeta:
+        def metadata_for(self, intent):
+            return MarketMetadata("politics", "apparently valid", 123)
+
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=DuckTypedMeta())
+
+    import polybot.fusion.engine as fusion_mod
+
+    def forbidden_fusion(*args, **kwargs):
+        raise AssertionError("fusion ran without canonical resolution identity")
+
+    monkeypatch.setattr(fusion_mod, "fuse", forbidden_fusion, raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason == "resolution_identity_unavailable"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
 
 
 def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):
