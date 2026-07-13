@@ -94,6 +94,16 @@ class ResolutionFeed:
                         subject.condition_id, PollDisposition.UNRESOLVED,
                         DisputeState.UNKNOWN, None, detail,
                     ))
+                elif first.dispute is DisputeState.UNKNOWN:
+                    detail = "providers agree finalized path is unknown"
+                    self._store.record_assessment(ResolutionAssessment(
+                        subject, first.phase, first.dispute, first.payout,
+                        first.block_number, first.block_hash, detail,
+                    ))
+                    results.append(PollResult(
+                        subject.condition_id, PollDisposition.UNKNOWN,
+                        DisputeState.UNKNOWN, None, detail,
+                    ))
                 else:
                     results.append(PollResult(
                         subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
