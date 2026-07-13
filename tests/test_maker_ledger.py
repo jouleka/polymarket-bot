@@ -13,7 +13,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import ConditionAlreadyTerminal, SettlementConflict
 
 
 def _ledger(path):
@@ -99,6 +99,25 @@ def test_maker_terminal_conflict_rolls_back_every_row_and_receipt(tmp_path):
         assert ledger._conn.execute(
             "SELECT COUNT(*) FROM resolution_receipts"
         ).fetchone()[0] == 0
+
+
+def test_maker_zero_row_receipt_blocks_later_creation(tmp_path):
+    condition_id = "0x" + "25" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "zero.db")) as ledger:
+        assert ledger.apply_terminal(terminal) == 0
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()[0] == 1
+
+        with pytest.raises(ConditionAlreadyTerminal):
+            ledger.record_fill(
+                "late", token_id="101", condition_id=condition_id, category="politics",
+                side="BUY", shares=Decimal("10"), price_exec=Decimal("0.48"),
+                fill_mid=Decimal("0.50"), reward_accrued=Decimal("0.25"),
+                event_id="event-1", outcome_slot=0, sibling_token_ids=("101", "202"),
+            )
+        assert ledger.all() == []
 
 
 def test_maker_v0_database_migrates_to_nullable_identity(tmp_path):
