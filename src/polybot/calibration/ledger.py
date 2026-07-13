@@ -181,9 +181,20 @@ class ForecastLedger:
         if terminal.dispute not in (
                 DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
             raise ValueError("forecast terminal path must be classified")
+        terminal_id = terminal.terminal_id
+        payload = terminal.canonical_bytes
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            receipt = self._conn.execute(
+                "SELECT terminal_id, payload FROM resolution_receipts WHERE condition_id=?",
+                (terminal.subject.condition_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt[0] != terminal_id or bytes(receipt[1]) != payload:
+                    raise SettlementConflict("forecast receipt contradicts terminal payload")
+                self._conn.commit()
+                return 0
             stored_rows = self._conn.execute(
                 "SELECT forecast_id, category, event_id, token_id, outcome_slot, "
                 "sibling_token_ids, resolution_status FROM forecasts "
@@ -214,8 +225,8 @@ class ForecastLedger:
                 "VALUES (?, ?, ?)",
                 (
                     terminal.subject.condition_id,
-                    terminal.terminal_id,
-                    terminal.canonical_bytes,
+                    terminal_id,
+                    payload,
                 ),
             )
             for forecast_id, slot in rows:
@@ -238,7 +249,7 @@ class ForecastLedger:
                     "terminal_id=? WHERE forecast_id=?",
                     (
                         status, self._stamper.stamp(), resolution_value,
-                        str(numerator), str(denominator), terminal.terminal_id, forecast_id,
+                        str(numerator), str(denominator), terminal_id, forecast_id,
                     ),
                 )
         except Exception:
