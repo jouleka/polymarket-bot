@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from polybot.core.clock import MonotonicStamper
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import IntegrityHalted, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -153,3 +153,30 @@ def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
             (2, "MAKER"), (3, "SHADOW"), (4, "FORECAST"),
             (5, "MAKER"), (6, "SHADOW"),
         ]
+
+
+def test_integrity_halt_persists_and_blocks_mutators(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("76")
+    assessment = ResolutionAssessment(
+        _subject("77"), LifecyclePhase.UNRESOLVED, DisputeState.UNKNOWN, None,
+        100, "0x" + "11" * 32, "still unresolved",
+    )
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        store.halt("first immutable contradiction")
+        store.halt("later symptom must not overwrite root cause")
+        for operation in (
+            store.require_healthy,
+            lambda: store.record_assessment(assessment),
+            lambda: store.accept_terminal(_terminal("77")),
+            lambda: store.acknowledge(1, terminal.terminal_id, "FORECAST"),
+            lambda: store._complete_recovery((terminal.terminal_id,)),
+        ):
+            with pytest.raises(IntegrityHalted, match="first immutable contradiction"):
+                operation()
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        with pytest.raises(IntegrityHalted, match="first immutable contradiction"):
+            reopened.require_healthy()
+        assert reopened.pending_outbox(10)[0].sequence == 1

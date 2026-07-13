@@ -5,7 +5,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import IntegrityHalted, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -116,6 +116,15 @@ class ResolutionStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS resolution_integrity_halt (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                reason TEXT NOT NULL,
+                halted_at INTEGER NOT NULL
+            )
+            """
+        )
         self._conn.commit()
 
     def record_assessment(self, assessment):
@@ -123,6 +132,7 @@ class ResolutionStore:
             raise TypeError("assessment must be a ResolutionAssessment")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            self._require_healthy_in_transaction()
             self._ensure_subject(assessment.subject)
             terminal = self._conn.execute(
                 "SELECT 1 FROM resolution_terminals WHERE condition_id=?",
@@ -211,6 +221,7 @@ class ResolutionStore:
             raise TypeError("terminal must be a TerminalResolution")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            self._require_healthy_in_transaction()
             self._ensure_subject(terminal.subject)
             existing = self._conn.execute(
                 "SELECT terminal_id, payload FROM resolution_terminals WHERE condition_id=?",
@@ -285,6 +296,7 @@ class ResolutionStore:
             raise ValueError("outbox role is invalid")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            self._require_healthy_in_transaction()
             row = self._conn.execute(
                 "SELECT terminal_id, role, state FROM resolution_outbox WHERE sequence=?",
                 (sequence,),
@@ -305,6 +317,35 @@ class ResolutionStore:
         else:
             self._conn.commit()
         return True
+
+    def halt(self, reason):
+        if (not isinstance(reason, str) or not reason or reason != reason.strip()):
+            raise ValueError("integrity halt reason must be a non-empty exact string")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(
+                "INSERT OR IGNORE INTO resolution_integrity_halt "
+                "(singleton, reason, halted_at) VALUES (1, ?, ?)",
+                (reason, self._stamper.stamp()),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+
+    def require_healthy(self):
+        self._require_healthy_in_transaction()
+
+    def _require_healthy_in_transaction(self):
+        row = self._conn.execute(
+            "SELECT reason FROM resolution_integrity_halt WHERE singleton=1"
+        ).fetchone()
+        if row is not None:
+            raise IntegrityHalted(f"resolution integrity halted: {row[0]}")
+
+    def _complete_recovery(self, terminal_ids):
+        self.require_healthy()
 
     def _before_terminal_commit(self):
         """Failure-injection seam for the terminal/outbox transaction."""
