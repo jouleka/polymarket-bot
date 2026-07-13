@@ -162,7 +162,10 @@ def test_target_decoders_require_exact_canonical_sibling_array(
 
 
 @pytest.mark.parametrize("kind", ["forecast", "maker", "shadow"])
-@pytest.mark.parametrize("corruption", ["terminal_id", "resolution_value", "missing_receipt"])
+@pytest.mark.parametrize("corruption", [
+    "terminal_id", "status", "resolution_value", "resolution_numerator",
+    "resolution_denominator", "settled_at", "missing_receipt",
+])
 def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruption):
     condition_id = "0x" + "52" * 32
     terminal = _terminal(condition_id)
@@ -175,6 +178,7 @@ def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruptio
             token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
         )
         table, key = "forecasts", "forecast_id"
+        status_column, settled_column = "resolution_status", "resolved_at"
     elif kind == "maker":
         ledger = MakerLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
         ledger.record_fill(
@@ -184,6 +188,7 @@ def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruptio
             outcome_slot=0, sibling_token_ids=("101", "202"),
         )
         table, key = "maker_fills", "fill_id"
+        status_column, settled_column = "status", "settled_at"
     else:
         ledger = ShadowLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
         ledger.record_trade(
@@ -193,11 +198,24 @@ def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruptio
             outcome_slot=0, sibling_token_ids=("101", "202"),
         )
         table, key = "shadow_trades", "trade_id"
+        status_column, settled_column = "status", "settled_at"
     try:
         assert ledger.apply_terminal(terminal) == 1
         if corruption == "resolution_value":
             ledger._conn.execute(
                 f"UPDATE {table} SET resolution_value='0' WHERE {key}='row'"
+            )
+        elif corruption == "status":
+            ledger._conn.execute(
+                f"UPDATE {table} SET {status_column}='LOST' WHERE {key}='row'"
+            )
+        elif corruption in ("resolution_numerator", "resolution_denominator"):
+            ledger._conn.execute(
+                f"UPDATE {table} SET {corruption}='9' WHERE {key}='row'"
+            )
+        elif corruption == "settled_at":
+            ledger._conn.execute(
+                f"UPDATE {table} SET {settled_column}=NULL WHERE {key}='row'"
             )
         else:
             ledger._conn.execute(
