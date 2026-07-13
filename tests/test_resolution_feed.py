@@ -688,6 +688,77 @@ def test_provider_failure_never_masks_racing_integrity_halt(
                 feed.verify_terminal(terminal)
 
 
+@pytest.mark.parametrize("boundary", [
+    "invalid_chain", "negative_block", "hash_disagreement",
+    "coordinate_failure", "observation_failure",
+    "explicit_verification_unavailable", "malformed_verification_result",
+])
+def test_every_provider_unavailability_boundary_rechecks_integrity_halt(
+        tmp_path, monkeypatch, boundary):
+    terminal = _terminal("a5")
+    subject = terminal.subject
+    block_hash = "0x" + "4b" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.UNRESOLVED, payout=None,
+        dispute=DisputeState.UNKNOWN, collateral_address=None,
+        derived_token_ids=None, adapter_address=None, question_id=None,
+        audit_event_ids=(),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=20, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(
+            str(tmp_path / f"{boundary}.db"), MonotonicStamper()) as store:
+        def halt_then(value=None, error=None):
+            store.halt(f"{boundary} raced halt")
+            if error is not None:
+                raise error
+            return value
+
+        if boundary == "invalid_chain":
+            monkeypatch.setattr(first, "chain_id", lambda: halt_then(1))
+        elif boundary == "negative_block":
+            monkeypatch.setattr(first, "latest_block", lambda: halt_then(4))
+        elif boundary == "hash_disagreement":
+            monkeypatch.setattr(
+                first, "block_hash", lambda _block: halt_then(block_hash)
+            )
+            second._block_hash = "0x" + "4c" * 32
+        elif boundary == "coordinate_failure":
+            monkeypatch.setattr(
+                first, "latest_block",
+                lambda: halt_then(error=TimeoutError("head timed out")),
+            )
+        elif boundary == "observation_failure":
+            monkeypatch.setattr(
+                first, "observe",
+                lambda *_args: halt_then(error=TimeoutError("observe timed out")),
+            )
+        elif boundary == "explicit_verification_unavailable":
+            monkeypatch.setattr(
+                first, "verify_terminal",
+                lambda _terminal: halt_then(
+                    error=ResolutionUnavailable("verification unavailable")
+                ),
+            )
+        else:
+            monkeypatch.setattr(
+                first, "verify_terminal", lambda _terminal: halt_then(False)
+            )
+
+        feed = ResolutionFeed(store, (first, second))
+        with pytest.raises(IntegrityHalted, match=f"{boundary} raced halt"):
+            if boundary.startswith("explicit_") or boundary.startswith("malformed_"):
+                feed.verify_terminal(terminal)
+            else:
+                feed.poll((subject,))
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])
