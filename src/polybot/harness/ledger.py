@@ -16,6 +16,8 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+from polybot.resolution.models import ResolutionSubject
+
 # Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
 # dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the shadow net-PnL.
 VALID_STATUSES = ("WON", "LOST", "DISPUTED", "VOID")
@@ -98,7 +100,8 @@ class ShadowLedger:
         self._conn.commit()
 
     def record_trade(self, trade_id, *, token_id, condition_id, category, side, shares,
-                     fill_price, fill_mid, reward_accrued):
+                     fill_price, fill_mid, reward_accrued, event_id=None,
+                     outcome_slot=None, sibling_token_ids=None):
         """INSERT a simulated trade (idempotent on ``trade_id``). Returns True if newly
         inserted, False if a duplicate (original preserved). Decimals stored as exact
         strings.
@@ -116,13 +119,34 @@ class ShadowLedger:
         if not reward_accrued.is_finite() or reward_accrued < 0:
             raise ValueError(
                 f"reward_accrued must be a finite Decimal >= 0, got {reward_accrued}")
+        identity = (event_id, outcome_slot, sibling_token_ids)
+        if any(value is not None for value in identity):
+            if any(value is None for value in identity):
+                raise ValueError("canonical shadow identity must be all-or-none")
+            subject = ResolutionSubject(
+                event_id=event_id,
+                condition_id=condition_id,
+                token_ids=sibling_token_ids,
+                category=category,
+            )
+            if (isinstance(outcome_slot, bool) or not isinstance(outcome_slot, int)
+                    or outcome_slot not in (0, 1)):
+                raise ValueError("canonical shadow outcome slot must be 0 or 1")
+            if subject.token_ids[outcome_slot] != token_id:
+                raise ValueError("canonical shadow slot does not match selected token")
+            sibling_json = json.dumps(
+                list(subject.token_ids), ensure_ascii=False, separators=(",", ":")
+            )
+        else:
+            sibling_json = None
         cur = self._conn.execute(
             "INSERT OR IGNORE INTO shadow_trades "
             "(trade_id, token_id, condition_id, category, side, shares, fill_price, "
-            "fill_mid, reward_accrued, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "fill_mid, reward_accrued, created_at, event_id, outcome_slot, sibling_token_ids) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (trade_id, token_id, condition_id, category, side, str(shares),
-             str(fill_price), str(fill_mid), str(reward_accrued), self._stamper.stamp()),
+             str(fill_price), str(fill_mid), str(reward_accrued), self._stamper.stamp(),
+             event_id, outcome_slot, sibling_json),
         )
         self._conn.commit()
         return cur.rowcount > 0
