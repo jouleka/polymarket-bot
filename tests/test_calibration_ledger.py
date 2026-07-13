@@ -7,6 +7,12 @@ import pytest
 
 from polybot.calibration.ledger import ForecastLedger, ForecastRecord
 from polybot.core.clock import MonotonicStamper
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 
 def _ledger(path):
@@ -16,6 +22,58 @@ def _ledger(path):
 def _rec(ledger, fid, *, category="politics", p="0.7", mid="0.6", cond="c1"):
     return ledger.record_forecast(fid, category=category, condition_id=cond,
                                   p=Decimal(p), market_mid=Decimal(mid))
+
+
+def _terminal(condition_id, payout, *, dispute=DisputeState.CLEAR):
+    return TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
+        payout=payout,
+        dispute=dispute,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+
+
+def test_forecast_clear_terminal_projects_exact_slot_value(tmp_path):
+    binary_condition = "0x" + "11" * 32
+    binary = _terminal(binary_condition, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "binary.db")) as ledger:
+        for slot, token in enumerate(binary.subject.token_ids):
+            ledger.record_forecast(
+                f"f{slot}", category="politics", condition_id=binary_condition,
+                p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+                token_id=token, outcome_slot=slot, sibling_token_ids=binary.subject.token_ids,
+            )
+        assert ledger.apply_terminal(binary) == 2
+        won, lost = ledger.all()
+        assert (won.resolution_status, won.resolution_value) == ("WON", Decimal("1"))
+        assert (lost.resolution_status, lost.resolution_value) == ("LOST", Decimal("0"))
+        assert (won.resolution_numerator, lost.resolution_numerator) == (1, 0)
+        assert won.resolution_denominator == lost.resolution_denominator == 1
+        assert won.terminal_id == lost.terminal_id == binary.terminal_id
+        assert ledger._conn.execute(
+            "SELECT payload FROM resolution_receipts WHERE condition_id=?",
+            (binary_condition,),
+        ).fetchone()[0] == binary.canonical_bytes
+
+    fractional_condition = "0x" + "12" * 32
+    fractional = _terminal(fractional_condition, PayoutVector((1, 2), 3))
+    with _ledger(str(tmp_path / "fractional.db")) as ledger:
+        ledger.record_forecast(
+            "fractional", category="politics", condition_id=fractional_condition,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        assert ledger.apply_terminal(fractional) == 1
+        record = ledger.get("fractional")
+        assert record.resolution_status == "VOID"
+        assert str(record.resolution_value) == "0." + "3" * 78
+        assert (record.resolution_numerator, record.resolution_denominator) == (1, 3)
+        assert record.terminal_id == fractional.terminal_id
 
 
 def test_forecast_v0_database_migrates_to_nullable_identity(tmp_path):
