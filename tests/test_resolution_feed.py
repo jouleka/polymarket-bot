@@ -25,13 +25,15 @@ from polybot.resolution.store import ResolutionStore
 
 class _Provider:
     def __init__(self, provider_id, *, chain=137, head=None, block_hash=None,
-                 observation=None, verification_error=None):
+                 observation=None, verification_error=None,
+                 verification_result=None):
         self.provider_id = provider_id
         self._chain = chain
         self._head = head
         self._block_hash = block_hash
         self._observation = observation
         self._verification_error = verification_error
+        self._verification_result = verification_result
         self.head_calls = 0
         self.hash_calls = []
         self.observe_calls = []
@@ -64,6 +66,7 @@ class _Provider:
         self.verify_calls.append(terminal)
         if self._verification_error is not None:
             raise self._verification_error
+        return self._verification_result
 
 
 def _subject(condition_byte="81"):
@@ -566,3 +569,24 @@ def test_recover_pending_unavailable_keeps_barrier_and_outbox_pending(tmp_path):
         assert reopened.pending_outbox(100) == pending_before
         assert first.verify_calls == [terminals[0]]
         assert second.verify_calls == []
+
+
+@pytest.mark.parametrize("provider_kwargs", [
+    {"verification_error": TimeoutError("timed out")},
+    {"verification_result": False},
+])
+def test_recovery_normalizes_malformed_provider_verification_as_unavailable(
+        tmp_path, provider_kwargs):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("99")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        feed = ResolutionFeed(reopened, (
+            _Provider("archive-a", **provider_kwargs), _Provider("archive-b")
+        ))
+        with pytest.raises(ResolutionUnavailable, match="verification"):
+            feed.recover_pending()
+        assert reopened.recovery_required is True
+        assert len(reopened.pending_outbox(100)) == 3

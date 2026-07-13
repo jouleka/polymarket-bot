@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import ResolutionUnavailable, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -203,7 +203,20 @@ class ResolutionFeed:
                     "terminal provider authority does not match configured providers"
                 )
             for provider in self._providers:
-                provider.verify_terminal(terminal)
+                try:
+                    result = provider.verify_terminal(terminal)
+                except SettlementConflict:
+                    raise
+                except ResolutionUnavailable:
+                    raise
+                except Exception as exc:
+                    raise ResolutionUnavailable(
+                        "provider terminal verification unavailable"
+                    ) from exc
+                if result is not None:
+                    raise ResolutionUnavailable(
+                        "provider terminal verification returned a malformed result"
+                    )
         except SettlementConflict as exc:
             reason = str(exc) or "provider terminal authority contradiction"
             self._store.halt(reason)
