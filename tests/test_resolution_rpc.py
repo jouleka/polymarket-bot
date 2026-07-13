@@ -5,6 +5,8 @@ import pytest
 from polybot.resolution.errors import ResolutionUnavailable
 from polybot.resolution.models import CTF_ADDRESS, PUSD_ADDRESS
 from polybot.resolution.rpc import (
+    ADAPTER_POLICIES,
+    CTF_DEPLOYMENT_BLOCK,
     JsonRpcClient,
     JsonRpcResolutionProvider,
     decode_fixed_bytes,
@@ -160,3 +162,33 @@ def test_ctf_static_calls_decode_exact_32_byte_words():
         )
         with pytest.raises(ResolutionUnavailable):
             malformed_provider._outcome_slot_count(condition_id, 15)
+
+
+def test_provider_verifies_code_transition_for_ctf_and_selected_adapter():
+    selected = ADAPTER_POLICIES[-1]
+    rpc = _Rpc("0x", "0x6001", "0x", "0x6002")
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+
+    assert provider._verify_deployments(selected.address) is None
+    assert rpc.calls == [
+        ("eth_getCode", [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK - 1)]),
+        ("eth_getCode", [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK)]),
+        ("eth_getCode", [selected.address, hex(selected.deployment_block - 1)]),
+        ("eth_getCode", [selected.address, hex(selected.deployment_block)]),
+    ]
+    assert provider._verify_deployments(selected.address) is None
+    assert len(rpc.calls) == 4
+
+    for results in (
+        ("0x60", "0x6001", "0x", "0x6002"),
+        ("0x", "0x", "0x", "0x6002"),
+        ("0x", "0x6001", "0x60", "0x6002"),
+        ("0x", "0x6001", "0x", "0x"),
+        ("0x", "0x6001", "0x0", "0x6002"),
+    ):
+        invalid = JsonRpcResolutionProvider("archive-a", _Rpc(*results))
+        with pytest.raises(ResolutionUnavailable, match="deployment"):
+            invalid._verify_deployments(selected.address)
+
+    with pytest.raises(ResolutionUnavailable, match="adapter"):
+        provider._verify_deployments("0x" + "99" * 20)
