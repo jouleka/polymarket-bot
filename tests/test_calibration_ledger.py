@@ -1,10 +1,11 @@
 """S5 / POL-7 — forecast->outcome ledger (append-only, point-in-time, restart-stable)."""
 
+import sqlite3
 from decimal import Decimal
 
 import pytest
 
-from polybot.calibration.ledger import ForecastLedger
+from polybot.calibration.ledger import ForecastLedger, ForecastRecord
 from polybot.core.clock import MonotonicStamper
 
 
@@ -15,6 +16,42 @@ def _ledger(path):
 def _rec(ledger, fid, *, category="politics", p="0.7", mid="0.6", cond="c1"):
     return ledger.record_forecast(fid, category=category, condition_id=cond,
                                   p=Decimal(p), market_mid=Decimal(mid))
+
+
+def test_forecast_v0_database_migrates_to_nullable_identity(tmp_path):
+    path = str(tmp_path / "forecast-v0.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE forecasts (
+            forecast_id TEXT PRIMARY KEY, category TEXT NOT NULL,
+            condition_id TEXT NOT NULL, p TEXT NOT NULL, market_mid TEXT NOT NULL,
+            created_at INTEGER NOT NULL, resolution_status TEXT, resolved_at INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO forecasts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("legacy", "politics", "c1", "0.7", "0.6", 123, "WON", 456),
+    )
+    conn.commit()
+    conn.close()
+
+    with _ledger(path) as ledger:
+        columns = {
+            row[1] for row in ledger._conn.execute("PRAGMA table_info(forecasts)").fetchall()
+        }
+        assert columns - {
+            "forecast_id", "category", "condition_id", "p", "market_mid", "created_at",
+            "resolution_status", "resolved_at",
+        } == {
+            "token_id", "event_id", "outcome_slot", "sibling_token_ids", "resolution_value",
+            "resolution_numerator", "resolution_denominator", "terminal_id",
+        }
+        assert ledger.get("legacy") == ForecastRecord(
+            "legacy", "politics", "c1", Decimal("0.7"), Decimal("0.6"), 123, "WON", 456,
+            None, None, None, None, None, None, None, None,
+        )
 
 
 def test_record_and_get_round_trips(tmp_path):
