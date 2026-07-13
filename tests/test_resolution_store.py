@@ -91,6 +91,25 @@ def test_store_lookups_require_canonical_condition_identity(tmp_path, lookup_nam
                 lookup(invalid)
 
 
+@pytest.mark.parametrize(("column", "corrupt"), [
+    ("payout_numerator_0", "+1"), ("payout_denominator", "02"),
+])
+def test_assessment_rejects_noncanonical_stored_payout_integers(
+        tmp_path, column, corrupt):
+    assessment = ResolutionAssessment(
+        _subject("64"), LifecyclePhase.FINALIZED, DisputeState.UNKNOWN,
+        PayoutVector((1, 1), 2), 100, "0x" + "11" * 32, "unknown path",
+    )
+    with ResolutionStore(str(tmp_path / f"{column}.db"), MonotonicStamper()) as store:
+        store.record_assessment(assessment)
+        store._conn.execute(
+            f"UPDATE resolution_assessments SET {column}=?", (corrupt,)
+        )
+        store._conn.commit()
+        with pytest.raises(SettlementConflict, match="canonical"):
+            store.assessment_for(assessment.subject.condition_id)
+
+
 def test_terminal_atomically_creates_three_ordered_outbox_rows(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminal = _terminal("71")

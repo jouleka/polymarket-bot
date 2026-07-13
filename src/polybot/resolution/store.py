@@ -17,6 +17,7 @@ from polybot.resolution.models import (
 
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
 _TERMINAL_ID = re.compile(r"[0-9a-f]{64}\Z")
+_UINT_TEXT = re.compile(r"0|[1-9][0-9]*\Z")
 _ROLES = ("FORECAST", "MAKER", "SHADOW")
 
 
@@ -219,7 +220,8 @@ class ResolutionStore:
                 raise ValueError("mixed assessment payout")
             else:
                 payout = PayoutVector(
-                    (int(payout_values[0]), int(payout_values[1])), int(payout_values[2])
+                    (_decode_uint_text(payout_values[0]), _decode_uint_text(payout_values[1])),
+                    _decode_uint_text(payout_values[2]),
                 )
             return ResolutionAssessment(
                 subject, phase, dispute, payout, row[8], row[9], row[10]
@@ -491,3 +493,9 @@ def _decode_terminal(terminal_id, payload_bytes):
 def _validate_condition_id(condition_id):
     if not isinstance(condition_id, str) or _BYTES32.fullmatch(condition_id) is None:
         raise ValueError("condition_id must be a canonical lowercase bytes32")
+
+
+def _decode_uint_text(value):
+    if not isinstance(value, str) or _UINT_TEXT.fullmatch(value) is None:
+        raise ValueError("stored integer is not canonical unsigned decimal text")
+    return int(value)
