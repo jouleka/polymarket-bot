@@ -56,6 +56,21 @@ def _decode_identity(*, event_id, token_id, outcome_slot, sibling_json, terminal
     return subject.token_ids
 
 
+def _terminal_projection(terminal, slot):
+    numerator = terminal.payout.numerators[slot]
+    denominator = terminal.payout.denominator
+    if terminal.dispute is not DisputeState.CLEAR:
+        return "DISPUTED_LOST", None, numerator, denominator
+    value = str(terminal.payout.decimal_for(slot))
+    if numerator == denominator:
+        status = "WON"
+    elif numerator == 0:
+        status = "LOST"
+    else:
+        status = "VOID"
+    return status, value, numerator, denominator
+
+
 @dataclass(frozen=True)
 class ForecastRecord:
     forecast_id: str
@@ -225,33 +240,53 @@ class ForecastLedger:
             if receipt is not None:
                 if receipt[0] != terminal_id or bytes(receipt[1]) != payload:
                     raise SettlementConflict("forecast receipt contradicts terminal payload")
-                self._conn.commit()
-                return 0
             stored_rows = self._conn.execute(
                 "SELECT forecast_id, category, event_id, token_id, outcome_slot, "
-                "sibling_token_ids, resolution_status FROM forecasts "
-                "WHERE condition_id=? AND terminal_id IS NULL",
+                "sibling_token_ids, resolution_status, resolved_at, resolution_value, "
+                "resolution_numerator, resolution_denominator, terminal_id FROM forecasts "
+                "WHERE condition_id=?",
                 (terminal.subject.condition_id,),
             ).fetchall()
             rows = []
-            for (forecast_id, category, event_id, token_id, slot, sibling_json,
-                 status) in stored_rows:
+            for (forecast_id, category, event_id, token_id, slot, sibling_json, status,
+                 resolved_at, stored_value, stored_numerator, stored_denominator,
+                 row_terminal_id) in stored_rows:
                 identity = (event_id, token_id, slot, sibling_json)
                 if all(value is None for value in identity):
+                    if row_terminal_id is not None:
+                        raise SettlementConflict("forecast terminal state lacks identity")
                     continue
-                if any(value is None for value in identity) or status is not None:
-                    raise SettlementConflict("forecast identity is incomplete or not pending")
-                try:
-                    siblings = tuple(json.loads(sibling_json))
-                except (TypeError, ValueError) as exc:
-                    raise SettlementConflict("forecast identity has invalid siblings") from exc
+                siblings = _decode_identity(
+                    event_id=event_id, token_id=token_id, outcome_slot=slot,
+                    sibling_json=sibling_json, terminal_id=row_terminal_id,
+                    condition_id=terminal.subject.condition_id, category=category,
+                )
                 subject = terminal.subject
                 if (category != subject.category or event_id != subject.event_id
                         or siblings != subject.token_ids
-                        or isinstance(slot, bool) or slot not in (0, 1)
                         or subject.token_ids[slot] != token_id):
                     raise SettlementConflict("forecast identity contradicts terminal subject")
-                rows.append((forecast_id, slot))
+                expected = _terminal_projection(terminal, slot)
+                if row_terminal_id is None:
+                    if any(value is not None for value in (
+                            status, resolved_at, stored_value, stored_numerator,
+                            stored_denominator)):
+                        raise SettlementConflict("forecast pending row has settled state")
+                    rows.append((forecast_id, slot))
+                    continue
+                if receipt is None:
+                    raise SettlementConflict("forecast settled row has no terminal receipt")
+                expected_status, expected_value, numerator, denominator = expected
+                if (row_terminal_id != terminal_id or status != expected_status
+                        or resolved_at is None or stored_value != expected_value
+                        or stored_numerator != str(numerator)
+                        or stored_denominator != str(denominator)):
+                    raise SettlementConflict("forecast settled projection contradicts terminal")
+            if receipt is not None:
+                if rows:
+                    raise SettlementConflict("forecast receipt coexists with pending rows")
+                self._conn.commit()
+                return 0
             self._conn.execute(
                 "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
                 "VALUES (?, ?, ?)",
@@ -262,19 +297,9 @@ class ForecastLedger:
                 ),
             )
             for forecast_id, slot in rows:
-                numerator = terminal.payout.numerators[slot]
-                denominator = terminal.payout.denominator
-                if terminal.dispute is not DisputeState.CLEAR:
-                    status = "DISPUTED_LOST"
-                    resolution_value = None
-                else:
-                    resolution_value = str(terminal.payout.decimal_for(slot))
-                    if numerator == denominator:
-                        status = "WON"
-                    elif numerator == 0:
-                        status = "LOST"
-                    else:
-                        status = "VOID"
+                status, resolution_value, numerator, denominator = _terminal_projection(
+                    terminal, slot
+                )
                 self._conn.execute(
                     "UPDATE forecasts SET resolution_status=?, resolved_at=?, "
                     "resolution_value=?, resolution_numerator=?, resolution_denominator=?, "
