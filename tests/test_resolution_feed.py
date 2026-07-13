@@ -578,6 +578,20 @@ def test_repeat_poll_halts_on_stored_subject_contradiction(tmp_path):
         assert first.verify_calls == second.verify_calls == []
 
 
+def test_repeat_poll_never_downgrades_verification_conflict(tmp_path):
+    terminal = _terminal("9f")
+    conflict = SettlementConflict("accepted payout changed")
+    first = _Provider("archive-a", verification_error=conflict)
+    second = _Provider("archive-b")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        feed = ResolutionFeed(store, (first, second))
+        with pytest.raises(SettlementConflict, match="payout changed"):
+            feed.poll((terminal.subject,))
+        with pytest.raises(IntegrityHalted, match="payout changed"):
+            store.require_healthy()
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])
