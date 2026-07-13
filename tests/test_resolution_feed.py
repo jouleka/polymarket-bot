@@ -563,6 +563,21 @@ def test_repeat_poll_verifies_original_terminal_coordinate(tmp_path):
         assert (tuple(first.observe_calls), tuple(second.observe_calls)) == observe_calls
 
 
+def test_repeat_poll_halts_on_stored_subject_contradiction(tmp_path):
+    terminal = _terminal("9e")
+    conflicting_subject = replace(terminal.subject, category="different")
+    first = _Provider("archive-a")
+    second = _Provider("archive-b")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        feed = ResolutionFeed(store, (first, second))
+        with pytest.raises(SettlementConflict, match="stored terminal subject"):
+            feed.poll((conflicting_subject,))
+        with pytest.raises(IntegrityHalted, match="stored terminal subject"):
+            store.require_healthy()
+        assert first.verify_calls == second.verify_calls == []
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])
