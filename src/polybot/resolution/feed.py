@@ -58,6 +58,32 @@ class ResolutionFeed:
             return self._unavailable(subjects, "provider chain unavailable")
         if any(isinstance(chain_id, bool) or chain_id != 137 for chain_id in chain_ids):
             return self._unavailable(subjects, "provider chain is not Polygon 137")
+
+        results = {}
+        remaining = []
+        for subject in subjects:
+            terminal = self._store.terminal_for(subject.condition_id)
+            if terminal is None:
+                remaining.append(subject)
+                continue
+            if terminal.subject != subject:
+                raise ValueError("poll subject contradicts stored terminal subject")
+            try:
+                for provider in self._providers:
+                    provider.verify_terminal(terminal)
+            except Exception:
+                results[subject.condition_id] = PollResult(
+                    subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
+                    "stored terminal verification unavailable",
+                )
+            else:
+                results[subject.condition_id] = PollResult(
+                    subject.condition_id, PollDisposition.ALREADY_TERMINAL,
+                    terminal.dispute, terminal.terminal_id,
+                    "stored terminal authority verified",
+                )
+        if not remaining:
+            return tuple(results[subject.condition_id] for subject in subjects)
         try:
             heads = tuple(provider.latest_block() for provider in self._providers)
             if any(isinstance(head, bool) or not isinstance(head, int) or head < 0
@@ -65,17 +91,23 @@ class ResolutionFeed:
                 raise ValueError("provider head is not a non-negative integer")
             acceptance_block = min(heads) - 5
             if acceptance_block < 0:
-                return self._unavailable(subjects, "five-confirmation block is unavailable")
+                return self._merge_unavailable(
+                    subjects, remaining, results, "five-confirmation block is unavailable"
+                )
             block_hashes = tuple(
                 provider.block_hash(acceptance_block) for provider in self._providers
             )
             if (any(not isinstance(value, str) or _BYTES32.fullmatch(value) is None
                     for value in block_hashes) or block_hashes[0] != block_hashes[1]):
-                return self._unavailable(subjects, "provider acceptance block hashes disagree")
+                return self._merge_unavailable(
+                    subjects, remaining, results,
+                    "provider acceptance block hashes disagree",
+                )
         except Exception:
-            return self._unavailable(subjects, "provider acceptance coordinate unavailable")
-        results = []
-        for subject in subjects:
+            return self._merge_unavailable(
+                subjects, remaining, results, "provider acceptance coordinate unavailable"
+            )
+        for subject in remaining:
             try:
                 observations = tuple(
                     provider.observe(subject, acceptance_block)
@@ -91,20 +123,20 @@ class ResolutionFeed:
                         subject, first.phase, first.dispute, first.payout,
                         first.block_number, first.block_hash, detail,
                     ))
-                    results.append(PollResult(
+                    results[subject.condition_id] = PollResult(
                         subject.condition_id, PollDisposition.UNRESOLVED,
                         DisputeState.UNKNOWN, None, detail,
-                    ))
+                    )
                 elif first.dispute is DisputeState.UNKNOWN:
                     detail = "providers agree finalized path is unknown"
                     self._store.record_assessment(ResolutionAssessment(
                         subject, first.phase, first.dispute, first.payout,
                         first.block_number, first.block_hash, detail,
                     ))
-                    results.append(PollResult(
+                    results[subject.condition_id] = PollResult(
                         subject.condition_id, PollDisposition.UNKNOWN,
                         DisputeState.UNKNOWN, None, detail,
-                    ))
+                    )
                 elif first.dispute in (
                         DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
                     terminal = TerminalResolution.from_observations(
@@ -115,21 +147,21 @@ class ResolutionFeed:
                         PollDisposition.ACCEPTED if created
                         else PollDisposition.ALREADY_TERMINAL
                     )
-                    results.append(PollResult(
+                    results[subject.condition_id] = PollResult(
                         subject.condition_id, disposition, terminal.dispute,
                         terminal.terminal_id, "providers agree terminal authority",
-                    ))
+                    )
                 else:
-                    results.append(PollResult(
+                    results[subject.condition_id] = PollResult(
                         subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                         "classified terminal reconciliation is unavailable",
-                    ))
+                    )
             except Exception:
-                results.append(PollResult(
+                results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                     "provider observation unavailable",
-                ))
-        return tuple(results)
+                )
+        return tuple(results[subject.condition_id] for subject in subjects)
 
     @staticmethod
     def _validate_subjects(subjects):
@@ -149,6 +181,14 @@ class ResolutionFeed:
             )
             for subject in subjects
         )
+
+    @staticmethod
+    def _merge_unavailable(subjects, remaining, results, detail):
+        for subject in remaining:
+            results[subject.condition_id] = PollResult(
+                subject.condition_id, PollDisposition.UNAVAILABLE, None, None, detail
+            )
+        return tuple(results[subject.condition_id] for subject in subjects)
 
     def _validate_observations(self, observations, block_number, block_hash):
         if len(observations) != 2:
