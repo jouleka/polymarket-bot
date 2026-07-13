@@ -230,7 +230,7 @@ class ResolutionFeed:
             provider_ids = tuple(sorted(
                 provider.provider_id for provider in self._providers
             ))
-            if provider_ids != terminal.provider_ids:
+            if provider_ids != tuple(sorted(terminal.provider_ids)):
                 raise SettlementConflict(
                     "terminal provider authority does not match configured providers"
                 )
