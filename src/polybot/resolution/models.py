@@ -40,6 +40,25 @@ def _validate_token_pair(token_ids):
             raise ValueError("token_ids must be canonical positive uint256 strings")
 
 
+def _validate_audit_event_ids(audit_event_ids):
+    if not isinstance(audit_event_ids, tuple):
+        raise TypeError("audit_event_ids must be a tuple")
+    if not audit_event_ids:
+        raise ValueError("terminal evidence requires audit event IDs")
+    positions = []
+    for event_id in audit_event_ids:
+        if not isinstance(event_id, str):
+            raise TypeError("audit event IDs must be strings")
+        match = _AUDIT_EVENT.fullmatch(event_id)
+        if match is None:
+            raise ValueError("audit event ID is not canonical")
+        positions.append((int(match.group(1)), int(match.group(2))))
+    if len(set(positions)) != len(positions):
+        raise ValueError("audit event chain positions must be unique")
+    if positions != sorted(positions):
+        raise ValueError("audit event IDs must be in chain order")
+
+
 class LifecyclePhase(str, Enum):
     UNRESOLVED = "UNRESOLVED"
     FINALIZED = "FINALIZED"
@@ -167,20 +186,7 @@ class ProviderObservation:
             raise ValueError("finalized observations require a canonical adapter address")
         if not isinstance(self.question_id, str) or _BYTES32.fullmatch(self.question_id) is None:
             raise ValueError("finalized observations require a canonical question ID")
-        if not self.audit_event_ids:
-            raise ValueError("finalized observations require audit evidence")
-        positions = []
-        for event_id in self.audit_event_ids:
-            if not isinstance(event_id, str):
-                raise TypeError("audit event IDs must be strings")
-            match = _AUDIT_EVENT.fullmatch(event_id)
-            if match is None:
-                raise ValueError("audit event ID is not canonical")
-            positions.append((int(match.group(1)), int(match.group(2)), match.group(3)))
-        if len(set(self.audit_event_ids)) != len(self.audit_event_ids):
-            raise ValueError("audit event IDs must be unique")
-        if positions != sorted(positions):
-            raise ValueError("audit event IDs must be in chain order")
+        _validate_audit_event_ids(self.audit_event_ids)
 
 
 @dataclass(frozen=True)
@@ -194,6 +200,33 @@ class TerminalResolution:
     question_id: str
     audit_event_ids: tuple[str, ...]
     provider_ids: tuple[str, str]
+
+    def __post_init__(self):
+        if not isinstance(self.subject, ResolutionSubject):
+            raise TypeError("terminal subject must be a ResolutionSubject")
+        if not isinstance(self.payout, PayoutVector):
+            raise TypeError("terminal payout must be a PayoutVector")
+        if not isinstance(self.dispute, DisputeState):
+            raise TypeError("terminal path must be a DisputeState")
+        if self.dispute is DisputeState.UNKNOWN:
+            raise ValueError("UNKNOWN is not a terminal path")
+        if (isinstance(self.block_number, bool) or not isinstance(self.block_number, int)
+                or self.block_number < 0):
+            raise ValueError("terminal block_number must be a non-negative integer")
+        if not isinstance(self.block_hash, str) or _BYTES32.fullmatch(self.block_hash) is None:
+            raise ValueError("terminal block_hash must be a canonical lowercase bytes32")
+        if (not isinstance(self.adapter_address, str)
+                or _ADDRESS.fullmatch(self.adapter_address) is None):
+            raise ValueError("terminal adapter_address must be canonical")
+        if not isinstance(self.question_id, str) or _BYTES32.fullmatch(self.question_id) is None:
+            raise ValueError("terminal question_id must be a canonical lowercase bytes32")
+        _validate_audit_event_ids(self.audit_event_ids)
+        if not isinstance(self.provider_ids, tuple) or len(self.provider_ids) != 2:
+            raise ValueError("terminal provider_ids must contain exactly two providers")
+        for provider_id in self.provider_ids:
+            _exact_nonempty(provider_id, "provider_id")
+        if self.provider_ids[0] == self.provider_ids[1]:
+            raise ValueError("terminal providers must be distinct")
 
     @property
     def payload(self):
