@@ -204,6 +204,35 @@ def test_poll_persists_matching_unknown_as_excluded_assessment(tmp_path):
         assert store.pending_outbox(10) == ()
 
 
+def test_poll_store_authority_conflict_halts_instead_of_becoming_unavailable(tmp_path):
+    subject = _subject("95")
+    conflicting_subject = replace(subject, event_id="event-2")
+    block_hash = "0x" + "45" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.UNRESOLVED, payout=None,
+        dispute=DisputeState.UNKNOWN, collateral_address=None,
+        derived_token_ids=None, adapter_address=None, question_id=None,
+        audit_event_ids=(),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=20, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+        accepted, = feed.poll((subject,))
+        assert accepted.disposition is PollDisposition.UNRESOLVED
+
+        with pytest.raises(SettlementConflict, match="different subject"):
+            feed.poll((conflicting_subject,))
+        with pytest.raises(IntegrityHalted, match="different subject"):
+            store.require_healthy()
+
+
 def test_poll_accepts_matching_clear_terminal(tmp_path):
     subject = _subject("86")
     block_hash = "0x" + "88" * 32

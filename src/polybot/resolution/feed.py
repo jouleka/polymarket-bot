@@ -163,6 +163,9 @@ class ResolutionFeed:
                         subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                         "classified terminal reconciliation is unavailable",
                     )
+            except SettlementConflict as exc:
+                self._store.halt(str(exc) or "resolution authority contradiction")
+                raise
             except Exception:
                 results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
