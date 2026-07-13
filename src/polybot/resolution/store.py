@@ -204,6 +204,10 @@ class ResolutionStore:
         ).fetchone()
         if row is None:
             return None
+        if self._conn.execute(
+                "SELECT 1 FROM resolution_terminals WHERE condition_id=?", (condition_id,)
+                ).fetchone() is not None:
+            raise SettlementConflict("assessment coexists with immutable terminal authority")
         try:
             tokens = json.loads(row[1])
             canonical_tokens = json.dumps(tokens, ensure_ascii=False, separators=(",", ":"))
@@ -281,7 +285,14 @@ class ResolutionStore:
         ).fetchone()
         if row is None:
             return None
-        return _decode_terminal(row[0], row[1])
+        if self._conn.execute(
+                "SELECT 1 FROM resolution_assessments WHERE condition_id=?", (condition_id,)
+                ).fetchone() is not None:
+            raise SettlementConflict("terminal authority coexists with an assessment")
+        terminal = _decode_terminal(row[0], row[1])
+        if terminal.subject.condition_id != condition_id:
+            raise SettlementConflict("terminal payload condition contradicts its authority row")
+        return terminal
 
     def pending_terminals(self):
         self._validate_outbox_integrity()
