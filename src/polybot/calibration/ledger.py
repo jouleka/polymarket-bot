@@ -36,6 +36,26 @@ _POL15_COLUMNS = (
 )
 
 
+def _decode_identity(*, event_id, token_id, outcome_slot, sibling_json, terminal_id,
+                     condition_id, category):
+    identity = (event_id, token_id, outcome_slot, sibling_json)
+    if all(value is None for value in identity):
+        if terminal_id is not None:
+            raise SettlementConflict("forecast row has terminal state without canonical identity")
+        return None
+    if any(value is None for value in identity):
+        raise SettlementConflict("forecast row has mixed canonical identity")
+    try:
+        siblings = tuple(json.loads(sibling_json))
+        subject = ResolutionSubject(event_id, condition_id, siblings, category)
+    except (TypeError, ValueError) as exc:
+        raise SettlementConflict("forecast row has invalid canonical identity") from exc
+    if (isinstance(outcome_slot, bool) or outcome_slot not in (0, 1)
+            or subject.token_ids[outcome_slot] != token_id):
+        raise SettlementConflict("forecast row identity slot does not match token")
+    return subject.token_ids
+
+
 @dataclass(frozen=True)
 class ForecastRecord:
     forecast_id: str
@@ -301,11 +321,15 @@ class ForecastLedger:
 
     @staticmethod
     def _row(r):
+        siblings = _decode_identity(
+            event_id=r[8], token_id=r[9], outcome_slot=r[10], sibling_json=r[11],
+            terminal_id=r[15], condition_id=r[2], category=r[1],
+        )
         return ForecastRecord(
             forecast_id=r[0], category=r[1], condition_id=r[2], p=Decimal(r[3]),
             market_mid=Decimal(r[4]), created_at=r[5], resolution_status=r[6], resolved_at=r[7],
             event_id=r[8], token_id=r[9], outcome_slot=r[10],
-            sibling_token_ids=None if r[11] is None else tuple(json.loads(r[11])),
+            sibling_token_ids=siblings,
             resolution_value=None if r[12] is None else Decimal(r[12]),
             resolution_numerator=None if r[13] is None else int(r[13]),
             resolution_denominator=None if r[14] is None else int(r[14]), terminal_id=r[15],
