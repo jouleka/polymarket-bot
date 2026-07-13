@@ -249,6 +249,7 @@ class ResolutionStore:
             self._conn.execute("BEGIN IMMEDIATE")
             self._require_healthy_in_transaction()
             self._ensure_subject(terminal.subject)
+            self._validate_outbox_integrity()
             existing = self._conn.execute(
                 "SELECT terminal_id, payload FROM resolution_terminals WHERE condition_id=?",
                 (terminal.subject.condition_id,),
@@ -294,6 +295,7 @@ class ResolutionStore:
         ).fetchone()
         if row is None:
             return None
+        self._validate_outbox_integrity(row[0])
         if self._conn.execute(
                 "SELECT 1 FROM resolution_assessments WHERE condition_id=?", (condition_id,)
                 ).fetchone() is not None:
@@ -409,6 +411,7 @@ class ResolutionStore:
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             self._require_healthy_in_transaction()
+            self._validate_outbox_integrity()
             current = tuple(row[0] for row in self._pending_terminal_rows())
             if terminal_ids != current:
                 raise RecoveryRequired(
@@ -429,11 +432,26 @@ class ResolutionStore:
 
     def _validate_outbox_integrity(self, terminal_id=None):
         parameters = () if terminal_id is None else (terminal_id,)
-        where = "" if terminal_id is None else " WHERE terminal_id=?"
+        where = "" if terminal_id is None else " WHERE t.terminal_id=?"
         terminals = self._conn.execute(
-            "SELECT terminal_id FROM resolution_terminals" + where, parameters
+            "SELECT t.terminal_id, t.payload, t.condition_id, s.event_id, s.token_ids, "
+            "s.category, EXISTS (SELECT 1 FROM resolution_assessments AS a "
+            "WHERE a.condition_id=t.condition_id) "
+            "FROM resolution_terminals AS t LEFT JOIN resolution_subjects AS s "
+            "USING (condition_id)" + where,
+            parameters,
         ).fetchall()
-        for (stored_terminal_id,) in terminals:
+        for (stored_terminal_id, payload, condition_id, event_id, token_json, category,
+             has_assessment) in terminals:
+            terminal = _decode_terminal(stored_terminal_id, payload)
+            expected_tokens = json.dumps(
+                list(terminal.subject.token_ids), ensure_ascii=False, separators=(",", ":")
+            )
+            if (has_assessment or terminal.subject.condition_id != condition_id
+                    or terminal.subject.event_id != event_id
+                    or expected_tokens != token_json
+                    or terminal.subject.category != category):
+                raise SettlementConflict("terminal authority contradicts immutable subject state")
             rows = self._conn.execute(
                 "SELECT role, state, delivered_at FROM resolution_outbox "
                 "WHERE terminal_id=? ORDER BY sequence",
