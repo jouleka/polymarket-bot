@@ -69,6 +69,18 @@ def test_assessment_round_trips_and_replaces_only_same_subject(tmp_path):
             reopened.record_assessment(conflicting)
 
 
+@pytest.mark.parametrize(
+    "classified", [DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL]
+)
+def test_assessment_rejects_classified_terminal_paths(classified):
+    with pytest.raises(ValueError, match="UNKNOWN"):
+        ResolutionAssessment(
+            _subject("63"), LifecyclePhase.FINALIZED, classified,
+            PayoutVector((1, 0), 1), 100, "0x" + "11" * 32,
+            "classified paths must become immutable terminals",
+        )
+
+
 def test_terminal_atomically_creates_three_ordered_outbox_rows(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminal = _terminal("71")
