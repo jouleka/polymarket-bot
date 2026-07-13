@@ -9,6 +9,7 @@ from polybot.resolution.models import (
     LifecyclePhase,
     ProviderObservation,
     ResolutionSubject,
+    TerminalResolution,
 )
 from polybot.resolution.store import ResolutionAssessment, ResolutionStore
 
@@ -105,9 +106,17 @@ class ResolutionFeed:
                         DisputeState.UNKNOWN, None, detail,
                     ))
                 else:
+                    terminal = TerminalResolution.from_observations(
+                        subject, observations[0], observations[1]
+                    )
+                    created = self._store.accept_terminal(terminal)
+                    disposition = (
+                        PollDisposition.ACCEPTED if created
+                        else PollDisposition.ALREADY_TERMINAL
+                    )
                     results.append(PollResult(
-                        subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
-                        "finalized reconciliation is not available",
+                        subject.condition_id, disposition, terminal.dispute,
+                        terminal.terminal_id, "providers agree terminal authority",
                     ))
             except Exception:
                 results.append(PollResult(

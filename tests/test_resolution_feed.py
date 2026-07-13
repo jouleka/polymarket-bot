@@ -162,3 +162,37 @@ def test_poll_persists_matching_unknown_as_excluded_assessment(tmp_path):
         assert assessment.payout == PayoutVector((1, 1), 2)
         assert store.terminal_for(subject.condition_id) is None
         assert store.pending_outbox(10) == ()
+
+
+def test_poll_accepts_matching_clear_terminal(tmp_path):
+    subject = _subject("86")
+    block_hash = "0x" + "88" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((3, 1), 4),
+        dispute=DisputeState.CLEAR, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        ),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=21, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, (first, second)).poll((subject,))
+        terminal = store.terminal_for(subject.condition_id)
+        assert result.disposition is PollDisposition.ACCEPTED
+        assert result.dispute is DisputeState.CLEAR
+        assert result.terminal_id == terminal.terminal_id
+        assert terminal.payout == PayoutVector((3, 1), 4)
+        assert store.assessment_for(subject.condition_id) is None
+        assert [record.role for record in store.pending_outbox(10)] == [
+            "FORECAST", "MAKER", "SHADOW"
+        ]
