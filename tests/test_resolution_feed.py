@@ -10,7 +10,7 @@ from polybot.resolution.errors import (
     ResolutionUnavailable,
     SettlementConflict,
 )
-from polybot.resolution.feed import PollDisposition, ResolutionFeed
+from polybot.resolution.feed import PollDisposition, PollResult, ResolutionFeed
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -130,6 +130,24 @@ def test_empty_poll_is_network_free_noop(tmp_path):
         assert ResolutionFeed(store, (first, second)).poll(()) == ()
         assert first.chain_calls == second.chain_calls == 0
         assert first.head_calls == second.head_calls == 0
+
+
+@pytest.mark.parametrize("values", [
+    ("bad", PollDisposition.UNAVAILABLE, None, None, "unavailable"),
+    (_subject().condition_id, "UNAVAILABLE", None, None, "unavailable"),
+    (_subject().condition_id, PollDisposition.UNAVAILABLE, "UNKNOWN", None,
+     "unavailable"),
+    (_subject().condition_id, PollDisposition.UNAVAILABLE, None, "bad",
+     "unavailable"),
+    (_subject().condition_id, PollDisposition.UNAVAILABLE, None, None, ""),
+    (_subject().condition_id, PollDisposition.ACCEPTED, DisputeState.CLEAR,
+     None, "accepted"),
+    (_subject().condition_id, PollDisposition.UNKNOWN, DisputeState.CLEAR,
+     None, "unknown"),
+])
+def test_poll_result_rejects_malformed_or_incoherent_public_state(values):
+    with pytest.raises((TypeError, ValueError)):
+        PollResult(*values)
 
 
 def test_feed_uses_lower_head_minus_exactly_five(tmp_path):
