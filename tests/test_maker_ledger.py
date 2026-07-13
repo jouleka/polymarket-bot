@@ -7,6 +7,12 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.maker.ledger import MakerFillRecord, MakerLedger
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 
 def _ledger(path):
@@ -19,6 +25,55 @@ def _fill(ledger, fid, *, token="t1", cond="c1", category="politics", side="BUY"
                               side=side, shares=Decimal(shares),
                               price_exec=Decimal(price_exec), fill_mid=Decimal(fill_mid),
                               reward_accrued=Decimal(reward))
+
+
+def _terminal(condition_id, payout, *, dispute=DisputeState.CLEAR):
+    return TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
+        payout=payout,
+        dispute=dispute,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+
+
+def test_maker_terminal_projects_clear_and_excluded_values(tmp_path):
+    clear_condition = "0x" + "21" * 32
+    clear = _terminal(clear_condition, PayoutVector((1, 2), 3))
+    with _ledger(str(tmp_path / "clear.db")) as ledger:
+        ledger.record_fill(
+            "fractional", token_id="101", condition_id=clear_condition,
+            category="politics", side="BUY", shares=Decimal("10"),
+            price_exec=Decimal("0.48"), fill_mid=Decimal("0.50"),
+            reward_accrued=Decimal("0.25"), event_id="event-1", outcome_slot=0,
+            sibling_token_ids=("101", "202"),
+        )
+        assert ledger.apply_terminal(clear) == 1
+        record = ledger.all()[0]
+        assert record.status == "SETTLED"
+        assert str(record.resolution_value) == "0." + "3" * 78
+        assert (record.resolution_numerator, record.resolution_denominator) == (1, 3)
+        assert record.terminal_id == clear.terminal_id
+
+    for byte, dispute in (("22", DisputeState.DISPUTED), ("23", DisputeState.MANUAL)):
+        condition_id = "0x" + byte * 32
+        terminal = _terminal(condition_id, PayoutVector((3, 1), 4), dispute=dispute)
+        with _ledger(str(tmp_path / f"{dispute.value}.db")) as ledger:
+            ledger.record_fill(
+                dispute.value, token_id="101", condition_id=condition_id,
+                category="politics", side="BUY", shares=Decimal("10"),
+                price_exec=Decimal("0.48"), fill_mid=Decimal("0.50"),
+                reward_accrued=Decimal("0.25"), event_id="event-1", outcome_slot=0,
+                sibling_token_ids=("101", "202"),
+            )
+            assert ledger.apply_terminal(terminal) == 1
+            record = ledger.all()[0]
+            assert record.status == "DISPUTED" and record.resolution_value is None
+            assert record.terminal_id == terminal.terminal_id
 
 
 def test_maker_v0_database_migrates_to_nullable_identity(tmp_path):
