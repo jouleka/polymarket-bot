@@ -115,7 +115,7 @@ class ResolutionFeed:
                 self.verify_terminal(terminal)
             except SettlementConflict:
                 raise
-            except Exception:
+            except ResolutionUnavailable:
                 results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                     "stored terminal verification unavailable",
