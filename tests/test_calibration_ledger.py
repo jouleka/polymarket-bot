@@ -54,6 +54,38 @@ def test_forecast_v0_database_migrates_to_nullable_identity(tmp_path):
         )
 
 
+def test_forecast_canonical_identity_is_all_or_none_and_slot_matches_token(tmp_path):
+    condition_id = "0x" + "ab" * 32
+    siblings = ("11", "22")
+    with _ledger(str(tmp_path / "f.db")) as ledger:
+        assert ledger.record_forecast(
+            "canonical", category="politics", condition_id=condition_id,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="e1", token_id="22",
+            outcome_slot=1, sibling_token_ids=siblings,
+        ) is True
+        record = ledger.get("canonical")
+        assert (
+            record.event_id, record.token_id, record.outcome_slot, record.sibling_token_ids
+        ) == ("e1", "22", 1, siblings)
+        assert ledger._conn.execute(
+            "SELECT sibling_token_ids FROM forecasts WHERE forecast_id='canonical'"
+        ).fetchone()[0] == '["11","22"]'
+
+        for forecast_id, identity in (
+            ("mixed", {"event_id": "e1", "token_id": "22", "outcome_slot": 1}),
+            ("wrong-slot", {
+                "event_id": "e1", "token_id": "22", "outcome_slot": 0,
+                "sibling_token_ids": siblings,
+            }),
+        ):
+            with pytest.raises(ValueError, match="identity|slot|token"):
+                ledger.record_forecast(
+                    forecast_id, category="politics", condition_id=condition_id,
+                    p=Decimal("0.7"), market_mid=Decimal("0.6"), **identity,
+                )
+            assert ledger.get(forecast_id) is None
+
+
 def test_record_and_get_round_trips(tmp_path):
     with _ledger(str(tmp_path / "f.db")) as l:
         assert _rec(l, "f1") is True

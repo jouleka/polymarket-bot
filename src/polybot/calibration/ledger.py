@@ -12,6 +12,8 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+from polybot.resolution.models import ResolutionSubject
+
 # Honest win/loss vs the two non-honest outcomes excluded from Brier/k: a whale-captured UMA
 # flip (DISPUTED_LOST) and a refund/50-50 (VOID) must not poison calibration.
 VALID_STATUSES = ("WON", "LOST", "DISPUTED_LOST", "VOID")
@@ -89,7 +91,9 @@ class ForecastLedger:
                 self._conn.execute(f"ALTER TABLE forecasts ADD COLUMN {name} {sql_type}")
         self._conn.commit()
 
-    def record_forecast(self, forecast_id, *, category, condition_id, p, market_mid):
+    def record_forecast(self, forecast_id, *, category, condition_id, p, market_mid,
+                        event_id=None, token_id=None, outcome_slot=None,
+                        sibling_token_ids=None):
         """INSERT a pending forecast (idempotent on ``forecast_id``). Returns True if newly
         inserted, False if a duplicate. Numeric fields stored as exact strings.
 
@@ -98,11 +102,34 @@ class ForecastLedger:
         for name, value in (("p", p), ("market_mid", market_mid)):
             if not value.is_finite() or not (Decimal(0) <= value <= Decimal(1)):
                 raise ValueError(f"{name} must be a finite probability in [0, 1], got {value}")
+        identity = (event_id, token_id, outcome_slot, sibling_token_ids)
+        if any(value is not None for value in identity):
+            if any(value is None for value in identity):
+                raise ValueError("canonical forecast identity must be all-or-none")
+            subject = ResolutionSubject(
+                event_id=event_id,
+                condition_id=condition_id,
+                token_ids=sibling_token_ids,
+                category=category,
+            )
+            if (isinstance(outcome_slot, bool) or not isinstance(outcome_slot, int)
+                    or outcome_slot not in (0, 1)):
+                raise ValueError("canonical forecast outcome slot must be 0 or 1")
+            if subject.token_ids[outcome_slot] != token_id:
+                raise ValueError("canonical forecast slot does not match selected token")
+            sibling_json = json.dumps(
+                list(subject.token_ids), ensure_ascii=False, separators=(",", ":")
+            )
+        else:
+            sibling_json = None
         cur = self._conn.execute(
             "INSERT OR IGNORE INTO forecasts "
-            "(forecast_id, category, condition_id, p, market_mid, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (forecast_id, category, condition_id, str(p), str(market_mid), self._stamper.stamp()),
+            "(forecast_id, category, condition_id, p, market_mid, created_at, event_id, token_id, "
+            "outcome_slot, sibling_token_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                forecast_id, category, condition_id, str(p), str(market_mid),
+                self._stamper.stamp(), event_id, token_id, outcome_slot, sibling_json,
+            ),
         )
         self._conn.commit()
         return cur.rowcount > 0
