@@ -15,3 +15,7 @@ class ConditionAlreadyTerminal(ResolutionError):
 
 class SettlementConflict(ResolutionError):
     """Terminal authority contradicts immutable stored state."""
+
+
+class IntegrityHalted(ResolutionError):
+    """The central resolution store has persistently halted on a contradiction."""
