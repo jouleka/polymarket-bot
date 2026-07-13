@@ -1,6 +1,7 @@
 """POL-15 pure resolution authority models."""
 
 import pytest
+from decimal import getcontext
 from fractions import Fraction
 
 from polybot.resolution.models import PayoutVector, ResolutionSubject
@@ -51,3 +52,19 @@ def test_payout_vector_preserves_every_valid_binary_fraction():
     for slot in (-1, 2, True, "0"):
         with pytest.raises((TypeError, ValueError, IndexError)):
             payout.fraction_for(slot)
+
+
+def test_decimal_projection_ignores_ambient_context():
+    payout = PayoutVector((1, 2), 3)
+    original = getcontext().copy()
+    try:
+        values = []
+        for precision in (5, 100):
+            getcontext().prec = precision
+            values.append(payout.decimal_for(0))
+            assert getcontext().prec == precision
+        expected = "0." + "3" * 78
+        assert [str(value) for value in values] == [expected, expected]
+    finally:
+        getcontext().prec = original.prec
+        getcontext().rounding = original.rounding

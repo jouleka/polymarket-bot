@@ -1,6 +1,7 @@
 """Pure authority models for resolution and settlement."""
 
 from dataclasses import dataclass
+from decimal import Context, Decimal, ROUND_HALF_EVEN, localcontext
 from fractions import Fraction
 import re
 
@@ -8,6 +9,7 @@ import re
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
 _TOKEN_ID = re.compile(r"[1-9][0-9]*\Z")
 _UINT256_MAX = 2**256 - 1
+_PROJECTION_CONTEXT = Context(prec=78, rounding=ROUND_HALF_EVEN)
 
 
 def _exact_nonempty(value, name):
@@ -65,3 +67,8 @@ class PayoutVector:
         if isinstance(slot, bool) or not isinstance(slot, int) or slot not in (0, 1):
             raise IndexError(f"outcome slot must be 0 or 1, got {slot!r}")
         return Fraction(self.numerators[slot], self.denominator)
+
+    def decimal_for(self, slot):
+        fraction = self.fraction_for(slot)
+        with localcontext(_PROJECTION_CONTEXT):
+            return Decimal(fraction.numerator) / Decimal(fraction.denominator)
