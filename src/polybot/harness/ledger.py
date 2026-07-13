@@ -200,15 +200,27 @@ class ShadowLedger:
         elif resolution_value is not None:
             raise ValueError(
                 f"resolution_value must be None for {status}, got {resolution_value}")
-        cur = self._conn.execute(
-            "UPDATE shadow_trades SET status=?, resolution_value=?, settled_at=? "
-            "WHERE trade_id=?",
-            (status, None if resolution_value is None else str(resolution_value),
-             self._stamper.stamp(), trade_id),
-        )
-        self._conn.commit()
-        if cur.rowcount == 0:
-            raise KeyError(f"no shadow trade {trade_id!r} to settle")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT event_id, outcome_slot, sibling_token_ids, terminal_id "
+                "FROM shadow_trades WHERE trade_id=?", (trade_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no shadow trade {trade_id!r} to settle")
+            if any(value is not None for value in row):
+                raise SettlementConflict("legacy shadow mutator cannot settle canonical rows")
+            self._conn.execute(
+                "UPDATE shadow_trades SET status=?, resolution_value=?, settled_at=? "
+                "WHERE trade_id=?",
+                (status, None if resolution_value is None else str(resolution_value),
+                 self._stamper.stamp(), trade_id),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
 
     def apply_terminal(self, terminal):
         """Project a classified terminal into shadow rows and an immutable receipt."""

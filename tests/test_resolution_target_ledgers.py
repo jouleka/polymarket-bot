@@ -1,0 +1,99 @@
+"""Cross-ledger POL-15 target authority fences."""
+
+from decimal import Decimal
+
+import pytest
+
+from polybot.calibration.ledger import ForecastLedger
+from polybot.core.clock import MonotonicStamper
+from polybot.harness.ledger import ShadowLedger
+from polybot.maker.ledger import MakerLedger
+from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
+
+
+def _terminal(condition_id):
+    return TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
+        payout=PayoutVector((1, 0), 1),
+        dispute=DisputeState.CLEAR,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+
+
+def test_legacy_settlement_mutators_reject_canonical_pending_rows(tmp_path):
+    stamper = MonotonicStamper()
+
+    forecast_condition = "0x" + "41" * 32
+    with ForecastLedger(str(tmp_path / "forecast.db"), stamper) as ledger:
+        ledger.record_forecast(
+            "legacy", category="politics", condition_id="legacy-f",
+            p=Decimal("0.7"), market_mid=Decimal("0.6"),
+        )
+        ledger.record_resolution("legacy", "WON")
+        ledger.record_forecast(
+            "canonical", category="politics", condition_id=forecast_condition,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        with pytest.raises(SettlementConflict):
+            ledger.record_resolution("canonical", "WON")
+        ledger.apply_terminal(_terminal(forecast_condition))
+        with pytest.raises(SettlementConflict):
+            ledger.record_resolution("canonical", "LOST")
+
+    maker_condition = "0x" + "42" * 32
+    maker_values = dict(
+        token_id="101", category="politics", side="BUY", shares=Decimal("10"),
+        price_exec=Decimal("0.48"), fill_mid=Decimal("0.50"),
+        reward_accrued=Decimal("0.25"),
+    )
+    with MakerLedger(str(tmp_path / "maker.db"), stamper) as ledger:
+        ledger.record_fill("legacy", condition_id="legacy-m", **maker_values)
+        ledger.record_settlement("legacy", status="WON", resolution_value=Decimal("1"))
+        ledger.record_fill(
+            "canonical", condition_id=maker_condition, **maker_values, event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        with pytest.raises(SettlementConflict):
+            ledger.record_settlement(
+                "canonical", status="WON", resolution_value=Decimal("1")
+            )
+        ledger.apply_terminal(_terminal(maker_condition))
+        with pytest.raises(SettlementConflict):
+            ledger.record_settlement(
+                "canonical", status="LOST", resolution_value=Decimal("0")
+            )
+
+    shadow_condition = "0x" + "43" * 32
+    shadow_values = dict(
+        token_id="101", category="politics", side="BUY", shares=Decimal("10"),
+        fill_price=Decimal("0.48"), fill_mid=Decimal("0.50"),
+        reward_accrued=Decimal("0.25"),
+    )
+    with ShadowLedger(str(tmp_path / "shadow.db"), stamper) as ledger:
+        ledger.record_trade("legacy", condition_id="legacy-s", **shadow_values)
+        ledger.record_settlement("legacy", status="WON", resolution_value=Decimal("1"))
+        ledger.record_trade(
+            "canonical", condition_id=shadow_condition, **shadow_values, event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        with pytest.raises(SettlementConflict):
+            ledger.record_settlement(
+                "canonical", status="WON", resolution_value=Decimal("1")
+            )
+        ledger.apply_terminal(_terminal(shadow_condition))
+        with pytest.raises(SettlementConflict):
+            ledger.record_settlement(
+                "canonical", status="LOST", resolution_value=Decimal("0")
+            )
