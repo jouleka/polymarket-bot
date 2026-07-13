@@ -232,14 +232,14 @@ def test_target_terminal_replay_validates_settled_rows(
             ledger._conn.execute(
                 f"UPDATE {table} SET {settled_column}=NULL WHERE {key}='row'"
             )
-        else:
+        elif corruption == "terminal_id":
             ledger._conn.execute(
                 f"UPDATE {table} SET terminal_id='different' WHERE {key}='row'"
             )
-            if corruption == "missing_receipt":
-                ledger._conn.execute(
-                    "DELETE FROM resolution_receipts WHERE condition_id=?", (condition_id,)
-                )
+        else:
+            ledger._conn.execute(
+                "DELETE FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+            )
         ledger._conn.commit()
 
         with pytest.raises(SettlementConflict, match="settled|terminal|receipt|projection"):
