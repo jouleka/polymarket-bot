@@ -16,7 +16,7 @@ from decimal import Decimal, ROUND_CEILING
 from polybot.calibration.scoring import brier, brier_skill, murphy
 from polybot.harness import pnl
 
-_HONEST_SHADOW = ("WON", "LOST")
+_HONEST_SHADOW = ("WON", "LOST", "SETTLED")
 _HONEST_FORECAST = {"WON": 1, "LOST": 0}
 
 
@@ -52,7 +52,7 @@ def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_g
     # which would let a net-NEGATIVE OOS window clear the positive-with-margin gate. Fail LOUD.
     if family_size < 1:
         raise ValueError(f"family_size must be >= 1, got {family_size}")
-    # --- SHADOW side: honest WON/LOST kept; DISPUTED/VOID counted; net over the OOS window ---
+    # --- SHADOW side: economic settlements kept; excluded paths counted; OOS net follows ---
     honest = []
     n_disputed = 0
     for r in shadow_ledger.settled(category):
@@ -61,8 +61,8 @@ def evaluate_category(category, *, shadow_ledger, forecast_ledger, calibration_g
         elif r.status in ("DISPUTED", "VOID"):
             n_disputed += 1
         else:
-            # Exhaustive: a status outside VALID_STATUSES (DB corruption / an untaught 5th status)
-            # must fail loud, never silently vanish from the accounting (mirrors MakerTracker).
+            # Exhaustive: an unknown status must fail loud, never silently vanish from the
+            # accounting (mirrors MakerTracker).
             raise ValueError(f"unhandled shadow status {r.status!r}")
 
     n_resolved = len(honest)
