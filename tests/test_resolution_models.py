@@ -1,6 +1,7 @@
 """POL-15 pure resolution authority models."""
 
 import pytest
+from dataclasses import replace
 from decimal import getcontext
 from fractions import Fraction
 
@@ -10,8 +11,10 @@ from polybot.resolution.models import (
     PayoutVector,
     ProviderObservation,
     ResolutionSubject,
+    TerminalResolution,
     fold_dispute,
 )
+from polybot.resolution.errors import ResolutionUnavailable
 
 
 _CONDITION = "0x" + "11" * 32
@@ -125,3 +128,36 @@ def test_path_precedence_is_manual_disputed_unknown_clear():
         fold_dispute(())
     with pytest.raises(TypeError):
         fold_dispute(("MANUAL",))
+
+
+def test_terminal_requires_two_distinct_matching_finalized_observations():
+    subject = ResolutionSubject("event-1", _CONDITION, ("101", "202"), "politics")
+    first = ProviderObservation(
+        provider_id="archive-b", block_number=10, block_hash=_BLOCK_HASH,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((3, 1), 4),
+        dispute=DisputeState.CLEAR,
+        collateral_address="0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+        derived_token_ids=subject.token_ids, adapter_address=_ADDRESS,
+        question_id=_QUESTION,
+        audit_event_ids=(f"9:1:{_TX_HASH}:CONDITION_PREPARATION",),
+    )
+    second = replace(first, provider_id="archive-a")
+    terminal = TerminalResolution.from_observations(subject, first, second)
+    assert terminal.provider_ids == ("archive-a", "archive-b")
+    assert terminal.payout == PayoutVector((3, 1), 4)
+
+    bad_pairs = (
+        (first, replace(first, provider_id="archive-b")),
+        (first, replace(second, block_number=11)),
+        (first, replace(second, payout=PayoutVector((1, 3), 4))),
+        (first, replace(second, dispute=DisputeState.UNKNOWN)),
+        (first, replace(second, derived_token_ids=("202", "101"))),
+    )
+    for left, right in bad_pairs:
+        with pytest.raises(ResolutionUnavailable):
+            TerminalResolution.from_observations(subject, left, right)
+    with pytest.raises(ResolutionUnavailable):
+        TerminalResolution.from_observations(
+            subject, replace(first, dispute=DisputeState.UNKNOWN),
+            replace(second, dispute=DisputeState.UNKNOWN),
+        )

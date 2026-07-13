@@ -1,0 +1,9 @@
+"""Fail-closed POL-15 exception hierarchy."""
+
+
+class ResolutionError(Exception):
+    """Base resolution-feed failure."""
+
+
+class ResolutionUnavailable(ResolutionError):
+    """Retryable provider or per-condition authority failure."""

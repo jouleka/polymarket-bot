@@ -6,6 +6,8 @@ from enum import Enum
 from fractions import Fraction
 import re
 
+from polybot.resolution.errors import ResolutionUnavailable
+
 
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
 _TOKEN_ID = re.compile(r"[1-9][0-9]*\Z")
@@ -15,6 +17,7 @@ _AUDIT_EVENT = re.compile(
 )
 _UINT256_MAX = 2**256 - 1
 _PROJECTION_CONTEXT = Context(prec=78, rounding=ROUND_HALF_EVEN)
+PUSD_ADDRESS = "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
 
 
 def _exact_nonempty(value, name):
@@ -175,3 +178,52 @@ class ProviderObservation:
             raise ValueError("audit event IDs must be unique")
         if positions != sorted(positions):
             raise ValueError("audit event IDs must be in chain order")
+
+
+@dataclass(frozen=True)
+class TerminalResolution:
+    subject: ResolutionSubject
+    payout: PayoutVector
+    dispute: DisputeState
+    block_number: int
+    block_hash: str
+    adapter_address: str
+    question_id: str
+    audit_event_ids: tuple[str, ...]
+    provider_ids: tuple[str, str]
+
+    @classmethod
+    def from_observations(cls, subject, first, second):
+        if not isinstance(subject, ResolutionSubject):
+            raise TypeError("subject must be a ResolutionSubject")
+        if not isinstance(first, ProviderObservation) or not isinstance(
+                second, ProviderObservation):
+            raise TypeError("terminal evidence must be ProviderObservation values")
+        if first.provider_id == second.provider_id:
+            raise ResolutionUnavailable("terminal providers must be distinct")
+        fields = (
+            "block_number", "block_hash", "phase", "payout", "dispute",
+            "collateral_address", "derived_token_ids", "adapter_address",
+            "question_id", "audit_event_ids",
+        )
+        if any(getattr(first, name) != getattr(second, name) for name in fields):
+            raise ResolutionUnavailable("terminal providers disagree")
+        if first.phase is not LifecyclePhase.FINALIZED:
+            raise ResolutionUnavailable("condition is not finalized")
+        if first.dispute is DisputeState.UNKNOWN:
+            raise ResolutionUnavailable("unknown path is not terminal")
+        if first.collateral_address != PUSD_ADDRESS:
+            raise ResolutionUnavailable("terminal collateral is not supported pUSD")
+        if first.derived_token_ids != subject.token_ids:
+            raise ResolutionUnavailable("chain-derived token order disagrees with subject")
+        return cls(
+            subject=subject,
+            payout=first.payout,
+            dispute=first.dispute,
+            block_number=first.block_number,
+            block_hash=first.block_hash,
+            adapter_address=first.adapter_address,
+            question_id=first.question_id,
+            audit_event_ids=first.audit_event_ids,
+            provider_ids=tuple(sorted((first.provider_id, second.provider_id))),
+        )
