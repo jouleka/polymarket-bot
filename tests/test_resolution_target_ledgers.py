@@ -116,6 +116,52 @@ def test_target_row_decoders_reject_mixed_identity(tmp_path, kind, corrupt_colum
 
 
 @pytest.mark.parametrize("kind", ["forecast", "maker", "shadow"])
+@pytest.mark.parametrize("sibling_json", ['{"101":0,"202":0}', '["101", "202"]'])
+def test_target_decoders_require_exact_canonical_sibling_array(
+        tmp_path, kind, sibling_json):
+    condition_id = "0x" + "51" * 32
+    terminal = _terminal(condition_id)
+    stamper = MonotonicStamper()
+    if kind == "forecast":
+        ledger = ForecastLedger(str(tmp_path / f"{kind}.db"), stamper)
+        ledger.record_forecast(
+            "row", category="politics", condition_id=condition_id,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key, read = "forecasts", "forecast_id", lambda: ledger.get("row")
+    elif kind == "maker":
+        ledger = MakerLedger(str(tmp_path / f"{kind}.db"), stamper)
+        ledger.record_fill(
+            "row", token_id="101", condition_id=condition_id, category="politics",
+            side="BUY", shares=Decimal("10"), price_exec=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key, read = "maker_fills", "fill_id", ledger.all
+    else:
+        ledger = ShadowLedger(str(tmp_path / f"{kind}.db"), stamper)
+        ledger.record_trade(
+            "row", token_id="101", condition_id=condition_id, category="politics",
+            side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key, read = "shadow_trades", "trade_id", ledger.all
+    try:
+        ledger._conn.execute(
+            f"UPDATE {table} SET sibling_token_ids=? WHERE {key}='row'", (sibling_json,)
+        )
+        ledger._conn.commit()
+        with pytest.raises(SettlementConflict, match="canonical identity"):
+            read()
+        with pytest.raises(SettlementConflict, match="canonical identity"):
+            ledger.apply_terminal(terminal)
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize("kind", ["forecast", "maker", "shadow"])
 @pytest.mark.parametrize("corruption", ["terminal_id", "resolution_value", "missing_receipt"])
 def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruption):
     condition_id = "0x" + "52" * 32
