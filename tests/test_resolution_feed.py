@@ -464,6 +464,51 @@ def test_poll_isolates_retryable_unavailability_in_input_order(tmp_path):
         assert store.assessment_for(later_subject.condition_id) is not None
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("provider_id", "archive-wrong"),
+    ("block_number", 16),
+    ("block_hash", "0x" + "49" * 32),
+    ("phase", LifecyclePhase.UNRESOLVED),
+    ("payout", PayoutVector((1, 0), 1)),
+    ("dispute", DisputeState.CLEAR),
+    ("collateral_address", "0x" + "99" * 20),
+    ("derived_token_ids", ("202", "101")),
+    ("adapter_address", "0x" + "54" * 20),
+    ("question_id", "0x" + "65" * 32),
+    ("audit_event_ids", (
+        "14:2:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+    )),
+])
+def test_poll_rejects_every_provider_observation_authority_disagreement(
+        tmp_path, field, value):
+    subject = _subject("9a")
+    block_hash = "0x" + "48" * 32
+    first_observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 1), 2),
+        dispute=DisputeState.UNKNOWN, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids,
+        adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+        ),
+    )
+    second_observation = replace(first_observation, provider_id="archive-b")
+    object.__setattr__(second_observation, field, value)
+    providers = (
+        _Provider("archive-a", head=20, block_hash=block_hash,
+                  observation=first_observation),
+        _Provider("archive-b", head=20, block_hash=block_hash,
+                  observation=second_observation),
+    )
+    with ResolutionStore(str(tmp_path / f"{field}.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, providers).poll((subject,))
+        assert result.disposition is PollDisposition.UNAVAILABLE
+        assert store.assessment_for(subject.condition_id) is None
+        assert store.pending_outbox(10) == ()
+
+
 def test_repeat_poll_verifies_original_terminal_coordinate(tmp_path):
     subject = _subject("8c")
     block_hash = "0x" + "bb" * 32
