@@ -114,6 +114,10 @@ def test_provider_observation_separates_phase_from_payout_and_path():
         terminal | {"derived_token_ids": None},
         terminal | {"adapter_address": None},
         terminal | {"audit_event_ids": ()},
+        terminal | {"audit_event_ids": (
+            f"9:1:{_BLOCK_HASH}:CONDITION_PREPARATION",
+            f"9:1:{_TX_HASH}:QUESTION_RESOLVED",
+        )},
         unresolved.__dict__ | {"payout": PayoutVector((1, 0), 1)},
         unresolved.__dict__ | {"dispute": DisputeState.CLEAR},
     )
@@ -164,6 +168,36 @@ def test_terminal_requires_two_distinct_matching_finalized_observations():
             subject, replace(first, dispute=DisputeState.UNKNOWN),
             replace(second, dispute=DisputeState.UNKNOWN),
         )
+
+
+def test_terminal_direct_construction_enforces_public_authority_contract():
+    terminal = TerminalResolution(
+        subject=ResolutionSubject("event-1", _CONDITION, ("101", "202"), "politics"),
+        payout=PayoutVector((1, 0), 1),
+        dispute=DisputeState.CLEAR,
+        block_number=10,
+        block_hash=_BLOCK_HASH,
+        adapter_address=_ADDRESS,
+        question_id=_QUESTION,
+        audit_event_ids=(f"9:1:{_TX_HASH}:CONDITION_RESOLUTION",),
+        provider_ids=("archive-b", "archive-a"),
+    )
+    assert terminal.provider_ids == ("archive-b", "archive-a")
+
+    for change in (
+        {"subject": object()},
+        {"payout": object()},
+        {"dispute": DisputeState.UNKNOWN},
+        {"block_number": True},
+        {"block_hash": "0x22"},
+        {"adapter_address": "0x33"},
+        {"question_id": "0x44"},
+        {"audit_event_ids": ()},
+        {"provider_ids": ("archive-a", "archive-a")},
+        {"provider_ids": ("archive-a",)},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            replace(terminal, **change)
 
 
 def test_terminal_v1_canonical_bytes_and_hash():
