@@ -166,12 +166,21 @@ def test_target_decoders_require_exact_canonical_sibling_array(
     "terminal_id", "status", "resolution_value", "resolution_numerator",
     "resolution_denominator", "settled_at", "missing_receipt",
 ])
-@pytest.mark.parametrize("terminal_case", ["binary", "fractional", "disputed", "manual"])
+@pytest.mark.parametrize("terminal_case", [
+    "binary", "fractional", "disputed", "manual", "fractional_disputed",
+    "fractional_manual",
+])
 def test_target_terminal_replay_validates_settled_rows(
         tmp_path, kind, corruption, terminal_case):
     condition_id = "0x" + "52" * 32
-    if terminal_case == "fractional":
-        terminal = _terminal(condition_id, payout=PayoutVector((1, 2), 3))
+    if terminal_case.startswith("fractional"):
+        dispute = {
+            "fractional_disputed": DisputeState.DISPUTED,
+            "fractional_manual": DisputeState.MANUAL,
+        }.get(terminal_case, DisputeState.CLEAR)
+        terminal = _terminal(
+            condition_id, payout=PayoutVector((1, 2), 3), dispute=dispute
+        )
     elif terminal_case == "disputed":
         terminal = _terminal(condition_id, dispute=DisputeState.DISPUTED)
     elif terminal_case == "manual":
