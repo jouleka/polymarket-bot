@@ -105,7 +105,8 @@ class ResolutionFeed:
                         subject.condition_id, PollDisposition.UNKNOWN,
                         DisputeState.UNKNOWN, None, detail,
                     ))
-                else:
+                elif first.dispute in (
+                        DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
                     terminal = TerminalResolution.from_observations(
                         subject, observations[0], observations[1]
                     )
@@ -117,6 +118,11 @@ class ResolutionFeed:
                     results.append(PollResult(
                         subject.condition_id, disposition, terminal.dispute,
                         terminal.terminal_id, "providers agree terminal authority",
+                    ))
+                else:
+                    results.append(PollResult(
+                        subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
+                        "classified terminal reconciliation is unavailable",
                     ))
             except Exception:
                 results.append(PollResult(
