@@ -683,6 +683,17 @@ def test_terminal_verification_requires_original_provider_pair(tmp_path, entrypo
             reopened.require_healthy()
 
 
+def test_terminal_verification_accepts_original_provider_pair_in_either_order(tmp_path):
+    terminal = replace(_terminal("a2"), provider_ids=("archive-b", "archive-a"))
+    first = _Provider("archive-a")
+    second = _Provider("archive-b")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+        assert feed.verify_terminal(terminal) is None
+        store.require_healthy()
+        assert first.verify_calls == second.verify_calls == [terminal]
+
+
 def test_recover_pending_verifies_all_before_clearing_barrier(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminals = (_terminal("8e"), _terminal("8f"))
