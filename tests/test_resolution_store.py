@@ -223,8 +223,13 @@ def test_terminal_replay_independently_checks_stored_id_and_payload(tmp_path, co
                 "UPDATE resolution_terminals SET payload=?", (changed.canonical_bytes,)
             )
             store._conn.commit()
-        with pytest.raises(SettlementConflict, match="terminal"):
-            store.accept_terminal(terminal)
+        for operation in (
+            lambda: store.accept_terminal(terminal),
+            lambda: store.pending_outbox(10),
+            lambda: store.acknowledge(1, terminal.terminal_id, "FORECAST"),
+        ):
+            with pytest.raises(SettlementConflict, match="terminal"):
+                operation()
 
 
 @pytest.mark.parametrize("corruption", ["missing_role", "invalid_state"])
@@ -282,11 +287,36 @@ def test_store_reads_reject_redundant_authority_corruption(tmp_path, corruption)
             lookup_condition = rebound.condition_id
         store._conn.commit()
 
-        with pytest.raises(SettlementConflict, match="authority|condition|assessment"):
-            store.terminal_for(lookup_condition)
+        for operation in (
+            lambda: store.terminal_for(lookup_condition),
+            store.pending_terminals,
+            lambda: store.pending_outbox(10),
+            lambda: store.accept_terminal(terminal),
+            lambda: store.acknowledge(1, terminal.terminal_id, "FORECAST"),
+        ):
+            with pytest.raises(SettlementConflict, match="authority|condition|assessment"):
+                operation()
         if corruption == "assessment_coexists":
             with pytest.raises(SettlementConflict, match="authority|terminal"):
                 store.assessment_for(lookup_condition)
+
+
+@pytest.mark.parametrize(("column", "corrupt"), [
+    ("event_id", "other-event"),
+    ("token_ids", '["101","303"]'),
+    ("category", "sports"),
+])
+def test_terminal_read_matches_every_immutable_subject_field(tmp_path, column, corrupt):
+    terminal = _terminal("7f")
+    with ResolutionStore(str(tmp_path / f"subject-{column}.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        store._conn.execute(
+            f"UPDATE resolution_subjects SET {column}=? WHERE condition_id=?",
+            (corrupt, terminal.subject.condition_id),
+        )
+        store._conn.commit()
+        with pytest.raises(SettlementConflict, match="subject|authority"):
+            store.terminal_for(terminal.subject.condition_id)
 
 
 def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
