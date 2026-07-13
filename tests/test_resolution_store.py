@@ -284,6 +284,10 @@ def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
     with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
         store.accept_terminal(first)
         store.accept_terminal(second)
+        store._conn.execute(
+            "CREATE INDEX adversarial_pending_desc "
+            "ON resolution_outbox(state, sequence DESC)"
+        )
         pending = store.pending_outbox(4)
         assert all(isinstance(record, OutboxRecord) for record in pending)
         assert [(record.sequence, record.terminal.terminal_id, record.role)
