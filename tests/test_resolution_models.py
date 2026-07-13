@@ -10,6 +10,7 @@ from polybot.resolution.models import (
     PayoutVector,
     ProviderObservation,
     ResolutionSubject,
+    fold_dispute,
 )
 
 
@@ -113,3 +114,14 @@ def test_provider_observation_separates_phase_from_payout_and_path():
     for values in invalid:
         with pytest.raises((TypeError, ValueError)):
             ProviderObservation(**values)
+
+
+def test_path_precedence_is_manual_disputed_unknown_clear():
+    assert fold_dispute((DisputeState.CLEAR,)) is DisputeState.CLEAR
+    assert fold_dispute((DisputeState.CLEAR, DisputeState.UNKNOWN)) is DisputeState.UNKNOWN
+    assert fold_dispute((DisputeState.UNKNOWN, DisputeState.DISPUTED)) is DisputeState.DISPUTED
+    assert fold_dispute((DisputeState.DISPUTED, DisputeState.MANUAL)) is DisputeState.MANUAL
+    with pytest.raises(ValueError):
+        fold_dispute(())
+    with pytest.raises(TypeError):
+        fold_dispute(("MANUAL",))
