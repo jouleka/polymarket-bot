@@ -9,6 +9,8 @@ from polybot.resolution.feed import PollDisposition, ResolutionFeed
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
+    PUSD_ADDRESS,
+    PayoutVector,
     ProviderObservation,
     ResolutionSubject,
 )
@@ -126,5 +128,37 @@ def test_poll_persists_matching_unresolved_assessment(tmp_path):
         assert assessment.phase is LifecyclePhase.UNRESOLVED
         assert assessment.dispute is DisputeState.UNKNOWN and assessment.payout is None
         assert (assessment.block_number, assessment.block_hash) == (15, block_hash)
+        assert store.terminal_for(subject.condition_id) is None
+        assert store.pending_outbox(10) == ()
+
+
+def test_poll_persists_matching_unknown_as_excluded_assessment(tmp_path):
+    subject = _subject("85")
+    block_hash = "0x" + "44" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 1), 2),
+        dispute=DisputeState.UNKNOWN, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+        ),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=21, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, (first, second)).poll((subject,))
+        assert result.disposition is PollDisposition.UNKNOWN
+        assert result.dispute is DisputeState.UNKNOWN and result.terminal_id is None
+        assessment = store.assessment_for(subject.condition_id)
+        assert assessment.phase is LifecyclePhase.FINALIZED
+        assert assessment.dispute is DisputeState.UNKNOWN
+        assert assessment.payout == PayoutVector((1, 1), 2)
         assert store.terminal_for(subject.condition_id) is None
         assert store.pending_outbox(10) == ()
