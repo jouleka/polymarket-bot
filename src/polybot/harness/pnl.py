@@ -18,12 +18,12 @@ from polybot.maker.fees import rebate, taker_fee
 from polybot.maker.inventory import _SGN, MakerFill, adverse_selection
 from polybot.maker.netpnl import net_pnl
 
-_HONEST = ("WON", "LOST")
+_HONEST = ("WON", "LOST", "SETTLED")
 
 
 def window_net(rows, *, maker_config):
     """The S8 net identity over ``rows`` (a list of settled ShadowTradeRecords). Honest
-    WON/LOST only -- DISPUTED/VOID skipped. Empty honest window -> Decimal(0). Fails LOUD on
+    WON/LOST/SETTLED only -- DISPUTED/VOID skipped. Empty honest window -> Decimal(0). Fails LOUD on
     an unhandled status or on divergent resolution marks for one token."""
     c = maker_config
     honest = []
@@ -33,8 +33,8 @@ def window_net(rows, *, maker_config):
         elif r.status in ("DISPUTED", "VOID"):
             continue
         else:
-            # Exhaustive: a status outside {WON,LOST,DISPUTED,VOID} is corruption -- fail
-            # loud, never silently vanish from the accounting (mirrors MakerTracker).
+            # Exhaustive: an unknown status is corruption -- fail loud, never silently vanish
+            # from the accounting (mirrors MakerTracker).
             raise ValueError(f"unhandled settlement status {r.status!r}")
 
     if not honest:  # no honest settled sample in this window
