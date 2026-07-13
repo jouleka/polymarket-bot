@@ -188,6 +188,34 @@ def test_store_preserves_first_terminal_bytes(tmp_path):
         ).fetchone()[0] == 3
 
 
+@pytest.mark.parametrize("corruption", ["terminal_id", "payload"])
+def test_terminal_replay_independently_checks_stored_id_and_payload(tmp_path, corruption):
+    terminal = _terminal("7e")
+    with ResolutionStore(str(tmp_path / f"terminal-{corruption}.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        if corruption == "terminal_id":
+            corrupted_id = "f" * 64
+            store._conn.execute("PRAGMA foreign_keys=OFF")
+            store._conn.execute(
+                "UPDATE resolution_terminals SET terminal_id=?", (corrupted_id,)
+            )
+            store._conn.execute(
+                "UPDATE resolution_outbox SET terminal_id=?", (corrupted_id,)
+            )
+            store._conn.commit()
+            store._conn.execute("PRAGMA foreign_keys=ON")
+        else:
+            changed = replace(
+                terminal, block_number=201, block_hash="0x" + "88" * 32
+            )
+            store._conn.execute(
+                "UPDATE resolution_terminals SET payload=?", (changed.canonical_bytes,)
+            )
+            store._conn.commit()
+        with pytest.raises(SettlementConflict, match="terminal"):
+            store.accept_terminal(terminal)
+
+
 @pytest.mark.parametrize("corruption", ["missing_role", "invalid_state"])
 def test_store_rejects_structurally_corrupt_outbox(tmp_path, corruption):
     path = str(tmp_path / f"{corruption}.db")
