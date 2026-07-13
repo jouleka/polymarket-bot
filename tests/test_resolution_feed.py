@@ -391,3 +391,26 @@ def test_recover_pending_verifies_all_before_clearing_barrier(tmp_path):
         assert feed.recover_pending() == 2
         assert reopened.recovery_required is False
         assert first.verify_calls == second.verify_calls == list(terminals)
+
+
+def test_recover_pending_unavailable_keeps_barrier_and_outbox_pending(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    terminals = (_terminal("90"), _terminal("91"))
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        for terminal in terminals:
+            store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        pending_before = reopened.pending_outbox(100)
+        unavailable = ResolutionUnavailable("archive offline")
+        first = _Provider("archive-a", verification_error=unavailable)
+        second = _Provider("archive-b")
+        feed = ResolutionFeed(reopened, (first, second))
+
+        with pytest.raises(ResolutionUnavailable, match="offline"):
+            feed.recover_pending()
+
+        assert reopened.recovery_required is True
+        assert reopened.pending_outbox(100) == pending_before
+        assert first.verify_calls == [terminals[0]]
+        assert second.verify_calls == []
