@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.errors import ConditionAlreadyTerminal
 
 # Honest win/loss vs the two non-honest outcomes excluded from Brier/k: a whale-captured UMA
 # flip (DISPUTED_LOST) and a refund/50-50 (VOID) must not poison calibration.
@@ -89,7 +90,25 @@ class ForecastLedger:
         for name, sql_type in _POL15_COLUMNS:
             if name not in existing:
                 self._conn.execute(f"ALTER TABLE forecasts ADD COLUMN {name} {sql_type}")
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS resolution_receipts (
+                condition_id TEXT PRIMARY KEY,
+                terminal_id  TEXT UNIQUE NOT NULL,
+                payload      BLOB NOT NULL
+            )
+            """
+        )
         self._conn.commit()
+
+    def require_condition_open(self, condition_id):
+        receipt = self._conn.execute(
+            "SELECT 1 FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()
+        if receipt is not None:
+            raise ConditionAlreadyTerminal(
+                f"condition {condition_id!r} already has a terminal receipt"
+            )
 
     def record_forecast(self, forecast_id, *, category, condition_id, p, market_mid,
                         event_id=None, token_id=None, outcome_slot=None,
@@ -122,16 +141,24 @@ class ForecastLedger:
             )
         else:
             sibling_json = None
-        cur = self._conn.execute(
-            "INSERT OR IGNORE INTO forecasts "
-            "(forecast_id, category, condition_id, p, market_mid, created_at, event_id, token_id, "
-            "outcome_slot, sibling_token_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                forecast_id, category, condition_id, str(p), str(market_mid),
-                self._stamper.stamp(), event_id, token_id, outcome_slot, sibling_json,
-            ),
-        )
-        self._conn.commit()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self.require_condition_open(condition_id)
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO forecasts "
+                "(forecast_id, category, condition_id, p, market_mid, created_at, event_id, "
+                "token_id, outcome_slot, sibling_token_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    forecast_id, category, condition_id, str(p), str(market_mid),
+                    self._stamper.stamp(), event_id, token_id, outcome_slot, sibling_json,
+                ),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
         return cur.rowcount > 0
 
     def record_resolution(self, forecast_id, status):

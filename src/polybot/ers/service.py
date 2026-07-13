@@ -25,6 +25,7 @@ from polybot.ers.validator import (
     evaluate_intent,
 )
 from polybot.fusion.engine import FusionError
+from polybot.resolution.errors import ConditionAlreadyTerminal
 from polybot.ers.market_meta import (
     MarketMetadataUnavailable,
     ResolutionSubjectMetadata,
@@ -38,6 +39,7 @@ _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move
 REASON_ANCHOR_ERROR = "anchor_error"
 REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
 REASON_RESOLUTION_IDENTITY_UNAVAILABLE = "resolution_identity_unavailable"
+REASON_MARKET_RESOLVED = "market_resolved"
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,11 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         return Decision("REJECT", None, None, REASON_ANCHOR_ERROR), trade_intent
     p_clamped = anchor.p_clamped
 
+    try:
+        pipeline.forecast_ledger.require_condition_open(intent.condition_id)
+    except ConditionAlreadyTerminal:
+        return Decision("REJECT", None, None, REASON_MARKET_RESOLVED), trade_intent
+
     # 8. Record the genuine estimate: per-signal components THEN the forecast (the calibration
     #    substrate). Components FIRST: component_log fails-loud on a non-finite raw p_news (Hermes
     #    can supply Decimal("NaN")), so doing it first aborts BEFORE any forecast row is written ->
@@ -255,15 +262,18 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         forecast_id, p_news=components["p_news"], p_base=components["p_base"],
         p_micro=components["p_micro"], p_flow=components["p_flow"],
         w_news_effective=fusion_result.w_news_effective, corroborated=truth.corroborated, mid=mid)
-    pipeline.forecast_ledger.record_forecast(
-        forecast_id, category=category, condition_id=intent.condition_id,
-        p=p_clamped, market_mid=mid,
-        event_id=None if resolution_subject is None else resolution_subject.event_id,
-        token_id=None if resolution_subject is None else resolution_subject.token_id,
-        outcome_slot=None if resolution_subject is None else resolution_subject.outcome_slot,
-        sibling_token_ids=(
-            None if resolution_subject is None else resolution_subject.sibling_token_ids
-        ))
+    try:
+        pipeline.forecast_ledger.record_forecast(
+            forecast_id, category=category, condition_id=intent.condition_id,
+            p=p_clamped, market_mid=mid,
+            event_id=None if resolution_subject is None else resolution_subject.event_id,
+            token_id=None if resolution_subject is None else resolution_subject.token_id,
+            outcome_slot=None if resolution_subject is None else resolution_subject.outcome_slot,
+            sibling_token_ids=(
+                None if resolution_subject is None else resolution_subject.sibling_token_ids
+            ))
+    except ConditionAlreadyTerminal:
+        return Decision("REJECT", None, None, REASON_MARKET_RESOLVED), trade_intent
 
     # 9. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
     k = pipeline.calib_gate.k_for(category)
