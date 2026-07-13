@@ -60,6 +60,14 @@ class OutboxRecord:
     terminal: TerminalResolution
     role: str
 
+    def __post_init__(self):
+        if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence <= 0:
+            raise ValueError("outbox sequence must be a positive integer")
+        if not isinstance(self.terminal, TerminalResolution):
+            raise TypeError("outbox terminal must be a TerminalResolution")
+        if self.role not in _ROLES:
+            raise ValueError("outbox role is invalid")
+
 
 class ResolutionStore:
     def __init__(self, path, stamper):
