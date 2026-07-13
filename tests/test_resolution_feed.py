@@ -662,6 +662,32 @@ def test_repeat_poll_propagates_integrity_halt_racing_after_health_check(
         assert first.verify_calls == second.verify_calls == []
 
 
+@pytest.mark.parametrize("entrypoint", ["chain", "verification"])
+def test_provider_failure_never_masks_racing_integrity_halt(
+        tmp_path, monkeypatch, entrypoint):
+    terminal = _terminal("a4")
+    first = _Provider("archive-a")
+    second = _Provider("archive-b")
+    with ResolutionStore(
+            str(tmp_path / f"{entrypoint}.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+
+        def halt_then_fail(*_args):
+            store.halt(f"{entrypoint} raced halt")
+            raise TimeoutError("provider timed out")
+
+        if entrypoint == "chain":
+            monkeypatch.setattr(first, "chain_id", halt_then_fail)
+        else:
+            monkeypatch.setattr(first, "verify_terminal", halt_then_fail)
+
+        with pytest.raises(IntegrityHalted, match=f"{entrypoint} raced halt"):
+            if entrypoint == "chain":
+                feed.poll((terminal.subject,))
+            else:
+                feed.verify_terminal(terminal)
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])

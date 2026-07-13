@@ -89,9 +89,11 @@ class ResolutionFeed:
         try:
             chain_ids = tuple(provider.chain_id() for provider in self._providers)
         except Exception:
+            self._store.require_healthy()
             return self._unavailable(subjects, "provider chain unavailable")
         if any(isinstance(chain_id, bool) or not isinstance(chain_id, int)
                or chain_id != 137 for chain_id in chain_ids):
+            self._store.require_healthy()
             return self._unavailable(subjects, "provider chain is not Polygon 137")
 
         results = {}
@@ -116,6 +118,7 @@ class ResolutionFeed:
             except SettlementConflict:
                 raise
             except ResolutionUnavailable:
+                self._store.require_healthy()
                 results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                     "stored terminal verification unavailable",
@@ -135,6 +138,7 @@ class ResolutionFeed:
                 raise ValueError("provider head is not a non-negative integer")
             acceptance_block = min(heads) - 5
             if acceptance_block < 0:
+                self._store.require_healthy()
                 return self._merge_unavailable(
                     subjects, remaining, results, "five-confirmation block is unavailable"
                 )
@@ -143,11 +147,13 @@ class ResolutionFeed:
             )
             if (any(not isinstance(value, str) or _BYTES32.fullmatch(value) is None
                     for value in block_hashes) or block_hashes[0] != block_hashes[1]):
+                self._store.require_healthy()
                 return self._merge_unavailable(
                     subjects, remaining, results,
                     "provider acceptance block hashes disagree",
                 )
         except Exception:
+            self._store.require_healthy()
             return self._merge_unavailable(
                 subjects, remaining, results, "provider acceptance coordinate unavailable"
             )
@@ -185,6 +191,7 @@ class ResolutionFeed:
                 self._store.halt(str(exc) or "resolution authority contradiction")
                 raise
             except Exception:
+                self._store.require_healthy()
                 results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
                     "provider observation unavailable",
@@ -240,12 +247,15 @@ class ResolutionFeed:
                 except SettlementConflict:
                     raise
                 except ResolutionUnavailable:
+                    self._store.require_healthy()
                     raise
                 except Exception as exc:
+                    self._store.require_healthy()
                     raise ResolutionUnavailable(
                         "provider terminal verification unavailable"
                     ) from exc
                 if result is not None:
+                    self._store.require_healthy()
                     raise ResolutionUnavailable(
                         "provider terminal verification returned a malformed result"
                     )
