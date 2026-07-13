@@ -1,6 +1,6 @@
 """Two-provider reconciliation and terminal acceptance for POL-15."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import re
 
@@ -304,8 +304,10 @@ class ResolutionFeed:
             "question_id", "audit_event_ids",
         )
         for provider, observation in zip(self._providers, observations):
-            if (not isinstance(observation, ProviderObservation)
-                    or observation.provider_id != provider.provider_id
+            if not isinstance(observation, ProviderObservation):
+                raise ValueError("provider observation authority does not match")
+            replace(observation)
+            if (observation.provider_id != provider.provider_id
                     or observation.block_number != block_number
                     or observation.block_hash != block_hash):
                 raise ValueError("provider observation authority does not match")

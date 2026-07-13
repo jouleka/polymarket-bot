@@ -523,6 +523,42 @@ def test_poll_rejects_every_provider_observation_authority_disagreement(
         assert store.pending_outbox(10) == ()
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("phase", "FINALIZED"),
+    ("adapter_address", object()),
+    ("audit_event_ids", ("bad",)),
+])
+def test_poll_revalidates_identically_malformed_provider_observations(
+        tmp_path, field, value):
+    subject = _subject("a3")
+    block_hash = "0x" + "4a" * 32
+    first_observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 1), 2),
+        dispute=DisputeState.UNKNOWN, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids,
+        adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+        ),
+    )
+    second_observation = replace(first_observation, provider_id="archive-b")
+    object.__setattr__(first_observation, field, value)
+    object.__setattr__(second_observation, field, value)
+    providers = (
+        _Provider("archive-a", head=20, block_hash=block_hash,
+                  observation=first_observation),
+        _Provider("archive-b", head=20, block_hash=block_hash,
+                  observation=second_observation),
+    )
+    with ResolutionStore(str(tmp_path / f"{field}.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, providers).poll((subject,))
+        assert result.disposition is PollDisposition.UNAVAILABLE
+        assert store.assessment_for(subject.condition_id) is None
+        assert store.pending_outbox(10) == ()
+
+
 def test_repeat_poll_verifies_original_terminal_coordinate(tmp_path):
     subject = _subject("8c")
     block_hash = "0x" + "bb" * 32
