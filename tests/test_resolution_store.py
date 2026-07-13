@@ -69,6 +69,27 @@ def test_assessment_round_trips_and_replaces_only_same_subject(tmp_path):
             reopened.record_assessment(conflicting)
 
 
+def test_assessment_write_rolls_back_on_precommit_failure(tmp_path):
+    first = ResolutionAssessment(
+        _subject("65"), LifecyclePhase.UNRESOLVED, DisputeState.UNKNOWN, None,
+        100, "0x" + "11" * 32, "first",
+    )
+    replacement = ResolutionAssessment(
+        first.subject, LifecyclePhase.FINALIZED, DisputeState.UNKNOWN,
+        PayoutVector((1, 1), 2), 101, "0x" + "22" * 32, "replacement",
+    )
+    with ResolutionStore(str(tmp_path / "assessment-rollback.db"), MonotonicStamper()) as store:
+        store.record_assessment(first)
+
+        def fail_before_commit():
+            raise RuntimeError("assessment pre-commit failure")
+
+        store._before_assessment_commit = fail_before_commit
+        with pytest.raises(RuntimeError, match="pre-commit"):
+            store.record_assessment(replacement)
+        assert store.assessment_for(first.subject.condition_id) == first
+
+
 @pytest.mark.parametrize(
     "classified", [DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL]
 )
