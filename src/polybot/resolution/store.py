@@ -37,6 +37,8 @@ class ResolutionAssessment:
             raise TypeError("assessment phase must be a LifecyclePhase")
         if not isinstance(self.dispute, DisputeState):
             raise TypeError("assessment dispute must be a DisputeState")
+        if self.dispute is not DisputeState.UNKNOWN:
+            raise ValueError("non-terminal assessments must have UNKNOWN dispute state")
         if (isinstance(self.block_number, bool) or not isinstance(self.block_number, int)
                 or self.block_number < 0):
             raise ValueError("assessment block_number must be a non-negative integer")
@@ -45,7 +47,7 @@ class ResolutionAssessment:
         if not isinstance(self.detail, str):
             raise TypeError("assessment detail must be a string")
         if self.phase is LifecyclePhase.UNRESOLVED:
-            if self.dispute is not DisputeState.UNKNOWN or self.payout is not None:
+            if self.payout is not None:
                 raise ValueError("unresolved assessments cannot carry terminal evidence")
         elif not isinstance(self.payout, PayoutVector):
             raise ValueError("finalized assessments require a payout")
