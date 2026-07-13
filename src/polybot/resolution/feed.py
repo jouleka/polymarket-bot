@@ -8,6 +8,7 @@ from polybot.resolution.errors import SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
+    PUSD_ADDRESS,
     ProviderObservation,
     ResolutionSubject,
     TerminalResolution,
@@ -128,6 +129,12 @@ class ResolutionFeed:
                     observations, acceptance_block, block_hashes[0]
                 )
                 first = observations[0]
+                if (first.phase is LifecyclePhase.FINALIZED
+                        and (first.collateral_address != PUSD_ADDRESS
+                             or first.derived_token_ids != subject.token_ids)):
+                    raise ValueError(
+                        "finalized observation identity does not match subject"
+                    )
                 if first.phase is LifecyclePhase.UNRESOLVED:
                     classification = PollDisposition.UNRESOLVED
                     terminal = None

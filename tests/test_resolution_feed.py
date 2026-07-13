@@ -204,6 +204,41 @@ def test_poll_persists_matching_unknown_as_excluded_assessment(tmp_path):
         assert store.pending_outbox(10) == ()
 
 
+@pytest.mark.parametrize("changed", ["collateral", "token order"])
+def test_unknown_assessment_requires_subject_bound_chain_identity(tmp_path, changed):
+    subject = _subject("98")
+    block_hash = "0x" + "47" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 1), 2),
+        dispute=DisputeState.UNKNOWN,
+        collateral_address=(
+            "0x" + "99" * 20 if changed == "collateral" else PUSD_ADDRESS
+        ),
+        derived_token_ids=(
+            tuple(reversed(subject.token_ids))
+            if changed == "token order" else subject.token_ids
+        ),
+        adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+        ),
+    )
+    providers = (
+        _Provider("archive-a", head=20, block_hash=block_hash,
+                  observation=observation),
+        _Provider("archive-b", head=20, block_hash=block_hash,
+                  observation=replace(observation, provider_id="archive-b")),
+    )
+    with ResolutionStore(str(tmp_path / f"{changed}.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, providers).poll((subject,))
+        assert result.disposition is PollDisposition.UNAVAILABLE
+        assert store.assessment_for(subject.condition_id) is None
+        assert store.terminal_for(subject.condition_id) is None
+        assert store.pending_outbox(10) == ()
+
+
 def test_poll_store_authority_conflict_halts_instead_of_becoming_unavailable(tmp_path):
     subject = _subject("95")
     conflicting_subject = replace(subject, event_id="event-2")
