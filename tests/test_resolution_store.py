@@ -304,6 +304,10 @@ def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
         with pytest.raises(SettlementConflict, match="outbox"):
             store.acknowledge(1, first.terminal_id, "MAKER")
         assert store.acknowledge(1, first.terminal_id, "FORECAST") is True
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.acknowledge(1, second.terminal_id, "FORECAST")
+        with pytest.raises(SettlementConflict, match="outbox"):
+            store.acknowledge(1, first.terminal_id, "MAKER")
         assert store.acknowledge(1, first.terminal_id, "FORECAST") is False
         assert [(record.sequence, record.role) for record in store.pending_outbox(10)] == [
             (2, "MAKER"), (3, "SHADOW"), (4, "FORECAST"),
