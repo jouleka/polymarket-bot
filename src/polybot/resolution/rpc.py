@@ -1,5 +1,6 @@
 """Strict JSON-RPC boundary for POL-15 Polygon authority reads."""
 
+from dataclasses import dataclass
 import httpx
 import re
 
@@ -9,6 +10,35 @@ from polybot.resolution.models import CTF_ADDRESS, PUSD_ADDRESS
 
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)\Z")
 _UINT256_MAX = 2**256 - 1
+CTF_DEPLOYMENT_BLOCK = 4_023_686
+
+
+@dataclass(frozen=True)
+class AdapterPolicy:
+    policy_id: str
+    address: str
+    deployment_block: int
+    generation: str
+
+
+ADAPTER_POLICIES = (
+    AdapterPolicy(
+        "UMA_V1_0_1", "0xb97455fcf78eb37375e8be6f26df895341ca073d",
+        29_838_630, "v1",
+    ),
+    AdapterPolicy(
+        "UMA_V2_0_0", "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",
+        34_876_144, "v2_plus",
+    ),
+    AdapterPolicy(
+        "UMA_V3_0_0", "0x71392e133063cc0d16f40e1f9b60227404bc03f7",
+        43_375_847, "v2_plus",
+    ),
+    AdapterPolicy(
+        "UMA_V3_1_0", "0x157ce2d672854c848c9b79c49a8cc6cc89176a49",
+        46_755_254, "v2_plus",
+    ),
+)
 
 
 def decode_quantity(value):
@@ -31,6 +61,14 @@ def decode_fixed_bytes(value, width):
         raise ResolutionUnavailable(
             f"JSON-RPC value is not canonical bytes{width}"
         )
+    return bytes.fromhex(value[2:])
+
+
+def _decode_hex_data(value):
+    if (not isinstance(value, str) or not value.startswith("0x")
+            or len(value[2:]) % 2 != 0
+            or (value[2:] and re.fullmatch(r"[0-9a-f]+", value[2:]) is None)):
+        raise ResolutionUnavailable("JSON-RPC byte data is not canonical")
     return bytes.fromhex(value[2:])
 
 
@@ -119,6 +157,38 @@ class JsonRpcResolutionProvider:
             raise TypeError("rpc must provide call")
         self.provider_id = provider_id
         self._rpc = rpc
+        self._verified_deployments = set()
+
+    def _verify_deployments(self, adapter_address):
+        policy = next(
+            (candidate for candidate in ADAPTER_POLICIES
+             if candidate.address == adapter_address),
+            None,
+        )
+        if policy is None:
+            raise ResolutionUnavailable("adapter is not in the frozen authority registry")
+        self._verify_code_transition(CTF_ADDRESS, CTF_DEPLOYMENT_BLOCK)
+        self._verify_code_transition(policy.address, policy.deployment_block)
+
+    def _verify_code_transition(self, address, deployment_block):
+        if address in self._verified_deployments:
+            return
+        try:
+            before = _decode_hex_data(self._rpc.call(
+                "eth_getCode", [address, _encode_quantity(deployment_block - 1)]
+            ))
+            deployed = _decode_hex_data(self._rpc.call(
+                "eth_getCode", [address, _encode_quantity(deployment_block)]
+            ))
+        except ResolutionUnavailable as exc:
+            raise ResolutionUnavailable(
+                "frozen contract deployment evidence is unavailable"
+            ) from exc
+        if before or not deployed:
+            raise ResolutionUnavailable(
+                "frozen contract deployment transition does not match"
+            )
+        self._verified_deployments.add(address)
 
     def _outcome_slot_count(self, condition_id, block_number):
         data = "0xd42dc0c2" + _bytes32_word(condition_id)
