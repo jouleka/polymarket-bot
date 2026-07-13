@@ -5,7 +5,11 @@ from dataclasses import replace
 import pytest
 
 from polybot.core.clock import MonotonicStamper
-from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.errors import (
+    IntegrityHalted,
+    ResolutionUnavailable,
+    SettlementConflict,
+)
 from polybot.resolution.feed import PollDisposition, ResolutionFeed
 from polybot.resolution.models import (
     DisputeState,
@@ -318,3 +322,40 @@ def test_repeat_poll_verifies_original_terminal_coordinate(tmp_path):
         assert (first.head_calls, second.head_calls) == head_calls
         assert (tuple(first.hash_calls), tuple(second.hash_calls)) == hash_calls
         assert (tuple(first.observe_calls), tuple(second.observe_calls)) == observe_calls
+
+
+@pytest.mark.parametrize("changed", [
+    "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
+])
+def test_verify_terminal_halts_on_any_original_authority_change(tmp_path, changed):
+    subject = _subject("8d")
+    block_hash = "0x" + "cc" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 0), 1),
+        dispute=DisputeState.CLEAR, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        ),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=20, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / f"{changed}.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+        accepted, = feed.poll((subject,))
+        terminal = store.terminal_for(subject.condition_id)
+        assert accepted.disposition is PollDisposition.ACCEPTED
+        first._verification_error = SettlementConflict(f"{changed} changed")
+
+        with pytest.raises(SettlementConflict, match="changed"):
+            feed.verify_terminal(terminal)
+        with pytest.raises(IntegrityHalted, match=changed):
+            store.require_healthy()

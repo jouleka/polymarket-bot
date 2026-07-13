@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
+from polybot.resolution.errors import SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -67,10 +68,15 @@ class ResolutionFeed:
                 remaining.append(subject)
                 continue
             if terminal.subject != subject:
-                raise ValueError("poll subject contradicts stored terminal subject")
+                conflict = SettlementConflict(
+                    "poll subject contradicts stored terminal subject"
+                )
+                self._store.halt(str(conflict))
+                raise conflict
             try:
-                for provider in self._providers:
-                    provider.verify_terminal(terminal)
+                self.verify_terminal(terminal)
+            except SettlementConflict:
+                raise
             except Exception:
                 results[subject.condition_id] = PollResult(
                     subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
@@ -162,6 +168,18 @@ class ResolutionFeed:
                     "provider observation unavailable",
                 )
         return tuple(results[subject.condition_id] for subject in subjects)
+
+    def verify_terminal(self, terminal):
+        if not isinstance(terminal, TerminalResolution):
+            raise TypeError("terminal must be a TerminalResolution")
+        self._store.require_healthy()
+        try:
+            for provider in self._providers:
+                provider.verify_terminal(terminal)
+        except SettlementConflict as exc:
+            reason = str(exc) or "provider terminal authority contradiction"
+            self._store.halt(reason)
+            raise
 
     @staticmethod
     def _validate_subjects(subjects):
