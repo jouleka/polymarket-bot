@@ -16,6 +16,8 @@ from polybot.resolution.models import (
 
 
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
+_TERMINAL_ID = re.compile(r"[0-9a-f]{64}\Z")
+_ROLES = ("FORECAST", "MAKER", "SHADOW")
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,13 @@ class ResolutionAssessment:
                 raise ValueError("unresolved assessments cannot carry terminal evidence")
         elif not isinstance(self.payout, PayoutVector):
             raise ValueError("finalized assessments require a payout")
+
+
+@dataclass(frozen=True)
+class OutboxRecord:
+    sequence: int
+    terminal: TerminalResolution
+    role: str
 
 
 class ResolutionStore:
@@ -225,7 +234,7 @@ class ResolutionStore:
                 "DELETE FROM resolution_assessments WHERE condition_id=?",
                 (terminal.subject.condition_id,),
             )
-            for role in ("FORECAST", "MAKER", "SHADOW"):
+            for role in _ROLES:
                 self._conn.execute(
                     "INSERT INTO resolution_outbox (terminal_id, role, state) "
                     "VALUES (?, ?, 'PENDING')",
@@ -247,6 +256,55 @@ class ResolutionStore:
         if row is None:
             return None
         return _decode_terminal(row[0], row[1])
+
+    def pending_outbox(self, limit):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("outbox limit must be a positive integer")
+        rows = self._conn.execute(
+            """
+            SELECT o.sequence, o.role, t.terminal_id, t.payload
+            FROM resolution_outbox AS o
+            JOIN resolution_terminals AS t USING (terminal_id)
+            WHERE o.state='PENDING'
+            ORDER BY o.sequence
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return tuple(
+            OutboxRecord(sequence, _decode_terminal(terminal_id, payload), role)
+            for sequence, role, terminal_id, payload in rows
+        )
+
+    def acknowledge(self, sequence, terminal_id, role):
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
+            raise ValueError("outbox sequence must be a positive integer")
+        if not isinstance(terminal_id, str) or _TERMINAL_ID.fullmatch(terminal_id) is None:
+            raise ValueError("terminal_id must be a lowercase SHA-256 hex string")
+        if role not in _ROLES:
+            raise ValueError("outbox role is invalid")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT terminal_id, role, state FROM resolution_outbox WHERE sequence=?",
+                (sequence,),
+            ).fetchone()
+            if row is None or row[0] != terminal_id or row[1] != role:
+                raise SettlementConflict("outbox acknowledgement identity does not match")
+            if row[2] == "DELIVERED":
+                self._conn.commit()
+                return False
+            self._conn.execute(
+                "UPDATE resolution_outbox SET state='DELIVERED', delivered_at=? "
+                "WHERE sequence=?",
+                (self._stamper.stamp(), sequence),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        return True
 
     def _before_terminal_commit(self):
         """Failure-injection seam for the terminal/outbox transaction."""
