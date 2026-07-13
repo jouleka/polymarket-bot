@@ -34,12 +34,14 @@ class _Provider:
         self._observation = observation
         self._verification_error = verification_error
         self._verification_result = verification_result
+        self.chain_calls = 0
         self.head_calls = 0
         self.hash_calls = []
         self.observe_calls = []
         self.verify_calls = []
 
     def chain_id(self):
+        self.chain_calls += 1
         return self._chain
 
     def latest_block(self):
@@ -119,6 +121,15 @@ def test_feed_requires_exactly_two_distinct_polygon_providers(tmp_path):
             )
             assert result.disposition is PollDisposition.UNAVAILABLE
             assert malformed.head_calls == valid.head_calls == 0
+
+
+def test_empty_poll_is_network_free_noop(tmp_path):
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        first = _Provider("archive-a")
+        second = _Provider("archive-b")
+        assert ResolutionFeed(store, (first, second)).poll(()) == ()
+        assert first.chain_calls == second.chain_calls == 0
+        assert first.head_calls == second.head_calls == 0
 
 
 def test_feed_uses_lower_head_minus_exactly_five(tmp_path):

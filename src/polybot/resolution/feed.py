@@ -53,6 +53,8 @@ class ResolutionFeed:
 
     def poll(self, subjects):
         self._validate_subjects(subjects)
+        if not subjects:
+            return ()
         self._store.require_healthy()
         try:
             chain_ids = tuple(provider.chain_id() for provider in self._providers)
