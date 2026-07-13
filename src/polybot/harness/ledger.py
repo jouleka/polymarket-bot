@@ -52,7 +52,14 @@ def _decode_identity(*, event_id, token_id, outcome_slot, sibling_json, terminal
     if any(value is None for value in identity):
         raise SettlementConflict("shadow row has mixed canonical identity")
     try:
-        siblings = tuple(json.loads(sibling_json))
+        decoded_siblings = json.loads(sibling_json)
+        if (not isinstance(decoded_siblings, list) or len(decoded_siblings) != 2
+                or any(not isinstance(value, str) for value in decoded_siblings)
+                or sibling_json != json.dumps(
+                    decoded_siblings, ensure_ascii=False, separators=(",", ":")
+                )):
+            raise ValueError("sibling token identity is not a canonical JSON array")
+        siblings = tuple(decoded_siblings)
         subject = ResolutionSubject(event_id, condition_id, siblings, category)
     except (TypeError, ValueError) as exc:
         raise SettlementConflict("shadow row has invalid canonical identity") from exc
