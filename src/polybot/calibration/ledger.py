@@ -9,6 +9,7 @@ wired in S6; here the ledger is built + tested standalone.
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -144,6 +145,25 @@ class ForecastLedger:
             raise ConditionAlreadyTerminal(
                 f"condition {condition_id!r} already has a terminal receipt"
             )
+
+    @contextmanager
+    def signing_guard(self, condition_id):
+        """Serialize the final open-condition check with terminal receipt insertion.
+
+        The caller must keep this context open through its irreversible signing action. An
+        ``IMMEDIATE`` transaction takes SQLite's writer reservation before re-checking the
+        receipt, so a competing settlement writer is ordered either wholly before the check
+        (and signing is refused) or wholly after the guarded action.
+        """
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self.require_condition_open(condition_id)
+            yield
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
 
     def record_forecast(self, forecast_id, *, category, condition_id, p, market_mid,
                         event_id=None, token_id=None, outcome_slot=None,

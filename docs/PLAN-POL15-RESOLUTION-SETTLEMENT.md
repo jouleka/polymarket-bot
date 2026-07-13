@@ -144,6 +144,15 @@ never a forecast, ACCEPT decision, or signature; the fail-closed REJECT reason i
 
 GREEN: add ForecastLedger condition-open check and the narrow ERS catch/reason.
 
+### I11 — Post-forecast signing fence
+
+RED `test_ers_post_forecast_terminal_race_cannot_reach_signing`: a receipt arriving after forecast
+persistence but before final ACCEPT persistence/signing must produce `REJECT market_resolved`, no
+signature, and no portfolio fold.
+
+GREEN: add a `BEGIN IMMEDIATE` ForecastLedger signing guard and hold it across the final receipt
+check, ACCEPT persistence, and signer action so settlement receipt insertion is mutually ordered.
+
 ## Task 3 — Immutable target application
 
 ### T01 — Forecast clear projection

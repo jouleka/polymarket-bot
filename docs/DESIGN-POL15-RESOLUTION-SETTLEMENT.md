@@ -205,8 +205,15 @@ ERS calls `ForecastLedger.require_condition_open(condition_id)` before its compo
 target receipt returns `REJECT market_resolved`. If a dispatcher wins the narrow race after that
 precheck but before `record_forecast`, the ledger raises `ConditionAlreadyTerminal`; ERS returns the
 same rejection. The already-appended component is retained as an audit row, but no forecast, trade
-evaluation, ACCEPT decision, signing, or submission occurs. This is the only permitted component-only
-race artifact; the fail-closed REJECT decision is recorded normally.
+evaluation, ACCEPT decision, signing, or submission occurs.
+
+After evaluation, every pipeline ACCEPT enters
+`ForecastLedger.signing_guard(condition_id) -> ContextManager[None]` around decision persistence and
+the irreversible signer call. The guard takes a SQLite `BEGIN IMMEDIATE` writer reservation and
+rechecks the condition receipt. Thus a terminal writer is ordered wholly before the guard (the ERS
+records `REJECT market_resolved` and does not sign) or wholly after the guarded signer action; there
+is no receipt-check/sign TOCTOU window. A terminal that arrives after forecast persistence may retain
+the forecast and component audit rows, but cannot coexist with an ACCEPT decision or signature.
 
 ## 5. Provider seam and observations
 
