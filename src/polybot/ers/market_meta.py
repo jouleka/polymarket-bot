@@ -29,6 +29,9 @@ UNKNOWN_CATEGORY = "unknown"
 _RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
 )
+_RESOLUTION_CONDITION = re.compile(r"0x[0-9a-f]{64}\Z")
+_RESOLUTION_TOKEN = re.compile(r"[1-9][0-9]*\Z")
+_UINT256_MAX = 2**256 - 1
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,27 @@ class ResolutionSubjectMetadata:
     token_id: str
     outcome_slot: int
     sibling_token_ids: tuple[str, str]
+
+    def __post_init__(self):
+        for name in ("event_id", "category"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"resolution {name} must be a non-empty exact string")
+        if (not isinstance(self.condition_id, str)
+                or _RESOLUTION_CONDITION.fullmatch(self.condition_id) is None):
+            raise ValueError("resolution condition_id must be a canonical lowercase bytes32")
+        tokens = self.sibling_token_ids
+        if not isinstance(tokens, tuple) or len(tokens) != 2 or tokens[0] == tokens[1]:
+            raise ValueError("resolution sibling_token_ids must be a distinct ordered pair")
+        for token in tokens:
+            if (not isinstance(token, str) or _RESOLUTION_TOKEN.fullmatch(token) is None
+                    or int(token) > _UINT256_MAX):
+                raise ValueError("resolution tokens must be canonical positive uint256 strings")
+        if (isinstance(self.outcome_slot, bool) or not isinstance(self.outcome_slot, int)
+                or self.outcome_slot not in (0, 1)):
+            raise ValueError("resolution outcome_slot must be 0 or 1")
+        if self.token_id != tokens[self.outcome_slot]:
+            raise ValueError("resolution outcome slot does not match selected token")
 
 
 @dataclass(frozen=True)
@@ -469,14 +493,19 @@ class MarketRegistry:
         category = definition.category
         if category is None:  # defensive invariant: unavailable rows never enter the public indices
             raise MarketMetadataUnavailable("market category is unavailable")
-        return ResolutionSubjectMetadata(
-            event_id=definition.event_id,
-            condition_id=definition.condition_id,
-            category=category,
-            token_id=token_id,
-            outcome_slot=definition.token_ids.index(token_id),
-            sibling_token_ids=definition.token_ids,
-        )
+        try:
+            return ResolutionSubjectMetadata(
+                event_id=definition.event_id,
+                condition_id=definition.condition_id,
+                category=category,
+                token_id=token_id,
+                outcome_slot=definition.token_ids.index(token_id),
+                sibling_token_ids=definition.token_ids,
+            )
+        except (TypeError, ValueError) as exc:
+            raise MarketMetadataUnavailable(
+                "market resolution identity is not canonical"
+            ) from exc
 
     def metadata_for(self, intent):
         """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
