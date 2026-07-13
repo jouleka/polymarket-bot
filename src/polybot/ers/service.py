@@ -227,8 +227,14 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
     category = metadata.category
     question_text = metadata.question_text
     seconds = metadata.seconds_to_resolution
-    if resolution_subject is not None and resolution_subject.category != category:
-        raise ValueError("market metadata and resolution subject categories disagree")
+    if resolution_subject is not None and (
+            resolution_subject.category != category
+            or resolution_subject.event_id != intent.event_id
+            or resolution_subject.condition_id != intent.condition_id
+            or resolution_subject.token_id != intent.token_id):
+        return Decision(
+            "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+        ), trade_intent
 
     # 6. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
     #    p_base/p_micro/p_flow are ERS-derived; at MVP p_base = mid (no base-rate model wired here

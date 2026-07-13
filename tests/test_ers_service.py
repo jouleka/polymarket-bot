@@ -20,6 +20,7 @@ from polybot.ers.intent_store import IntentStore
 from polybot.ers.market_meta import (
     MarketMetadata,
     MarketMetadataUnavailable,
+    ResolutionSubjectMetadata,
     StubMarketMeta,
 )
 from polybot.ers.service import PaperSigner, process_pending
@@ -445,6 +446,33 @@ def test_only_explicit_stub_market_meta_may_write_legacy_forecast(tmp_path, monk
         raise AssertionError("fusion ran without canonical resolution identity")
 
     monkeypatch.setattr(fusion_mod, "fuse", forbidden_fusion, raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason == "resolution_identity_unavailable"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+
+def test_typed_resolution_subject_must_match_the_intent_before_component_write(
+        tmp_path, monkeypatch):
+    class MismatchedMeta:
+        def metadata_for(self, intent):
+            return MarketMetadata("politics", "canonical question", 123)
+
+        def resolution_subject_for(self, intent):
+            return ResolutionSubjectMetadata(
+                event_id="other-event", condition_id="0x" + "ab" * 32,
+                category="politics", token_id="101", outcome_slot=0,
+                sibling_token_ids=("101", "202"),
+            )
+
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=MismatchedMeta())
     with _store(str(tmp_path / "i.db")) as store:
         store.propose_trade("i1", **_P)
         signer = PaperSigner()
