@@ -592,6 +592,21 @@ def test_repeat_poll_never_downgrades_verification_conflict(tmp_path):
             store.require_healthy()
 
 
+def test_halted_store_blocks_poll_and_verification_before_provider_calls(tmp_path):
+    terminal = _terminal("a0")
+    first = _Provider("archive-a")
+    second = _Provider("archive-b")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        store.halt("prior authority contradiction")
+        feed = ResolutionFeed(store, (first, second))
+        with pytest.raises(IntegrityHalted, match="prior authority"):
+            feed.poll((terminal.subject,))
+        with pytest.raises(IntegrityHalted, match="prior authority"):
+            feed.verify_terminal(terminal)
+        assert first.chain_calls == second.chain_calls == 0
+        assert first.verify_calls == second.verify_calls == []
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])
