@@ -218,9 +218,19 @@ class ShadowLedger:
                 DisputeState.CLEAR, DisputeState.DISPUTED, DisputeState.MANUAL):
             raise ValueError("shadow terminal path must be classified")
         terminal_id = terminal.terminal_id
+        payload = terminal.canonical_bytes
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            receipt = self._conn.execute(
+                "SELECT terminal_id, payload FROM resolution_receipts WHERE condition_id=?",
+                (terminal.subject.condition_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt[0] != terminal_id or bytes(receipt[1]) != payload:
+                    raise SettlementConflict("shadow receipt contradicts terminal payload")
+                self._conn.commit()
+                return 0
             stored_rows = self._conn.execute(
                 "SELECT trade_id, token_id, category, event_id, outcome_slot, "
                 "sibling_token_ids, status FROM shadow_trades "
@@ -249,7 +259,7 @@ class ShadowLedger:
             self._conn.execute(
                 "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
                 "VALUES (?, ?, ?)",
-                (terminal.subject.condition_id, terminal_id, terminal.canonical_bytes),
+                (terminal.subject.condition_id, terminal_id, payload),
             )
             for trade_id, slot in rows:
                 numerator = terminal.payout.numerators[slot]
