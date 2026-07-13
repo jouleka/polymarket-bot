@@ -188,6 +188,7 @@ class ResolutionStore:
             self._conn.commit()
 
     def assessment_for(self, condition_id):
+        _validate_condition_id(condition_id)
         row = self._conn.execute(
             """
             SELECT s.event_id, s.token_ids, s.category, a.phase, a.dispute,
@@ -269,6 +270,7 @@ class ResolutionStore:
         return True
 
     def terminal_for(self, condition_id):
+        _validate_condition_id(condition_id)
         row = self._conn.execute(
             "SELECT terminal_id, payload FROM resolution_terminals WHERE condition_id=?",
             (condition_id,),
@@ -453,3 +455,8 @@ def _decode_terminal(terminal_id, payload_bytes):
         return terminal
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
         raise SettlementConflict("stored terminal is not canonical") from exc
+
+
+def _validate_condition_id(condition_id):
+    if not isinstance(condition_id, str) or _BYTES32.fullmatch(condition_id) is None:
+        raise ValueError("condition_id must be a canonical lowercase bytes32")
