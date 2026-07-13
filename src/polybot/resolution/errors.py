@@ -7,3 +7,7 @@ class ResolutionError(Exception):
 
 class ResolutionUnavailable(ResolutionError):
     """Retryable provider or per-condition authority failure."""
+
+
+class ConditionAlreadyTerminal(ResolutionError):
+    """A target ledger already has an immutable receipt for the condition."""

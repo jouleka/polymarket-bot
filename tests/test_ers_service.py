@@ -458,6 +458,54 @@ def test_only_explicit_stub_market_meta_may_write_legacy_forecast(tmp_path, monk
         assert ledger.all() == [] and clog.all() == () and signer.placed == []
 
 
+def test_ers_terminal_race_never_writes_forecast_or_reaches_signing(tmp_path, monkeypatch):
+    def add_receipt(ledger, terminal_id):
+        ledger._conn.execute(
+            "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+            "VALUES (?, ?, ?)",
+            ("m1", terminal_id, b"terminal"),
+        )
+        ledger._conn.commit()
+
+    known_dir = tmp_path / "known"
+    known_dir.mkdir()
+    pipe, ledger, clog = _pipeline(known_dir, monkeypatch)
+    add_receipt(ledger, "known-terminal")
+    with _store(str(known_dir / "i.db")) as store:
+        store.propose_trade("known", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+        assert store.get("known").decision_reason == "market_resolved"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+    race_dir = tmp_path / "race"
+    race_dir.mkdir()
+    pipe, ledger, clog = _pipeline(race_dir, monkeypatch)
+    original_record = clog.record
+
+    def record_then_resolve(*args, **kwargs):
+        inserted = original_record(*args, **kwargs)
+        add_receipt(ledger, "racing-terminal")
+        return inserted
+
+    clog.record = record_then_resolve
+    with _store(str(race_dir / "i.db")) as store:
+        store.propose_trade("racing", **_P)
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+        assert store.get("racing").decision_reason == "market_resolved"
+        assert ledger.all() == [] and len(clog.all()) == 1
+        assert signer.placed == [] and final.positions == ()
+
+
 def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):
     meta = _RecordingMeta(raises=MarketMetadataUnavailable("missing Gamma metadata"))
     pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=meta)
