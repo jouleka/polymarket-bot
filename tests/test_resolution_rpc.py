@@ -8,6 +8,7 @@ from polybot.resolution.models import (
     LifecyclePhase,
     PUSD_ADDRESS,
     PayoutVector,
+    ResolutionSubject,
 )
 from polybot.resolution.rpc import (
     ADAPTER_POLICIES,
@@ -234,3 +235,32 @@ def test_provider_reads_binary_ctf_payout_at_requested_block():
         )
         with pytest.raises(ResolutionUnavailable, match="payout"):
             invalid._read_payout(condition_id, 99)
+
+
+def test_provider_derives_pusd_positions_in_slot_order():
+    subject = ResolutionSubject(
+        "event-1", "0x" + "13" * 32, ("101", "202"), "politics"
+    )
+    rpc = _Rpc(
+        "0x" + "31" * 32, "0x" + f"{101:064x}",
+        "0x" + "32" * 32, "0x" + f"{202:064x}",
+    )
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+    assert provider._derive_positions(subject, 99) == ("101", "202")
+    assert [params[0]["data"][:10] for _, params in rpc.calls] == [
+        "0x856296f7", "0x39dd7530", "0x856296f7", "0x39dd7530",
+    ]
+    assert all(params[1] == "0x63" for _, params in rpc.calls)
+    collateral_word = "00" * 12 + PUSD_ADDRESS[2:]
+    assert all(
+        params[0]["data"][10:74] == collateral_word
+        for _, params in (rpc.calls[1], rpc.calls[3])
+    )
+
+    for derived_ids in ((202, 101), (303, 404)):
+        mismatched = JsonRpcResolutionProvider("archive-a", _Rpc(
+            "0x" + "31" * 32, "0x" + f"{derived_ids[0]:064x}",
+            "0x" + "32" * 32, "0x" + f"{derived_ids[1]:064x}",
+        ))
+        with pytest.raises(ResolutionUnavailable, match="token"):
+            mismatched._derive_positions(subject, 99)

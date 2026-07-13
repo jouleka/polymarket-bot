@@ -10,6 +10,7 @@ from polybot.resolution.models import (
     LifecyclePhase,
     PUSD_ADDRESS,
     PayoutVector,
+    ResolutionSubject,
 )
 
 
@@ -232,6 +233,22 @@ class JsonRpcResolutionProvider:
             + _uint256_word(index_set)
         )
         return "0x" + self._ctf_static_word(data, block_number).hex()
+
+    def _derive_positions(self, subject, block_number):
+        if not isinstance(subject, ResolutionSubject):
+            raise TypeError("position subject must be a ResolutionSubject")
+        derived = tuple(
+            str(self._position_id(
+                self._collection_id(subject.condition_id, index_set, block_number),
+                block_number,
+            ))
+            for index_set in (1, 2)
+        )
+        if derived != subject.token_ids:
+            raise ResolutionUnavailable(
+                "chain-derived pUSD token order does not match subject"
+            )
+        return derived
 
     def _position_id(self, collection_id, block_number):
         collateral_word = "00" * 12 + decode_fixed_bytes(PUSD_ADDRESS, 20).hex()
