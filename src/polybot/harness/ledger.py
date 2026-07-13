@@ -42,6 +42,26 @@ _POL15_COLUMNS = (
 )
 
 
+def _decode_identity(*, event_id, token_id, outcome_slot, sibling_json, terminal_id,
+                     condition_id, category):
+    identity = (event_id, outcome_slot, sibling_json)
+    if all(value is None for value in identity):
+        if terminal_id is not None:
+            raise SettlementConflict("shadow row has terminal state without canonical identity")
+        return None
+    if any(value is None for value in identity):
+        raise SettlementConflict("shadow row has mixed canonical identity")
+    try:
+        siblings = tuple(json.loads(sibling_json))
+        subject = ResolutionSubject(event_id, condition_id, siblings, category)
+    except (TypeError, ValueError) as exc:
+        raise SettlementConflict("shadow row has invalid canonical identity") from exc
+    if (isinstance(outcome_slot, bool) or outcome_slot not in (0, 1)
+            or subject.token_ids[outcome_slot] != token_id):
+        raise SettlementConflict("shadow row identity slot does not match token")
+    return subject.token_ids
+
+
 @dataclass(frozen=True)
 class ShadowTradeRecord:
     trade_id: str
@@ -329,13 +349,17 @@ class ShadowLedger:
 
     @staticmethod
     def _row(r):
+        siblings = _decode_identity(
+            event_id=r[13], token_id=r[1], outcome_slot=r[14], sibling_json=r[15],
+            terminal_id=r[18], condition_id=r[2], category=r[3],
+        )
         return ShadowTradeRecord(
             trade_id=r[0], token_id=r[1], condition_id=r[2], category=r[3], side=r[4],
             shares=Decimal(r[5]), fill_price=Decimal(r[6]), fill_mid=Decimal(r[7]),
             reward_accrued=Decimal(r[8]), created_at=r[9], status=r[10],
             resolution_value=None if r[11] is None else Decimal(r[11]), settled_at=r[12],
             event_id=r[13], outcome_slot=r[14],
-            sibling_token_ids=None if r[15] is None else tuple(json.loads(r[15])),
+            sibling_token_ids=siblings,
             resolution_numerator=None if r[16] is None else int(r[16]),
             resolution_denominator=None if r[17] is None else int(r[17]), terminal_id=r[18],
         )

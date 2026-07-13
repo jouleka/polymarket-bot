@@ -70,6 +70,51 @@ def test_target_ledgers_use_full_synchronous_durability(tmp_path, ledger_type, d
             assert ledger._conn.execute("PRAGMA synchronous").fetchone()[0] == 2
 
 
+@pytest.mark.parametrize(("kind", "corrupt_column"), [
+    ("forecast", "event_id"),
+    ("forecast", "terminal_id"),
+    ("maker", "event_id"),
+    ("maker", "terminal_id"),
+    ("shadow", "event_id"),
+    ("shadow", "terminal_id"),
+])
+def test_target_row_decoders_reject_mixed_identity(tmp_path, kind, corrupt_column):
+    stamper = MonotonicStamper()
+    if kind == "forecast":
+        ledger = ForecastLedger(str(tmp_path / f"{kind}-{corrupt_column}.db"), stamper)
+        ledger.record_forecast(
+            "row", category="politics", condition_id="legacy",
+            p=Decimal("0.7"), market_mid=Decimal("0.6"),
+        )
+        table, key, read = "forecasts", "forecast_id", lambda: ledger.get("row")
+    elif kind == "maker":
+        ledger = MakerLedger(str(tmp_path / f"{kind}-{corrupt_column}.db"), stamper)
+        ledger.record_fill(
+            "row", token_id="legacy", condition_id="legacy", category="politics",
+            side="BUY", shares=Decimal("10"), price_exec=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"),
+        )
+        table, key, read = "maker_fills", "fill_id", ledger.all
+    else:
+        ledger = ShadowLedger(str(tmp_path / f"{kind}-{corrupt_column}.db"), stamper)
+        ledger.record_trade(
+            "row", token_id="legacy", condition_id="legacy", category="politics",
+            side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"),
+        )
+        table, key, read = "shadow_trades", "trade_id", ledger.all
+    try:
+        ledger._conn.execute(
+            f"UPDATE {table} SET {corrupt_column}=? WHERE {key}='row'",
+            ("event-1" if corrupt_column == "event_id" else "terminal",),
+        )
+        ledger._conn.commit()
+        with pytest.raises(SettlementConflict, match="identity|state"):
+            read()
+    finally:
+        ledger.close()
+
+
 def test_legacy_settlement_mutators_reject_canonical_pending_rows(tmp_path):
     stamper = MonotonicStamper()
 
