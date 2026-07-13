@@ -1,11 +1,12 @@
 """S8 / POL-10 — maker fill/settlement ledger (append-only, restart-stable, dispute-honest)."""
 
+import sqlite3
 from decimal import Decimal
 
 import pytest
 
 from polybot.core.clock import MonotonicStamper
-from polybot.maker.ledger import MakerLedger
+from polybot.maker.ledger import MakerFillRecord, MakerLedger
 
 
 def _ledger(path):
@@ -18,6 +19,46 @@ def _fill(ledger, fid, *, token="t1", cond="c1", category="politics", side="BUY"
                               side=side, shares=Decimal(shares),
                               price_exec=Decimal(price_exec), fill_mid=Decimal(fill_mid),
                               reward_accrued=Decimal(reward))
+
+
+def test_maker_v0_database_migrates_to_nullable_identity(tmp_path):
+    path = str(tmp_path / "maker-v0.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE maker_fills (
+            fill_id TEXT PRIMARY KEY, token_id TEXT NOT NULL, condition_id TEXT NOT NULL,
+            category TEXT NOT NULL, side TEXT NOT NULL, shares TEXT NOT NULL,
+            price_exec TEXT NOT NULL, fill_mid TEXT NOT NULL, reward_accrued TEXT NOT NULL,
+            created_at INTEGER NOT NULL, status TEXT, resolution_value TEXT, settled_at INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO maker_fills VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("legacy", "t1", "c1", "politics", "BUY", "10", "0.48", "0.50", "0.25",
+         123, "WON", "1", 456),
+    )
+    conn.commit()
+    conn.close()
+
+    with _ledger(path) as ledger:
+        columns = {
+            row[1] for row in ledger._conn.execute("PRAGMA table_info(maker_fills)").fetchall()
+        }
+        assert columns - {
+            "fill_id", "token_id", "condition_id", "category", "side", "shares",
+            "price_exec", "fill_mid", "reward_accrued", "created_at", "status",
+            "resolution_value", "settled_at",
+        } == {
+            "event_id", "outcome_slot", "sibling_token_ids", "resolution_numerator",
+            "resolution_denominator", "terminal_id",
+        }
+        assert ledger.all() == [MakerFillRecord(
+            "legacy", "t1", "c1", "politics", "BUY", Decimal("10"), Decimal("0.48"),
+            Decimal("0.50"), Decimal("0.25"), 123, "WON", Decimal("1"), 456,
+            None, None, None, None, None, None,
+        )]
 
 
 def test_record_fill_round_trips_every_field_via_all(tmp_path):
