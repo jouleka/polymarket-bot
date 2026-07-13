@@ -181,6 +181,16 @@ class ResolutionFeed:
             self._store.halt(reason)
             raise
 
+    def recover_pending(self):
+        self._store.require_healthy()
+        terminals = self._store.pending_terminals()
+        for terminal in terminals:
+            self.verify_terminal(terminal)
+        self._store._complete_recovery(
+            tuple(terminal.terminal_id for terminal in terminals)
+        )
+        return len(terminals)
+
     @staticmethod
     def _validate_subjects(subjects):
         if not isinstance(subjects, tuple):
