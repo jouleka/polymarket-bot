@@ -4,8 +4,13 @@ from dataclasses import dataclass
 from enum import Enum
 import re
 
-from polybot.resolution.models import DisputeState, ResolutionSubject
-from polybot.resolution.store import ResolutionStore
+from polybot.resolution.models import (
+    DisputeState,
+    LifecyclePhase,
+    ProviderObservation,
+    ResolutionSubject,
+)
+from polybot.resolution.store import ResolutionAssessment, ResolutionStore
 
 
 _BYTES32 = re.compile(r"0x[0-9a-f]{64}\Z")
@@ -68,9 +73,38 @@ class ResolutionFeed:
                 return self._unavailable(subjects, "provider acceptance block hashes disagree")
         except Exception:
             return self._unavailable(subjects, "provider acceptance coordinate unavailable")
-        return self._unavailable(
-            subjects, f"condition observation unavailable at block {acceptance_block}"
-        )
+        results = []
+        for subject in subjects:
+            try:
+                observations = tuple(
+                    provider.observe(subject, acceptance_block)
+                    for provider in self._providers
+                )
+                self._validate_observations(
+                    observations, acceptance_block, block_hashes[0]
+                )
+                first = observations[0]
+                if first.phase is LifecyclePhase.UNRESOLVED:
+                    detail = "providers agree condition is unresolved"
+                    self._store.record_assessment(ResolutionAssessment(
+                        subject, first.phase, first.dispute, first.payout,
+                        first.block_number, first.block_hash, detail,
+                    ))
+                    results.append(PollResult(
+                        subject.condition_id, PollDisposition.UNRESOLVED,
+                        DisputeState.UNKNOWN, None, detail,
+                    ))
+                else:
+                    results.append(PollResult(
+                        subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
+                        "finalized reconciliation is not available",
+                    ))
+            except Exception:
+                results.append(PollResult(
+                    subject.condition_id, PollDisposition.UNAVAILABLE, None, None,
+                    "provider observation unavailable",
+                ))
+        return tuple(results)
 
     @staticmethod
     def _validate_subjects(subjects):
@@ -90,3 +124,21 @@ class ResolutionFeed:
             )
             for subject in subjects
         )
+
+    def _validate_observations(self, observations, block_number, block_hash):
+        if len(observations) != 2:
+            raise ValueError("exactly two observations are required")
+        fields = (
+            "block_number", "block_hash", "phase", "payout", "dispute",
+            "collateral_address", "derived_token_ids", "adapter_address",
+            "question_id", "audit_event_ids",
+        )
+        for provider, observation in zip(self._providers, observations):
+            if (not isinstance(observation, ProviderObservation)
+                    or observation.provider_id != provider.provider_id
+                    or observation.block_number != block_number
+                    or observation.block_hash != block_hash):
+                raise ValueError("provider observation authority does not match")
+        if any(getattr(observations[0], field) != getattr(observations[1], field)
+               for field in fields):
+            raise ValueError("provider observations disagree")

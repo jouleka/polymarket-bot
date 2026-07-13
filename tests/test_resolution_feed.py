@@ -1,21 +1,31 @@
 """POL-15 two-provider resolution feed."""
 
+from dataclasses import replace
+
 import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.resolution.feed import PollDisposition, ResolutionFeed
-from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.models import (
+    DisputeState,
+    LifecyclePhase,
+    ProviderObservation,
+    ResolutionSubject,
+)
 from polybot.resolution.store import ResolutionStore
 
 
 class _Provider:
-    def __init__(self, provider_id, *, chain=137, head=None, block_hash=None):
+    def __init__(self, provider_id, *, chain=137, head=None, block_hash=None,
+                 observation=None):
         self.provider_id = provider_id
         self._chain = chain
         self._head = head
         self._block_hash = block_hash
+        self._observation = observation
         self.head_calls = 0
         self.hash_calls = []
+        self.observe_calls = []
 
     def chain_id(self):
         return self._chain
@@ -29,6 +39,12 @@ class _Provider:
     def block_hash(self, block_number):
         self.hash_calls.append(block_number)
         return self._block_hash
+
+    def observe(self, subject, block_number):
+        self.observe_calls.append((subject, block_number))
+        if isinstance(self._observation, Exception):
+            raise self._observation
+        return self._observation
 
 
 def _subject(condition_byte="81"):
@@ -81,4 +97,34 @@ def test_feed_uses_lower_head_minus_exactly_five(tmp_path):
         assert result.disposition is PollDisposition.UNAVAILABLE
         assert disagree_a.hash_calls == disagree_b.hash_calls == [15]
         assert store.assessment_for(_subject().condition_id) is None
+        assert store.pending_outbox(10) == ()
+
+
+def test_poll_persists_matching_unresolved_assessment(tmp_path):
+    subject = _subject("84")
+    block_hash = "0x" + "33" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.UNRESOLVED, payout=None, dispute=DisputeState.UNKNOWN,
+        collateral_address=None, derived_token_ids=None, adapter_address=None,
+        question_id=None, audit_event_ids=(),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=22, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        result, = ResolutionFeed(store, (first, second)).poll((subject,))
+        assert result.disposition is PollDisposition.UNRESOLVED
+        assert result.dispute is DisputeState.UNKNOWN
+        assert result.terminal_id is None
+        assessment = store.assessment_for(subject.condition_id)
+        assert assessment.subject == subject
+        assert assessment.phase is LifecyclePhase.UNRESOLVED
+        assert assessment.dispute is DisputeState.UNKNOWN and assessment.payout is None
+        assert (assessment.block_number, assessment.block_hash) == (15, block_hash)
+        assert store.terminal_for(subject.condition_id) is None
         assert store.pending_outbox(10) == ()
