@@ -132,6 +132,20 @@ def test_empty_poll_is_network_free_noop(tmp_path):
         assert first.head_calls == second.head_calls == 0
 
 
+@pytest.mark.parametrize("subjects", [
+    [_subject("9b")],
+    (_subject("9c"), "not-a-subject"),
+    (_subject("9d"), _subject("9d")),
+])
+def test_poll_rejects_non_tuple_non_subject_and_duplicate_inputs(tmp_path, subjects):
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        first = _Provider("archive-a")
+        second = _Provider("archive-b")
+        with pytest.raises((TypeError, ValueError)):
+            ResolutionFeed(store, (first, second)).poll(subjects)
+        assert first.chain_calls == second.chain_calls == 0
+
+
 @pytest.mark.parametrize("values", [
     ("bad", PollDisposition.UNAVAILABLE, None, None, "unavailable"),
     (_subject().condition_id, "UNAVAILABLE", None, None, "unavailable"),
