@@ -1,8 +1,36 @@
 """Strict JSON-RPC boundary for POL-15 Polygon authority reads."""
 
 import httpx
+import re
 
 from polybot.resolution.errors import ResolutionUnavailable
+
+
+_QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)\Z")
+_UINT256_MAX = 2**256 - 1
+
+
+def decode_quantity(value):
+    if (not isinstance(value, str) or _QUANTITY.fullmatch(value) is None):
+        raise ResolutionUnavailable("JSON-RPC quantity is not canonical")
+    decoded = int(value[2:], 16)
+    if decoded > _UINT256_MAX:
+        raise ResolutionUnavailable("JSON-RPC quantity exceeds uint256")
+    return decoded
+
+
+def decode_fixed_bytes(value, width):
+    if isinstance(width, bool) or not isinstance(width, int):
+        raise TypeError("fixed byte width must be an integer")
+    if width <= 0:
+        raise ValueError("fixed byte width must be positive")
+    if (not isinstance(value, str) or len(value) != 2 + width * 2
+            or not value.startswith("0x")
+            or re.fullmatch(r"[0-9a-f]+", value[2:]) is None):
+        raise ResolutionUnavailable(
+            f"JSON-RPC value is not canonical bytes{width}"
+        )
+    return bytes.fromhex(value[2:])
 
 
 class JsonRpcClient:

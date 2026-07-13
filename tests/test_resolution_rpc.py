@@ -3,7 +3,11 @@
 import pytest
 
 from polybot.resolution.errors import ResolutionUnavailable
-from polybot.resolution.rpc import JsonRpcClient
+from polybot.resolution.rpc import (
+    JsonRpcClient,
+    decode_fixed_bytes,
+    decode_quantity,
+)
 
 
 class _Response:
@@ -72,3 +76,29 @@ def test_rpc_surfaces_valid_error_envelope_as_unavailable():
     rpc = JsonRpcClient("https://polygon.example", _HttpClient(payload))
     with pytest.raises(ResolutionUnavailable, match="archive unavailable"):
         rpc.call("eth_chainId", [])
+
+
+def test_rpc_quantity_and_fixed_bytes_decoders_are_canonical():
+    assert decode_quantity("0x0") == 0
+    assert decode_quantity("0x1") == 1
+    assert decode_quantity("0xff") == 255
+    for value in (
+        True, 1, None, "", "0x", "0x00", "0x01", "0X1", "0xA",
+        "0xg", " 0x1", "0x1 ",
+    ):
+        with pytest.raises(ResolutionUnavailable):
+            decode_quantity(value)
+
+    raw = bytes(range(32))
+    assert decode_fixed_bytes("0x" + raw.hex(), 32) == raw
+    for value in (
+        True, raw, None, "", "0x", "0x" + "00" * 31,
+        "0x" + "00" * 33, "0x" + "AA" * 32,
+        "0x" + "gg" * 32,
+    ):
+        with pytest.raises(ResolutionUnavailable):
+            decode_fixed_bytes(value, 32)
+    with pytest.raises(TypeError):
+        decode_fixed_bytes("0x00", True)
+    with pytest.raises(ValueError):
+        decode_fixed_bytes("0x00", 0)
