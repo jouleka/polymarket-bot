@@ -368,6 +368,10 @@ def test_reopened_pending_outbox_requires_complete_recovery(tmp_path):
         with pytest.raises(RecoveryRequired, match="recovery"):
             reopened.acknowledge(2, first.terminal_id, "MAKER")
         with pytest.raises(RecoveryRequired, match="exact"):
+            reopened._complete_recovery(
+                (first.terminal_id, second.terminal_id, "e" * 64)
+            )
+        with pytest.raises(RecoveryRequired, match="exact"):
             reopened._complete_recovery((second.terminal_id, first.terminal_id))
         assert reopened.recovery_required is True
         reopened._complete_recovery((first.terminal_id, second.terminal_id))
