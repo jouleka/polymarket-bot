@@ -607,6 +607,25 @@ def test_halted_store_blocks_poll_and_verification_before_provider_calls(tmp_pat
         assert first.verify_calls == second.verify_calls == []
 
 
+def test_repeat_poll_propagates_integrity_halt_racing_after_health_check(
+        tmp_path, monkeypatch):
+    terminal = _terminal("a1")
+    first = _Provider("archive-a")
+    second = _Provider("archive-b")
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+
+        def halt_then_report_chain():
+            store.halt("raced terminal halt")
+            return 137
+
+        monkeypatch.setattr(first, "chain_id", halt_then_report_chain)
+        feed = ResolutionFeed(store, (first, second))
+        with pytest.raises(IntegrityHalted, match="raced terminal halt"):
+            feed.poll((terminal.subject,))
+        assert first.verify_calls == second.verify_calls == []
+
+
 @pytest.mark.parametrize("changed", [
     "acceptance hash", "payout", "deployment code", "collateral", "token mapping",
 ])
