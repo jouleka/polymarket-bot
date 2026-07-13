@@ -3,7 +3,12 @@
 import pytest
 
 from polybot.resolution.errors import ResolutionUnavailable
-from polybot.resolution.models import CTF_ADDRESS, PUSD_ADDRESS
+from polybot.resolution.models import (
+    CTF_ADDRESS,
+    LifecyclePhase,
+    PUSD_ADDRESS,
+    PayoutVector,
+)
 from polybot.resolution.rpc import (
     ADAPTER_POLICIES,
     CTF_DEPLOYMENT_BLOCK,
@@ -192,3 +197,40 @@ def test_provider_verifies_code_transition_for_ctf_and_selected_adapter():
 
     with pytest.raises(ResolutionUnavailable, match="adapter"):
         provider._verify_deployments("0x" + "99" * 20)
+
+
+def test_provider_reads_binary_ctf_payout_at_requested_block():
+    condition_id = "0x" + "12" * 32
+    rpc = _Rpc(*(
+        "0x" + f"{value:064x}" for value in (2, 4, 3, 1)
+    ))
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+    assert provider._read_payout(condition_id, 99) == (
+        LifecyclePhase.FINALIZED, PayoutVector((3, 1), 4)
+    )
+    assert all(
+        method == "eth_call" and params[1] == "0x63"
+        for method, params in rpc.calls
+    )
+    assert [call[1][0]["data"][:10] for call in rpc.calls] == [
+        "0xd42dc0c2", "0xdd34de67", "0x0504c814", "0x0504c814",
+    ]
+
+    unresolved_rpc = _Rpc(
+        "0x" + f"{2:064x}", "0x" + f"{0:064x}"
+    )
+    unresolved = JsonRpcResolutionProvider("archive-a", unresolved_rpc)
+    assert unresolved._read_payout(condition_id, 100) == (
+        LifecyclePhase.UNRESOLVED, None
+    )
+    assert len(unresolved_rpc.calls) == 2
+    assert all(call[1][1] == "0x64" for call in unresolved_rpc.calls)
+
+    for values in ((1,), (3,), (2, 4, 3, 0)):
+        invalid = JsonRpcResolutionProvider(
+            "archive-a", _Rpc(*(
+                "0x" + f"{value:064x}" for value in values
+            ))
+        )
+        with pytest.raises(ResolutionUnavailable, match="payout"):
+            invalid._read_payout(condition_id, 99)
