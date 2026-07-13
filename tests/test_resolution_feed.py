@@ -20,15 +20,17 @@ from polybot.resolution.store import ResolutionStore
 
 class _Provider:
     def __init__(self, provider_id, *, chain=137, head=None, block_hash=None,
-                 observation=None):
+                 observation=None, verification_error=None):
         self.provider_id = provider_id
         self._chain = chain
         self._head = head
         self._block_hash = block_hash
         self._observation = observation
+        self._verification_error = verification_error
         self.head_calls = 0
         self.hash_calls = []
         self.observe_calls = []
+        self.verify_calls = []
 
     def chain_id(self):
         return self._chain
@@ -52,6 +54,11 @@ class _Provider:
         if isinstance(observation, Exception):
             raise observation
         return observation
+
+    def verify_terminal(self, terminal):
+        self.verify_calls.append(terminal)
+        if self._verification_error is not None:
+            raise self._verification_error
 
 
 def _subject(condition_byte="81"):
@@ -271,3 +278,43 @@ def test_poll_isolates_retryable_unavailability_in_input_order(tmp_path):
         ]
         assert store.assessment_for(unavailable_subject.condition_id) is None
         assert store.assessment_for(later_subject.condition_id) is not None
+
+
+def test_repeat_poll_verifies_original_terminal_coordinate(tmp_path):
+    subject = _subject("8c")
+    block_hash = "0x" + "bb" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED, payout=PayoutVector((1, 0), 1),
+        dispute=DisputeState.CLEAR, collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids, adapter_address="0x" + "55" * 20,
+        question_id="0x" + "66" * 32,
+        audit_event_ids=(
+            "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        ),
+    )
+    first = _Provider(
+        "archive-a", head=20, block_hash=block_hash, observation=observation
+    )
+    second = _Provider(
+        "archive-b", head=20, block_hash=block_hash,
+        observation=replace(observation, provider_id="archive-b"),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+        accepted, = feed.poll((subject,))
+        assert accepted.disposition is PollDisposition.ACCEPTED
+        terminal = store.terminal_for(subject.condition_id)
+        head_calls = (first.head_calls, second.head_calls)
+        hash_calls = (tuple(first.hash_calls), tuple(second.hash_calls))
+        observe_calls = (tuple(first.observe_calls), tuple(second.observe_calls))
+        first._head = second._head = 100
+
+        repeated, = feed.poll((subject,))
+        assert repeated.disposition is PollDisposition.ALREADY_TERMINAL
+        assert repeated.terminal_id == terminal.terminal_id
+        assert first.verify_calls == second.verify_calls == [terminal]
+        assert (first.head_calls, second.head_calls) == head_calls
+        assert (tuple(first.hash_calls), tuple(second.hash_calls)) == hash_calls
+        assert (tuple(first.observe_calls), tuple(second.observe_calls)) == observe_calls
