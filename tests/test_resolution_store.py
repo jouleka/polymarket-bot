@@ -193,6 +193,42 @@ def test_store_rejects_structurally_corrupt_outbox(tmp_path, corruption):
         ResolutionStore(path, MonotonicStamper())
 
 
+@pytest.mark.parametrize("corruption", ["assessment_coexists", "terminal_rebound"])
+def test_store_reads_reject_redundant_authority_corruption(tmp_path, corruption):
+    terminal = _terminal("7b")
+    with ResolutionStore(str(tmp_path / f"{corruption}.db"), MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        if corruption == "assessment_coexists":
+            store._conn.execute(
+                "INSERT INTO resolution_assessments "
+                "(condition_id, phase, dispute, payout_numerator_0, payout_numerator_1, "
+                "payout_denominator, block_number, block_hash, detail, observed_at) "
+                "VALUES (?, 'FINALIZED', 'UNKNOWN', '3', '1', '4', ?, ?, 'corrupt', ?)",
+                (terminal.subject.condition_id, terminal.block_number,
+                 terminal.block_hash, 999),
+            )
+            lookup_condition = terminal.subject.condition_id
+        else:
+            rebound = _subject("7c")
+            store._conn.execute(
+                "INSERT INTO resolution_subjects "
+                "(condition_id, event_id, token_ids, category) VALUES (?, ?, ?, ?)",
+                (rebound.condition_id, rebound.event_id, '["101","202"]', rebound.category),
+            )
+            store._conn.execute(
+                "UPDATE resolution_terminals SET condition_id=?",
+                (rebound.condition_id,),
+            )
+            lookup_condition = rebound.condition_id
+        store._conn.commit()
+
+        with pytest.raises(SettlementConflict, match="authority|condition|assessment"):
+            store.terminal_for(lookup_condition)
+        if corruption == "assessment_coexists":
+            with pytest.raises(SettlementConflict, match="authority|terminal"):
+                store.assessment_for(lookup_condition)
+
+
 def test_outbox_order_and_matching_acknowledgement_are_exact(tmp_path):
     first = _terminal("74")
     second = _terminal("75")
