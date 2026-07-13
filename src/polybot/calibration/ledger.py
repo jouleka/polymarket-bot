@@ -61,7 +61,7 @@ class ForecastLedger:
         self._stamper = stamper
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS forecasts (
