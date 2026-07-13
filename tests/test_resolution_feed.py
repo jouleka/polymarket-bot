@@ -263,6 +263,35 @@ def test_store_lookup_conflict_persistently_halts_feed(
             reopened.require_healthy()
 
 
+@pytest.mark.parametrize("failure", [
+    IntegrityHalted("halt raced"), RuntimeError("disk failed"),
+])
+def test_poll_never_downgrades_central_store_failure(
+        tmp_path, monkeypatch, failure):
+    subject = _subject("97")
+    block_hash = "0x" + "46" * 32
+    observation = ProviderObservation(
+        provider_id="archive-a", block_number=15, block_hash=block_hash,
+        phase=LifecyclePhase.UNRESOLVED, payout=None,
+        dispute=DisputeState.UNKNOWN, collateral_address=None,
+        derived_token_ids=None, adapter_address=None, question_id=None,
+        audit_event_ids=(),
+    )
+    providers = (
+        _Provider("archive-a", head=20, block_hash=block_hash,
+                  observation=observation),
+        _Provider("archive-b", head=20, block_hash=block_hash,
+                  observation=replace(observation, provider_id="archive-b")),
+    )
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        def fail_store(_assessment):
+            raise failure
+
+        monkeypatch.setattr(store, "record_assessment", fail_store)
+        with pytest.raises(type(failure), match=str(failure)):
+            ResolutionFeed(store, providers).poll((subject,))
+
+
 def test_poll_accepts_matching_clear_terminal(tmp_path):
     subject = _subject("86")
     block_hash = "0x" + "88" * 32
