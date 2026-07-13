@@ -141,13 +141,14 @@ def test_e2e_clean_corroborated_proposal_skips_on_k0_with_logging(tmp_path):
             assert comps[0].w_news_effective == 0.20
 
 
-# POL-14 whole-slice composition: real registry metadata reaches the real S6 ledger.
-def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
+# POL-15 whole-slice composition: real registry identity reaches the real S6 ledger.
+def test_ers_real_registry_records_canonical_resolution_identity(tmp_path):
+    condition = "0x" + "ab" * 32
     token = "7704407378332423580507141839985172615515196706624243524491048428567892599013"
     sibling = "1959412866692185789324499315644486550124994570117004262795754352991182983341"
     registry = MarketRegistry.from_gamma_snapshots(
         [{
-            "conditionId": "m1",
+            "conditionId": condition,
             "question": "Will Bitcoin reach the Gamma threshold?",
             "endDate": "2100-01-01T00:00:00Z",
             "clobTokenIds": f'["{token}", "{sibling}"]',
@@ -157,7 +158,7 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
             {"id": "120", "label": "Finance"},
             {"id": "21", "label": "Crypto"},
         ], "markets": [{
-            "conditionId": "m1",
+            "conditionId": condition,
             "clobTokenIds": f'["{token}", "{sibling}"]',
         }]}],
         clock=lambda: 0,
@@ -173,7 +174,8 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
             signer = PaperSigner()
             deep = _book("0.50", ask_size="100000", bid="0.49", bid_size="100000")
             ProposeOnlyFacade(store).propose_trade(
-                "forged", token_id=token, condition_id="m1", event_id="forged-event", side="BUY",
+                "forged", token_id=token, condition_id=condition,
+                event_id="forged-event", side="BUY",
                 target_price="0.50", max_price="0.60", size_usd_suggestion="100",
                 p="0.95", p_confidence="0.8", resolution_summary="forged event identity",
                 thesis="...", citations=("c1", "c2"))
@@ -186,7 +188,8 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
             assert ledger.all() == [] and clog.all() == () and signer.placed == []
 
             ProposeOnlyFacade(store).propose_trade(
-                "i1", token_id=token, condition_id="m1", event_id="ev-market", side="BUY",
+                "i1", token_id=token, condition_id=condition,
+                event_id="ev-market", side="BUY",
                 target_price="0.50", max_price="0.60", size_usd_suggestion="100",
                 p="0.95", p_confidence="0.8",
                 resolution_summary="Hermes tries to call this politics",
@@ -196,7 +199,12 @@ def test_e2e_real_market_registry_replaces_unknown_bucket(tmp_path):
                             signer=signer, pipeline=pipe)
 
             assert store.get("i1").status == "SKIPPED"  # crypto bucket is cold -> k=0
-            assert ledger.get("i1").category == "crypto"  # reviewed tags, not proposal text
+            forecast = ledger.get("i1")
+            assert forecast.category == "crypto"  # reviewed tags, not proposal text
+            assert (
+                forecast.event_id, forecast.token_id, forecast.outcome_slot,
+                forecast.sibling_token_ids,
+            ) == ("ev-market", token, 0, (token, sibling))
             assert len(clog.all()) == 1
             assert signer.placed == []
 
