@@ -18,11 +18,11 @@ from polybot.resolution.models import (
 )
 
 
-def _terminal(condition_id):
+def _terminal(condition_id, *, payout=None, dispute=DisputeState.CLEAR):
     return TerminalResolution(
         subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
-        payout=PayoutVector((1, 0), 1),
-        dispute=DisputeState.CLEAR,
+        payout=PayoutVector((1, 0), 1) if payout is None else payout,
+        dispute=dispute,
         block_number=100,
         block_hash="0x" + "22" * 32,
         adapter_address="0x" + "33" * 20,
@@ -166,12 +166,23 @@ def test_target_decoders_require_exact_canonical_sibling_array(
     "terminal_id", "status", "resolution_value", "resolution_numerator",
     "resolution_denominator", "settled_at", "missing_receipt",
 ])
-def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruption):
+@pytest.mark.parametrize("terminal_case", ["binary", "fractional", "disputed", "manual"])
+def test_target_terminal_replay_validates_settled_rows(
+        tmp_path, kind, corruption, terminal_case):
     condition_id = "0x" + "52" * 32
-    terminal = _terminal(condition_id)
+    if terminal_case == "fractional":
+        terminal = _terminal(condition_id, payout=PayoutVector((1, 2), 3))
+    elif terminal_case == "disputed":
+        terminal = _terminal(condition_id, dispute=DisputeState.DISPUTED)
+    elif terminal_case == "manual":
+        terminal = _terminal(condition_id, dispute=DisputeState.MANUAL)
+    else:
+        terminal = _terminal(condition_id)
     stamper = MonotonicStamper()
     if kind == "forecast":
-        ledger = ForecastLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger = ForecastLedger(
+            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+        )
         ledger.record_forecast(
             "row", category="politics", condition_id=condition_id,
             p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
@@ -180,7 +191,9 @@ def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruptio
         table, key = "forecasts", "forecast_id"
         status_column, settled_column = "resolution_status", "resolved_at"
     elif kind == "maker":
-        ledger = MakerLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger = MakerLedger(
+            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+        )
         ledger.record_fill(
             "row", token_id="101", condition_id=condition_id, category="politics",
             side="BUY", shares=Decimal("10"), price_exec=Decimal("0.4"),
@@ -190,7 +203,9 @@ def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruptio
         table, key = "maker_fills", "fill_id"
         status_column, settled_column = "status", "settled_at"
     else:
-        ledger = ShadowLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger = ShadowLedger(
+            str(tmp_path / f"{kind}-{terminal_case}-{corruption}.db"), stamper
+        )
         ledger.record_trade(
             "row", token_id="101", condition_id=condition_id, category="politics",
             side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
