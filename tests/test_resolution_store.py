@@ -81,6 +81,16 @@ def test_assessment_rejects_classified_terminal_paths(classified):
         )
 
 
+@pytest.mark.parametrize("lookup_name", ["assessment_for", "terminal_for"])
+def test_store_lookups_require_canonical_condition_identity(tmp_path, lookup_name):
+    with ResolutionStore(str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        lookup = getattr(store, lookup_name)
+        assert lookup("0x" + "99" * 32) is None
+        for invalid in (None, "bad", "0x" + "AA" * 32):
+            with pytest.raises(ValueError, match="condition_id"):
+                lookup(invalid)
+
+
 def test_terminal_atomically_creates_three_ordered_outbox_rows(tmp_path):
     path = str(tmp_path / "resolution.db")
     terminal = _terminal("71")
