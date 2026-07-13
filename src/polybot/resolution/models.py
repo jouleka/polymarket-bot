@@ -1,6 +1,7 @@
 """Pure authority models for resolution and settlement."""
 
 from dataclasses import dataclass
+from fractions import Fraction
 import re
 
 
@@ -38,3 +39,29 @@ class ResolutionSubject:
                     or _TOKEN_ID.fullmatch(token_id) is None
                     or int(token_id) > _UINT256_MAX):
                 raise ValueError("token_ids must be canonical positive uint256 strings")
+
+
+@dataclass(frozen=True)
+class PayoutVector:
+    """Exact CTF binary payout authority."""
+
+    numerators: tuple[int, int]
+    denominator: int
+
+    def __post_init__(self):
+        if not isinstance(self.numerators, tuple) or len(self.numerators) != 2:
+            raise ValueError("numerators must be a binary tuple")
+        for numerator in self.numerators:
+            if (isinstance(numerator, bool) or not isinstance(numerator, int)
+                    or not 0 <= numerator <= _UINT256_MAX):
+                raise ValueError("payout numerators must be non-negative uint256 integers")
+        if (isinstance(self.denominator, bool) or not isinstance(self.denominator, int)
+                or not 0 < self.denominator <= _UINT256_MAX):
+            raise ValueError("payout denominator must be a positive uint256 integer")
+        if sum(self.numerators) != self.denominator:
+            raise ValueError("payout denominator must equal the numerator sum")
+
+    def fraction_for(self, slot):
+        if isinstance(slot, bool) or not isinstance(slot, int) or slot not in (0, 1):
+            raise IndexError(f"outcome slot must be 0 or 1, got {slot!r}")
+        return Fraction(self.numerators[slot], self.denominator)
