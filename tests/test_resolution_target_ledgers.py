@@ -115,6 +115,64 @@ def test_target_row_decoders_reject_mixed_identity(tmp_path, kind, corrupt_colum
         ledger.close()
 
 
+@pytest.mark.parametrize("kind", ["forecast", "maker", "shadow"])
+@pytest.mark.parametrize("corruption", ["terminal_id", "resolution_value", "missing_receipt"])
+def test_target_terminal_replay_validates_settled_rows(tmp_path, kind, corruption):
+    condition_id = "0x" + "52" * 32
+    terminal = _terminal(condition_id)
+    stamper = MonotonicStamper()
+    if kind == "forecast":
+        ledger = ForecastLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger.record_forecast(
+            "row", category="politics", condition_id=condition_id,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key = "forecasts", "forecast_id"
+    elif kind == "maker":
+        ledger = MakerLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger.record_fill(
+            "row", token_id="101", condition_id=condition_id, category="politics",
+            side="BUY", shares=Decimal("10"), price_exec=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key = "maker_fills", "fill_id"
+    else:
+        ledger = ShadowLedger(str(tmp_path / f"{kind}-{corruption}.db"), stamper)
+        ledger.record_trade(
+            "row", token_id="101", condition_id=condition_id, category="politics",
+            side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
+            fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"), event_id="event-1",
+            outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        table, key = "shadow_trades", "trade_id"
+    try:
+        assert ledger.apply_terminal(terminal) == 1
+        if corruption == "resolution_value":
+            ledger._conn.execute(
+                f"UPDATE {table} SET resolution_value='0' WHERE {key}='row'"
+            )
+        else:
+            ledger._conn.execute(
+                f"UPDATE {table} SET terminal_id='different' WHERE {key}='row'"
+            )
+            if corruption == "missing_receipt":
+                ledger._conn.execute(
+                    "DELETE FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+                )
+        ledger._conn.commit()
+
+        with pytest.raises(SettlementConflict, match="settled|terminal|receipt|projection"):
+            ledger.apply_terminal(terminal)
+        expected_receipts = 0 if corruption == "missing_receipt" else 1
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM resolution_receipts"
+        ).fetchone()[0] == expected_receipts
+    finally:
+        ledger.close()
+
+
 def test_legacy_settlement_mutators_reject_canonical_pending_rows(tmp_path):
     stamper = MonotonicStamper()
 

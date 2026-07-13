@@ -59,6 +59,21 @@ def _decode_identity(*, event_id, token_id, outcome_slot, sibling_json, terminal
     return subject.token_ids
 
 
+def _terminal_projection(terminal, slot):
+    numerator = terminal.payout.numerators[slot]
+    denominator = terminal.payout.denominator
+    if terminal.dispute is not DisputeState.CLEAR:
+        return "DISPUTED", None, numerator, denominator
+    value = str(terminal.payout.decimal_for(slot))
+    if numerator == denominator:
+        status = "WON"
+    elif numerator == 0:
+        status = "LOST"
+    else:
+        status = "SETTLED"
+    return status, value, numerator, denominator
+
+
 @dataclass(frozen=True)
 class MakerFillRecord:
     fill_id: str
@@ -257,52 +272,62 @@ class MakerLedger:
             if receipt is not None:
                 if receipt[0] != terminal_id or bytes(receipt[1]) != payload:
                     raise SettlementConflict("maker receipt contradicts terminal payload")
-                self._conn.commit()
-                return 0
             stored_rows = self._conn.execute(
                 "SELECT fill_id, token_id, category, event_id, outcome_slot, "
-                "sibling_token_ids, status FROM maker_fills "
-                "WHERE condition_id=? AND terminal_id IS NULL",
+                "sibling_token_ids, status, settled_at, resolution_value, "
+                "resolution_numerator, resolution_denominator, terminal_id FROM maker_fills "
+                "WHERE condition_id=?",
                 (terminal.subject.condition_id,),
             ).fetchall()
             rows = []
-            for (fill_id, token_id, category, event_id, slot, sibling_json,
-                 status) in stored_rows:
+            for (fill_id, token_id, category, event_id, slot, sibling_json, status,
+                 settled_at, stored_value, stored_numerator, stored_denominator,
+                 row_terminal_id) in stored_rows:
                 identity = (event_id, slot, sibling_json)
                 if all(value is None for value in identity):
+                    if row_terminal_id is not None:
+                        raise SettlementConflict("maker terminal state lacks identity")
                     continue
-                if any(value is None for value in identity) or status is not None:
-                    raise SettlementConflict("maker identity is incomplete or not pending")
-                try:
-                    siblings = tuple(json.loads(sibling_json))
-                except (TypeError, ValueError) as exc:
-                    raise SettlementConflict("maker identity has invalid siblings") from exc
+                siblings = _decode_identity(
+                    event_id=event_id, token_id=token_id, outcome_slot=slot,
+                    sibling_json=sibling_json, terminal_id=row_terminal_id,
+                    condition_id=terminal.subject.condition_id, category=category,
+                )
                 subject = terminal.subject
                 if (category != subject.category or event_id != subject.event_id
                         or siblings != subject.token_ids
-                        or isinstance(slot, bool) or slot not in (0, 1)
                         or subject.token_ids[slot] != token_id):
                     raise SettlementConflict("maker identity contradicts terminal subject")
-                rows.append((fill_id, slot))
+                expected = _terminal_projection(terminal, slot)
+                if row_terminal_id is None:
+                    if any(value is not None for value in (
+                            status, settled_at, stored_value, stored_numerator,
+                            stored_denominator)):
+                        raise SettlementConflict("maker pending row has settled state")
+                    rows.append((fill_id, slot))
+                    continue
+                if receipt is None:
+                    raise SettlementConflict("maker settled row has no terminal receipt")
+                expected_status, expected_value, numerator, denominator = expected
+                if (row_terminal_id != terminal_id or status != expected_status
+                        or settled_at is None or stored_value != expected_value
+                        or stored_numerator != str(numerator)
+                        or stored_denominator != str(denominator)):
+                    raise SettlementConflict("maker settled projection contradicts terminal")
+            if receipt is not None:
+                if rows:
+                    raise SettlementConflict("maker receipt coexists with pending rows")
+                self._conn.commit()
+                return 0
             self._conn.execute(
                 "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
                 "VALUES (?, ?, ?)",
                 (terminal.subject.condition_id, terminal_id, payload),
             )
             for fill_id, slot in rows:
-                numerator = terminal.payout.numerators[slot]
-                denominator = terminal.payout.denominator
-                if terminal.dispute is not DisputeState.CLEAR:
-                    status = "DISPUTED"
-                    resolution_value = None
-                else:
-                    resolution_value = str(terminal.payout.decimal_for(slot))
-                    if numerator == denominator:
-                        status = "WON"
-                    elif numerator == 0:
-                        status = "LOST"
-                    else:
-                        status = "SETTLED"
+                status, resolution_value, numerator, denominator = _terminal_projection(
+                    terminal, slot
+                )
                 self._conn.execute(
                     "UPDATE maker_fills SET status=?, resolution_value=?, settled_at=?, "
                     "resolution_numerator=?, resolution_denominator=?, terminal_id=? "
