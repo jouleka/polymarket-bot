@@ -21,6 +21,7 @@ from polybot.resolution.models import (
     ResolutionSubject,
     TerminalResolution,
 )
+from polybot.resolution.errors import SettlementConflict
 
 # Honest win/loss vs the two statuses excluded from the net sample: a whale-captured UMA
 # dispute (DISPUTED) and a refund/50-50 (VOID) must not poison the shadow net-PnL.
@@ -204,16 +205,36 @@ class ShadowLedger:
 
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            stored_rows = self._conn.execute(
+                "SELECT trade_id, token_id, category, event_id, outcome_slot, "
+                "sibling_token_ids, status FROM shadow_trades "
+                "WHERE condition_id=? AND terminal_id IS NULL",
+                (terminal.subject.condition_id,),
+            ).fetchall()
+            rows = []
+            for (trade_id, token_id, category, event_id, slot, sibling_json,
+                 status) in stored_rows:
+                identity = (event_id, slot, sibling_json)
+                if all(value is None for value in identity):
+                    continue
+                if any(value is None for value in identity) or status is not None:
+                    raise SettlementConflict("shadow identity is incomplete or not pending")
+                try:
+                    siblings = tuple(json.loads(sibling_json))
+                except (TypeError, ValueError) as exc:
+                    raise SettlementConflict("shadow identity has invalid siblings") from exc
+                subject = terminal.subject
+                if (category != subject.category or event_id != subject.event_id
+                        or siblings != subject.token_ids
+                        or isinstance(slot, bool) or slot not in (0, 1)
+                        or subject.token_ids[slot] != token_id):
+                    raise SettlementConflict("shadow identity contradicts terminal subject")
+                rows.append((trade_id, slot))
             self._conn.execute(
                 "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
                 "VALUES (?, ?, ?)",
                 (terminal.subject.condition_id, terminal_id, terminal.canonical_bytes),
             )
-            rows = self._conn.execute(
-                "SELECT trade_id, outcome_slot FROM shadow_trades "
-                "WHERE condition_id=? AND terminal_id IS NULL",
-                (terminal.subject.condition_id,),
-            ).fetchall()
             for trade_id, slot in rows:
                 numerator = terminal.payout.numerators[slot]
                 denominator = terminal.payout.denominator
