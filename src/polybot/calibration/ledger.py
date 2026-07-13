@@ -166,13 +166,25 @@ class ForecastLedger:
         DISPUTED_LOST later). Fails LOUD on an unknown status or an unknown forecast_id."""
         if status not in VALID_STATUSES:
             raise ValueError(f"invalid resolution status {status!r}; expected one of {VALID_STATUSES}")
-        cur = self._conn.execute(
-            "UPDATE forecasts SET resolution_status=?, resolved_at=? WHERE forecast_id=?",
-            (status, self._stamper.stamp(), forecast_id),
-        )
-        self._conn.commit()
-        if cur.rowcount == 0:
-            raise KeyError(f"no forecast {forecast_id!r} to resolve")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT event_id, token_id, outcome_slot, sibling_token_ids, terminal_id "
+                "FROM forecasts WHERE forecast_id=?", (forecast_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"no forecast {forecast_id!r} to resolve")
+            if any(value is not None for value in row):
+                raise SettlementConflict("legacy forecast mutator cannot resolve canonical rows")
+            self._conn.execute(
+                "UPDATE forecasts SET resolution_status=?, resolved_at=? WHERE forecast_id=?",
+                (status, self._stamper.stamp(), forecast_id),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
 
     def apply_terminal(self, terminal):
         """Apply one classified terminal and its immutable receipt in one transaction."""
