@@ -64,7 +64,11 @@ class ResolutionFeed:
         results = {}
         remaining = []
         for subject in subjects:
-            terminal = self._store.terminal_for(subject.condition_id)
+            try:
+                terminal = self._store.terminal_for(subject.condition_id)
+            except SettlementConflict as exc:
+                self._store.halt(str(exc) or "stored terminal authority contradiction")
+                raise
             if terminal is None:
                 remaining.append(subject)
                 continue
@@ -194,12 +198,16 @@ class ResolutionFeed:
 
     def recover_pending(self):
         self._store.require_healthy()
-        terminals = self._store.pending_terminals()
-        for terminal in terminals:
-            self.verify_terminal(terminal)
-        self._store._complete_recovery(
-            tuple(terminal.terminal_id for terminal in terminals)
-        )
+        try:
+            terminals = self._store.pending_terminals()
+            for terminal in terminals:
+                self.verify_terminal(terminal)
+            self._store._complete_recovery(
+                tuple(terminal.terminal_id for terminal in terminals)
+            )
+        except SettlementConflict as exc:
+            self._store.halt(str(exc) or "stored recovery authority contradiction")
+            raise
         return len(terminals)
 
     @staticmethod
