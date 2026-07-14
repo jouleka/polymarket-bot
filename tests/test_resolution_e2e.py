@@ -5,9 +5,15 @@ from decimal import Decimal
 
 import pytest
 
+from polybot.calibration.config import CalibrationConfig
+from polybot.calibration.gate import CalibrationGate
 from polybot.calibration.ledger import ForecastLedger
 from polybot.core.clock import MonotonicStamper
+from polybot.harness.config import RampConfig
+from polybot.harness.evidence import evaluate_category
 from polybot.harness.ledger import ShadowLedger
+from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.maker.gate import MakerGate
 from polybot.maker.ledger import MakerLedger
 from polybot.resolution.dispatcher import ResolutionDispatcher
 from polybot.resolution.errors import (
@@ -28,14 +34,15 @@ from polybot.resolution.models import (
 from polybot.resolution.store import ResolutionStore
 
 
-def _terminal(condition_byte, *, payout=PayoutVector((3, 1), 4)):
+def _terminal(condition_byte, *, payout=PayoutVector((3, 1), 4),
+              dispute=DisputeState.CLEAR):
     return TerminalResolution(
         subject=ResolutionSubject(
             "event-1", "0x" + condition_byte * 32,
             ("101", "202"), "politics",
         ),
         payout=payout,
-        dispute=DisputeState.CLEAR,
+        dispute=dispute,
         block_number=100,
         block_hash="0x" + "22" * 32,
         adapter_address="0x" + "33" * 20,
@@ -315,3 +322,80 @@ def test_fake_provider_whole_slice_isolates_lifecycles_and_recovers(tmp_path):
         assert caught.value is contradiction
         with pytest.raises(IntegrityHalted, match="accepted payout changed"):
             reopened.require_healthy()
+
+
+@pytest.mark.parametrize("dispute", [DisputeState.DISPUTED, DisputeState.MANUAL])
+def test_excluded_terminal_fans_out_into_real_tail_counters(tmp_path, dispute):
+    condition_byte = "a1" if dispute is DisputeState.DISPUTED else "a2"
+    terminal = _terminal(condition_byte, dispute=dispute)
+    condition_id = terminal.subject.condition_id
+    stamper = MonotonicStamper()
+    calibration_config = CalibrationConfig()
+    maker_config = MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
+
+    with (
+        ResolutionStore(str(tmp_path / "resolution.db"), stamper) as store,
+        ForecastLedger(str(tmp_path / "forecast.db"), stamper) as forecast,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        forecast.record_forecast(
+            "forecast", category="politics", condition_id=condition_id,
+            p=Decimal("0.7"), market_mid=Decimal("0.6"), event_id="event-1",
+            token_id="202", outcome_slot=1,
+            sibling_token_ids=("101", "202"),
+        )
+        maker.record_fill(
+            "maker", token_id="202", condition_id=condition_id,
+            category="politics", side="BUY", shares=Decimal("2"),
+            price_exec=Decimal("0.4"), fill_mid=Decimal("0.5"),
+            reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=1,
+            sibling_token_ids=("101", "202"),
+        )
+        shadow.record_trade(
+            "shadow", token_id="202", condition_id=condition_id,
+            category="politics", side="BUY", shares=Decimal("2"),
+            fill_price=Decimal("0.4"), fill_mid=Decimal("0.5"),
+            reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=1,
+            sibling_token_ids=("101", "202"),
+        )
+        store.accept_terminal(terminal)
+
+        dispatcher = ResolutionDispatcher(store, forecast, maker, shadow)
+        assert dispatcher.drain(3) == 3
+
+        forecast_row = forecast.get("forecast")
+        maker_row, = maker.all()
+        shadow_row, = shadow.all()
+        assert forecast_row.resolution_status == "DISPUTED_LOST"
+        assert maker_row.status == shadow_row.status == "DISPUTED"
+        assert forecast_row.resolution_value is None
+        assert maker_row.resolution_value is shadow_row.resolution_value is None
+        for row in (forecast_row, maker_row, shadow_row):
+            assert row.resolution_numerator == 1
+            assert row.resolution_denominator == 4
+            assert row.terminal_id == terminal.terminal_id
+
+        calibration_gate = CalibrationGate(
+            forecast, None, calibration_config
+        )
+        calibration_report = calibration_gate.report_for("politics")
+        assert calibration_report.n_scored == 0
+        assert calibration_report.n_disputed == 1
+        assert calibration_report.n_void == 0
+
+        maker_gate = MakerGate(maker, maker_config)
+        maker_report = maker_gate.report_for("politics")
+        assert maker_report.n_settled == 0
+        assert maker_report.n_disputed == 1
+        assert maker_report.n_void == 0
+
+        evidence = evaluate_category(
+            "politics", shadow_ledger=shadow, forecast_ledger=forecast,
+            calibration_gate=calibration_gate, maker_gate=maker_gate,
+            ramp_config=RampConfig(), maker_config=maker_config, family_size=1,
+        )
+        assert evidence.n_resolved == 0
+        assert evidence.n_disputed == 1
+        assert evidence.net_full is evidence.net_oos is None
+        assert evidence.ready is False
