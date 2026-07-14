@@ -5,9 +5,11 @@ import pytest
 from polybot.resolution.errors import ResolutionUnavailable
 from polybot.resolution.models import (
     CTF_ADDRESS,
+    DisputeState,
     LifecyclePhase,
     PUSD_ADDRESS,
     PayoutVector,
+    ProviderObservation,
     ResolutionSubject,
 )
 from polybot.resolution.rpc import (
@@ -81,6 +83,81 @@ class _TransitionRpc:
         else:
             raise AssertionError(f"unexpected transition selector {selector}")
         return "0x" + f"{value:064x}"
+
+
+class _ObservationRpc:
+    def __init__(self, subject, policy, preparation_block, resolution_block,
+                 acceptance_block, block_hash, question_id, transaction_hash):
+        self.subject = subject
+        self.policy = policy
+        self.preparation_block = preparation_block
+        self.resolution_block = resolution_block
+        self.acceptance_block = acceptance_block
+        self.block_hash = block_hash
+        self.question_id = question_id
+        self.transaction_hash = transaction_hash
+        self.calls = []
+
+    def call(self, method, params):
+        self.calls.append((method, params))
+        if method == "eth_getBlockByNumber":
+            return {"number": params[0], "hash": self.block_hash}
+        if method == "eth_getCode":
+            address, block_tag = params
+            deployment = (
+                CTF_DEPLOYMENT_BLOCK if address == CTF_ADDRESS
+                else self.policy.deployment_block
+            )
+            return "0x60" if int(block_tag, 16) >= deployment else "0x"
+        if method == "eth_call":
+            data = params[0]["data"]
+            selector = data[:10]
+            block_number = int(params[1], 16)
+            if selector == "0xd42dc0c2":
+                value = 2 if block_number >= self.preparation_block else 0
+            elif selector == "0xdd34de67":
+                value = 4 if block_number >= self.resolution_block else 0
+            elif selector == "0x0504c814":
+                value = (3, 1)[int(data[-64:], 16)]
+            elif selector == "0x856296f7":
+                return "0x" + ("31" if int(data[-64:], 16) == 1 else "32") * 32
+            elif selector == "0x39dd7530":
+                value = 101 if data[-64:] == "31" * 32 else 202
+            else:
+                raise AssertionError(f"unexpected call selector {selector}")
+            return "0x" + f"{value:064x}"
+        if method == "eth_getLogs":
+            event_filter = params[0]
+            topic = event_filter["topics"][0]
+            if topic == CONDITION_PREPARATION_TOPIC:
+                return [_ctf_log(
+                    topic, self.subject.condition_id, self.policy.address,
+                    self.question_id, self.preparation_block, 1,
+                    "0x" + "41" * 32, _word(2),
+                )]
+            if topic == CONDITION_RESOLUTION_TOPIC:
+                return [_ctf_log(
+                    topic, self.subject.condition_id, self.policy.address,
+                    self.question_id, self.resolution_block, 2,
+                    self.transaction_hash,
+                    _word(2) + _word(64) + _word(2) + _word(3) + _word(1),
+                )]
+            allowed_topics = topic if isinstance(topic, list) else [topic]
+            if (QUESTION_RESOLVED_V2_TOPIC in allowed_topics
+                    and int(event_filter["fromBlock"], 16) <= self.resolution_block
+                    <= int(event_filter["toBlock"], 16)):
+                return [{
+                    "address": self.policy.address,
+                    "blockNumber": hex(self.resolution_block),
+                    "transactionHash": self.transaction_hash,
+                    "logIndex": "0x3",
+                    "removed": False,
+                    "topics": [QUESTION_RESOLVED_V2_TOPIC, self.question_id],
+                    "data": "0x" + _word(1) + _word(64) + _word(2)
+                    + _word(3) + _word(1),
+                }]
+            return []
+        raise AssertionError(f"unexpected RPC method {method}")
 
 
 def test_rpc_correlates_monotonic_request_id():
@@ -670,3 +747,42 @@ def test_failed_filtered_history_is_unavailable_never_unknown_or_clear():
     assert complete._read_adapter_history(
         policy, question_id, 100, 100
     ) == ()
+
+
+def test_json_rpc_provider_returns_fully_bound_observation():
+    subject = ResolutionSubject(
+        "event-1", "0x" + "29" * 32, ("101", "202"), "politics"
+    )
+    policy = ADAPTER_POLICIES[-1]
+    preparation_block = 49_990_000
+    resolution_block = 50_000_000
+    acceptance_block = 50_000_005
+    block_hash = "0x" + "42" * 32
+    question_id = "0x" + "43" * 32
+    transaction_hash = "0x" + "44" * 32
+    rpc = _ObservationRpc(
+        subject, policy, preparation_block, resolution_block,
+        acceptance_block, block_hash, question_id, transaction_hash,
+    )
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+
+    observation = provider.observe(subject, acceptance_block)
+    assert observation == ProviderObservation(
+        provider_id="archive-a",
+        block_number=acceptance_block,
+        block_hash=block_hash,
+        phase=LifecyclePhase.FINALIZED,
+        payout=PayoutVector((3, 1), 4),
+        dispute=DisputeState.CLEAR,
+        collateral_address=PUSD_ADDRESS,
+        derived_token_ids=subject.token_ids,
+        adapter_address=policy.address,
+        question_id=question_id,
+        audit_event_ids=(
+            f"{preparation_block}:1:" + "0x" + "41" * 32
+            + ":CONDITION_PREPARATION",
+            f"{resolution_block}:2:{transaction_hash}:CONDITION_RESOLUTION",
+            f"{resolution_block}:3:{transaction_hash}:QUESTION_RESOLVED",
+        ),
+    )
+    assert all(method != "eth_blockNumber" for method, _ in rpc.calls)
