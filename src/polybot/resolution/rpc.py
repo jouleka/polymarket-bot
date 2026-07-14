@@ -7,10 +7,12 @@ import re
 from polybot.resolution.errors import ResolutionUnavailable
 from polybot.resolution.models import (
     CTF_ADDRESS,
+    DisputeState,
     LifecyclePhase,
     PUSD_ADDRESS,
     PayoutVector,
     ResolutionSubject,
+    fold_dispute,
 )
 
 
@@ -62,6 +64,58 @@ class CtfAuthority:
     resolution_block: int
     resolution_log_index: int
     resolution_transaction_hash: str
+
+
+_ADAPTER_EVENT_KINDS = frozenset({
+    "QUESTION_UPDATED",
+    "QUESTION_RESOLVED",
+    "QUESTION_RESET",
+    "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION",
+    "QUESTION_FLAGGED",
+    "QUESTION_UNFLAGGED",
+    "QUESTION_EMERGENCY_RESOLVED",
+})
+
+
+@dataclass(frozen=True)
+class AdapterEvent:
+    kind: str
+    question_id: str
+    block_number: int
+    log_index: int
+    transaction_hash: str
+    manual: bool = False
+
+    def __post_init__(self):
+        if self.kind not in _ADAPTER_EVENT_KINDS:
+            raise ValueError("adapter event kind is unsupported")
+        decode_fixed_bytes(self.question_id, 32)
+        if (isinstance(self.block_number, bool)
+                or not isinstance(self.block_number, int)
+                or self.block_number < 0
+                or isinstance(self.log_index, bool)
+                or not isinstance(self.log_index, int)
+                or self.log_index < 0):
+            raise ValueError("adapter event coordinate is invalid")
+        decode_fixed_bytes(self.transaction_hash, 32)
+        if not isinstance(self.manual, bool):
+            raise TypeError("adapter event manual flag must be bool")
+        if self.manual and self.kind != "QUESTION_RESOLVED":
+            raise ValueError("manual bool is only valid on v1 resolution")
+
+    @property
+    def audit_event_id(self):
+        return (
+            f"{self.block_number}:{self.log_index}:"
+            f"{self.transaction_hash}:{self.kind}"
+        )
+
+
+@dataclass(frozen=True)
+class PathProof:
+    dispute: DisputeState
+    audit_event_ids: tuple[str, ...]
+    terminal_event: AdapterEvent | None
 
 
 def decode_quantity(value):
@@ -299,6 +353,42 @@ class JsonRpcResolutionProvider:
             resolution_log_index=res_index,
             resolution_transaction_hash=res_tx,
         )
+
+    def _normalize_v1(self, question_id, events):
+        decode_fixed_bytes(question_id, 32)
+        relevant = self._validate_adapter_events(events, question_id)
+        terminal_events = tuple(
+            event for event in relevant if event.kind == "QUESTION_RESOLVED"
+        )
+        if len(terminal_events) > 1:
+            raise ResolutionUnavailable("v1 adapter terminal events conflict")
+        terminal = terminal_events[0] if terminal_events else None
+        states = [DisputeState.UNKNOWN]
+        if any(event.kind == "QUESTION_RESET" for event in relevant):
+            states.append(DisputeState.DISPUTED)
+        if (any(event.kind == "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION"
+                for event in relevant)
+                or (terminal is not None and terminal.manual)):
+            states.append(DisputeState.MANUAL)
+        return PathProof(
+            dispute=fold_dispute(tuple(states)),
+            audit_event_ids=tuple(event.audit_event_id for event in relevant),
+            terminal_event=terminal,
+        )
+
+    @staticmethod
+    def _validate_adapter_events(events, question_id):
+        if not isinstance(events, tuple):
+            raise TypeError("adapter events must be a tuple")
+        if any(not isinstance(event, AdapterEvent) for event in events):
+            raise TypeError("adapter history must contain AdapterEvent values")
+        positions = tuple(
+            (event.block_number, event.log_index, event.transaction_hash)
+            for event in events
+        )
+        if positions != tuple(sorted(positions)) or len(set(positions)) != len(positions):
+            raise ResolutionUnavailable("adapter events are not in unique chain order")
+        return tuple(event for event in events if event.question_id == question_id)
 
     def _single_ctf_log(self, topic, condition_id, block_number):
         _bytes32_word(condition_id)

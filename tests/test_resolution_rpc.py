@@ -12,6 +12,7 @@ from polybot.resolution.models import (
 )
 from polybot.resolution.rpc import (
     ADAPTER_POLICIES,
+    AdapterEvent,
     CONDITION_PREPARATION_TOPIC,
     CONDITION_RESOLUTION_TOPIC,
     CTF_DEPLOYMENT_BLOCK,
@@ -430,3 +431,50 @@ def test_ctf_events_tie_condition_adapter_question_and_payout():
     ):
         with pytest.raises(ResolutionUnavailable, match="terminal"):
             provider._link_adapter_terminal(authority, *link)
+
+
+def _adapter_event(kind, question_id, block_number, log_index, *, manual=False):
+    return AdapterEvent(
+        kind, question_id, block_number, log_index,
+        "0x" + f"{block_number % 256:02x}" * 32,
+        manual,
+    )
+
+
+def test_v1_path_never_claims_normal_resolution_is_clear():
+    question_id = "0x" + "23" * 32
+    normal = _adapter_event("QUESTION_RESOLVED", question_id, 200, 3)
+    updated = _adapter_event("QUESTION_UPDATED", question_id, 150, 1)
+    reset = _adapter_event("QUESTION_RESET", question_id, 175, 2)
+    flagged = _adapter_event(
+        "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION", question_id, 180, 4
+    )
+    emergency = _adapter_event(
+        "QUESTION_RESOLVED", question_id, 200, 3, manual=True
+    )
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+
+    assert provider._normalize_v1(question_id, (normal,)).dispute.name == "UNKNOWN"
+    update_proof = provider._normalize_v1(question_id, (updated, normal))
+    assert update_proof.dispute.name == "UNKNOWN"
+    assert update_proof.audit_event_ids == (
+        updated.audit_event_id, normal.audit_event_id
+    )
+
+    disputed = provider._normalize_v1(question_id, (reset, normal))
+    assert disputed.dispute.name == "DISPUTED"
+    manual = provider._normalize_v1(question_id, (reset, flagged, normal))
+    assert manual.dispute.name == "MANUAL"
+    assert manual.audit_event_ids == (
+        reset.audit_event_id, flagged.audit_event_id, normal.audit_event_id
+    )
+    emergency_proof = provider._normalize_v1(question_id, (emergency,))
+    assert emergency_proof.dispute.name == "MANUAL"
+
+    combined = provider._normalize_v1(
+        question_id, (updated, reset, flagged, normal)
+    )
+    assert combined.dispute.name == "MANUAL"
+    assert combined.audit_event_ids == tuple(
+        event.audit_event_id for event in (updated, reset, flagged, normal)
+    )
