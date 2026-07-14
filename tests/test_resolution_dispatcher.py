@@ -4,6 +4,7 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.resolution.dispatcher import ResolutionDispatcher
+from polybot.resolution.errors import IntegrityHalted, SettlementConflict
 from polybot.resolution.models import (
     DisputeState,
     PayoutVector,
@@ -65,6 +66,15 @@ class _TransientTarget:
         if self.fail:
             raise RuntimeError("temporary target outage")
         return 1
+
+
+class _ConflictTarget:
+    def __init__(self):
+        self.calls = []
+
+    def apply_terminal(self, terminal):
+        self.calls.append(terminal.terminal_id)
+        raise SettlementConflict("target receipt contradicts terminal")
 
 
 def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
@@ -180,3 +190,46 @@ def test_transient_target_failure_stops_without_ack_or_overtake(tmp_path):
             ("FORECAST", first.terminal_id),
             ("FORECAST", first.terminal_id),
         ]
+
+
+def test_target_settlement_conflict_persistently_halts_central_store(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("86")
+    later = _terminal("87")
+    forecast = _ConflictTarget()
+    unused_events = []
+
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        dispatcher = ResolutionDispatcher(
+            store,
+            forecast,
+            _Target("MAKER", unused_events),
+            _Target("SHADOW", unused_events),
+        )
+
+        with pytest.raises(SettlementConflict, match="target receipt"):
+            dispatcher.drain(1)
+        assert forecast.calls == [terminal.terminal_id]
+        assert [(record.sequence, record.role)
+                for record in store.pending_outbox(10)] == [
+            (1, "FORECAST"), (2, "MAKER"), (3, "SHADOW"),
+        ]
+        with pytest.raises(IntegrityHalted, match="target receipt"):
+            store.require_healthy()
+        with pytest.raises(IntegrityHalted):
+            store.accept_terminal(later)
+        with pytest.raises(IntegrityHalted):
+            dispatcher.drain(1)
+        assert forecast.calls == [terminal.terminal_id]
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        reopened_dispatcher = ResolutionDispatcher(
+            reopened,
+            forecast,
+            _Target("MAKER", unused_events),
+            _Target("SHADOW", unused_events),
+        )
+        with pytest.raises(IntegrityHalted, match="target receipt"):
+            reopened_dispatcher.drain(1)
+        assert forecast.calls == [terminal.terminal_id]
