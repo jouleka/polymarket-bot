@@ -436,21 +436,25 @@ forecast/component writes. Merged `main` passes 1,482 tests; the 64/64 required 
 19/19 bounded equivalent sweep have zero survivors. The merge commit is `31f3390`; it is not deployed
 or runtime-composed, and POL-17 owns that composition.
 
-**UPDATE 2026-07-14 — POL-15 resolution/settlement is a reviewed feature candidate on
-`pol-15-resolution-settlement`, not yet merged or pushed.** The owner-approved design is implemented:
+**UPDATE 2026-07-14 — POL-15 resolution/settlement landed on `main` via
+[PR #3](https://github.com/jouleka/polymarket-bot/pull/3) and is installed on the VPS.** The
+owner-approved design is implemented:
 two agreeing Polygon providers at five confirmations; exact CTF payout and pUSD token-position
 authority; frozen reviewed UMA adapters with conservative dispute/manual classification; immutable
 canonical terminals; FULL-durability central outbox and target receipts; restart recovery fencing;
-and ordered idempotent fanout into Forecast, Maker, and Shadow. The reviewed code candidate `c3378f2`
-passes 2,070 tests. Fresh final specification, security/ABI, and mutation reviews pass; the final
+and ordered idempotent fanout into Forecast, Maker, and Shadow. Exact reviewed head `6dc9f6a` passes
+2,070 tests and merged as `5c4eb7b`. Fresh final specification, security/ABI, and mutation reviews
+pass; the final
 ledger covers 49 meaningful configurations across all 33 required families plus seven public-protocol
 mutations with zero survivors. Repository evidence is in
 [`VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md`](VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md).
-Nothing is deployed or runtime-composed, no chain write/signing path was added, and the final
-documentation-reconciliation SHA requires explicit owner approval before merge.
+The GitHub-linked service checkout is installed at the merge commit after a fresh 1,800.052-second
+storage gate passed at 0.236382 GiB/day. The old raw database is checksummed and preserved under
+`/opt/polymarket-bot/data/raw-firehose-20260714T155112Z`. The service remains stopped and disabled,
+and POL-17 still owns continuous runtime composition. No chain write/signing path was added.
 
-**Next work:** obtain owner approval for the exact POL-15 SHA and perform the `--no-ff` merge, then begin
-POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18 the isolated
+**Next work:** begin POL-16 shadow-execution wiring, then POL-17 the continuous ERS/harness runtime,
+and POL-18 the isolated
 propose-only Hermes brain. Only after those land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
