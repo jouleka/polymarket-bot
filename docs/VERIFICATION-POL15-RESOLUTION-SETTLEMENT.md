@@ -1,8 +1,11 @@
 # POL-15 resolution and settlement verification evidence
 
-Status: reviewed feature candidate; not merge, deployment, or live-money authorization  
-Base: `77dddef5e0988779a809572ceceeca372c5745e1`  
-Branch: `pol-15-resolution-settlement`  
+Status: reviewed feature candidate; not merge, deployment, or live-money authorization
+
+Base: `77dddef5e0988779a809572ceceeca372c5745e1`
+
+Branch: `pol-15-resolution-settlement`
+
 Code/test candidate: `e407fdfdaa1524e964090668cc4b5f1fec643bf1`
 
 POL-15 adds a read-only, two-provider Polygon resolution feed, immutable terminal authority,
