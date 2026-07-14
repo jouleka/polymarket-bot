@@ -92,7 +92,7 @@ class _ObservationRpc:
     def __init__(self, subject, policy, preparation_block, resolution_block,
                  acceptance_block, block_hash, question_id, transaction_hash,
                  *, position_ids=(101, 202), adapter_transaction_hash=None,
-                 adapter_log_index=3):
+                 adapter_log_index=3, acceptance_slot_count=2):
         self.subject = subject
         self.policy = policy
         self.preparation_block = preparation_block
@@ -107,6 +107,7 @@ class _ObservationRpc:
             else adapter_transaction_hash
         )
         self.adapter_log_index = adapter_log_index
+        self.acceptance_slot_count = acceptance_slot_count
         self.calls = []
 
     def call(self, method, params):
@@ -127,7 +128,10 @@ class _ObservationRpc:
             selector = data[:10]
             block_number = int(params[1], 16)
             if selector == "0xd42dc0c2":
-                value = 2 if block_number >= self.preparation_block else 0
+                value = (
+                    self.acceptance_slot_count
+                    if block_number >= self.preparation_block else 0
+                )
             elif selector == "0xdd34de67":
                 value = 4 if block_number >= self.resolution_block else 0
             elif selector == "0x0504c814":
@@ -999,6 +1003,24 @@ def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
         params[1] == hex(acceptance_block)
         for method, params in rpc.calls if method == "eth_call"
     )
+    assert [params for method, params in rpc.calls if method == "eth_getCode"] == [
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK - 1)],
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK)],
+        [policy.address, hex(policy.deployment_block - 1)],
+        [policy.address, hex(policy.deployment_block)],
+    ]
+
+    wrong_provider = JsonRpcResolutionProvider("archive-z", make_rpc())
+    with pytest.raises(SettlementConflict, match="provider"):
+        wrong_provider.verify_terminal(terminal)
+
+    for slot_count in (1, 3):
+        wrong_slots = make_rpc()
+        wrong_slots.acceptance_slot_count = slot_count
+        with pytest.raises(SettlementConflict, match="payout"):
+            JsonRpcResolutionProvider(
+                "archive-a", wrong_slots
+            ).verify_terminal(terminal)
 
     wrong_hash = JsonRpcResolutionProvider(
         "archive-a", make_rpc("0x" + "48" * 32)
@@ -1032,6 +1054,49 @@ def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
     changed_code_provider = JsonRpcResolutionProvider("archive-a", bad_code_rpc)
     with pytest.raises(SettlementConflict, match="deployment"):
         changed_code_provider.verify_terminal(terminal)
+
+    bad_ctf_rpc = make_rpc()
+    bad_ctf_call = bad_ctf_rpc.call
+
+    def changed_ctf_code(method, params):
+        if (method == "eth_getCode" and params == [
+                CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK - 1)]):
+            return "0x60"
+        return bad_ctf_call(method, params)
+
+    monkeypatch.setattr(bad_ctf_rpc, "call", changed_ctf_code)
+    with pytest.raises(SettlementConflict, match="deployment"):
+        JsonRpcResolutionProvider(
+            "archive-a", bad_ctf_rpc
+        ).verify_terminal(terminal)
+
+    cached_rpc = make_rpc()
+    cached_provider = JsonRpcResolutionProvider("archive-a", cached_rpc)
+    cached_provider._verify_deployments(policy.address)
+    cached_code_calls = sum(
+        method == "eth_getCode" for method, _ in cached_rpc.calls
+    )
+    cached_call = cached_rpc.call
+    forced_code_calls = []
+
+    def changed_cached_code(method, params):
+        if method == "eth_getCode":
+            forced_code_calls.append(params)
+        if (method == "eth_getCode" and params == [
+                policy.address, hex(policy.deployment_block)]):
+            return "0x"
+        return cached_call(method, params)
+
+    monkeypatch.setattr(cached_rpc, "call", changed_cached_code)
+    with pytest.raises(SettlementConflict, match="deployment"):
+        cached_provider.verify_terminal(terminal)
+    assert forced_code_calls == [
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK - 1)],
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK)],
+        [policy.address, hex(policy.deployment_block - 1)],
+        [policy.address, hex(policy.deployment_block)],
+    ]
+    assert cached_code_calls == 4
 
     wrong_chain_rpc = make_rpc()
     wrong_chain_call = wrong_chain_rpc.call
