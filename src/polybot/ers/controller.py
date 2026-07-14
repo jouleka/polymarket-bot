@@ -23,7 +23,7 @@ from polybot.ers.service import process_pending
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
                  heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
-                 telegram=None, reconciler=None, clock):
+                 telegram=None, reconciler=None, shadow_planner=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -55,6 +55,9 @@ class ERSController:
         # the controller stays HALTED with the empty construction portfolio, and run_cycle is
         # untouched. The DORMANT wallet=None shadow path flips HALTED->RUNNING on boot() (D6).
         self._reconciler = reconciler
+        # POL-16 opt-in ACCEPT adapter. None preserves the pre-POL-16 loop exactly;
+        # a wired planner returns a canonical filled paper execution or None.
+        self._shadow_planner = shadow_planner
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -142,5 +145,6 @@ class ERSController:
             self._store, book_for=self._book_for, portfolio=self._portfolio,
             caps=self._controller.active_caps(),
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
-            controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink)
+            controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink,
+            shadow_planner=self._shadow_planner)
         return self._portfolio

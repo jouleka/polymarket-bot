@@ -41,6 +41,7 @@ REASON_ANCHOR_ERROR = "anchor_error"
 REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
 REASON_RESOLUTION_IDENTITY_UNAVAILABLE = "resolution_identity_unavailable"
 REASON_MARKET_RESOLVED = "market_resolved"
+REASON_SHADOW_EXECUTION_ERROR = "shadow_execution_error"
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class HermesPipeline:
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
                     cluster_model=None, breaker=None, pipeline=None, controller=None,
-                    gtd_for=None, fill_sink=None):
+                    gtd_for=None, fill_sink=None, shadow_planner=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
@@ -97,6 +98,7 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
 
     for intent in store.pending():
         trade_intent = None
+        shadow_execution = None
         try:
             if block_reason is not None:
                 decision = Decision("REJECT", None, None, block_reason)
@@ -111,12 +113,26 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             # and keep processing the rest.
             decision = Decision("REJECT", None, None, "internal_error")
             trade_intent = None
+        if decision.verdict == "ACCEPT" and shadow_planner is not None:
+            try:
+                shadow_execution = shadow_planner(intent, decision)
+            except Exception:
+                # Shadow accounting is the evidence spine. A wiring/identity failure must
+                # veto the paper ACCEPT before any signer side effect, never silently run
+                # an unmeasured position.
+                decision = Decision("REJECT", None, None, REASON_SHADOW_EXECUTION_ERROR)
+                shadow_execution = None
         guard = nullcontext()
         if decision.verdict == "ACCEPT" and pipeline is not None:
             guard = pipeline.forecast_ledger.signing_guard(intent.condition_id)
         try:
             with guard:
-                store.record_decision(intent.intent_id, decision)
+                if shadow_execution is None:
+                    store.record_decision(intent.intent_id, decision)
+                else:
+                    store.record_decision(
+                        intent.intent_id, decision, shadow_execution=shadow_execution
+                    )
                 if decision.verdict == "ACCEPT":
                     signer.place(intent, decision)
                     portfolio = _fold(portfolio, trade_intent, decision)
