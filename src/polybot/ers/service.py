@@ -27,6 +27,7 @@ from polybot.ers.validator import (
 )
 from polybot.fusion.engine import FusionError
 from polybot.resolution.errors import ConditionAlreadyTerminal
+from polybot.ers.intent_store import ShadowExecutionRecord
 from polybot.ers.market_meta import (
     MarketMetadataUnavailable,
     ResolutionSubjectMetadata,
@@ -116,6 +117,9 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
         if decision.verdict == "ACCEPT" and shadow_planner is not None:
             try:
                 shadow_execution = shadow_planner(intent, decision)
+                if (shadow_execution is not None
+                        and not isinstance(shadow_execution, ShadowExecutionRecord)):
+                    raise TypeError("shadow planner returned an invalid execution")
             except Exception:
                 # Shadow accounting is the evidence spine. A wiring/identity failure must
                 # veto the paper ACCEPT before any signer side effect, never silently run
