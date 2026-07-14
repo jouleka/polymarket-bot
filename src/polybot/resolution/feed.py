@@ -234,6 +234,24 @@ class ResolutionFeed:
             raise TypeError("terminal must be a TerminalResolution")
         self._store.require_healthy()
         try:
+            try:
+                chain_ids = tuple(
+                    provider.chain_id() for provider in self._providers
+                )
+            except ResolutionUnavailable:
+                self._store.require_healthy()
+                raise
+            except Exception as exc:
+                self._store.require_healthy()
+                raise ResolutionUnavailable(
+                    "provider chain verification unavailable"
+                ) from exc
+            if any(isinstance(chain_id, bool) or not isinstance(chain_id, int)
+                   or chain_id != 137 for chain_id in chain_ids):
+                self._store.require_healthy()
+                raise ResolutionUnavailable(
+                    "provider chain verification is not Polygon 137"
+                )
             provider_ids = tuple(sorted(
                 provider.provider_id for provider in self._providers
             ))

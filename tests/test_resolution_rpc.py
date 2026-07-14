@@ -103,6 +103,8 @@ class _ObservationRpc:
 
     def call(self, method, params):
         self.calls.append((method, params))
+        if method == "eth_chainId":
+            return "0x89"
         if method == "eth_getBlockByNumber":
             return {"number": params[0], "hash": self.block_hash}
         if method == "eth_getCode":
@@ -866,3 +868,17 @@ def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
     changed_code_provider = JsonRpcResolutionProvider("archive-a", bad_code_rpc)
     with pytest.raises(SettlementConflict, match="deployment"):
         changed_code_provider.verify_terminal(terminal)
+
+    wrong_chain_rpc = make_rpc()
+    wrong_chain_call = wrong_chain_rpc.call
+
+    def wrong_chain(method, params):
+        if method == "eth_chainId":
+            return "0x1"
+        return wrong_chain_call(method, params)
+
+    monkeypatch.setattr(wrong_chain_rpc, "call", wrong_chain)
+    wrong_chain_provider = JsonRpcResolutionProvider("archive-a", wrong_chain_rpc)
+    with pytest.raises(ResolutionUnavailable, match="chain"):
+        wrong_chain_provider.verify_terminal(terminal)
+    assert all(method != "eth_getBlockByNumber" for method, _ in wrong_chain_rpc.calls)
