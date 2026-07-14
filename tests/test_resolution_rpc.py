@@ -571,6 +571,56 @@ def test_ctf_events_tie_condition_adapter_question_and_payout():
         with pytest.raises(ResolutionUnavailable):
             invalid._ctf_authority(condition_id, 100, 200, payout)
 
+    malformed_preparation_data = (
+        "0x",
+        "0x" + "00" * 31,
+        "0x" + "00" * 33,
+        "0x" + _word(1),
+        "0x" + _word(3),
+    )
+    for data in malformed_preparation_data:
+        bad_preparation = dict(preparation)
+        bad_preparation["data"] = data
+        with pytest.raises(ResolutionUnavailable, match="preparation"):
+            JsonRpcResolutionProvider(
+                "archive-a", _Rpc([bad_preparation], [resolution])
+            )._ctf_authority(condition_id, 100, 200, payout)
+
+    malformed_resolution_words = (
+        (2, 64, 2, 3),
+        (3, 64, 2, 3, 1),
+        (2, 32, 2, 3, 1),
+        (2, 64, 3, 3, 1),
+    )
+    for words in malformed_resolution_words:
+        bad_resolution = dict(resolution)
+        bad_resolution["data"] = "0x" + "".join(
+            _word(value) for value in words
+        )
+        with pytest.raises(ResolutionUnavailable, match="resolution"):
+            JsonRpcResolutionProvider(
+                "archive-a", _Rpc([preparation], [bad_resolution])
+            )._ctf_authority(condition_id, 100, 200, payout)
+
+    for event_name, event in (
+        ("preparation", preparation), ("resolution", resolution),
+    ):
+        for removed in (True, None, 0):
+            malformed_log = dict(event)
+            if removed is None:
+                malformed_log.pop("removed")
+            else:
+                malformed_log["removed"] = removed
+            logs = (
+                ([malformed_log], [resolution])
+                if event_name == "preparation"
+                else ([preparation], [malformed_log])
+            )
+            with pytest.raises(ResolutionUnavailable, match="log"):
+                JsonRpcResolutionProvider(
+                    "archive-a", _Rpc(*logs)
+                )._ctf_authority(condition_id, 100, 200, payout)
+
     duplicate_provider = JsonRpcResolutionProvider(
         "archive-a", _Rpc(
             [preparation, dict(preparation)],
