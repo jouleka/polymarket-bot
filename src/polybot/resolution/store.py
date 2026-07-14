@@ -531,6 +531,11 @@ def _decode_terminal(terminal_id, payload_bytes):
         raise SettlementConflict("stored terminal is not canonical") from exc
 
 
+def decode_terminal(terminal_id, payload_bytes):
+    """Authenticate and decode stored canonical terminal bytes for trusted replay paths."""
+    return _decode_terminal(terminal_id, payload_bytes)
+
+
 def _validate_condition_id(condition_id):
     if not isinstance(condition_id, str) or _BYTES32.fullmatch(condition_id) is None:
         raise ValueError("condition_id must be a canonical lowercase bytes32")

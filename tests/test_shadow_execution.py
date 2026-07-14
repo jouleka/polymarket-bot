@@ -6,12 +6,23 @@ from decimal import Decimal
 import pytest
 
 from polybot.ers.intent_store import PendingIntent, ShadowExecutionRecord
+from polybot.ers.intent_store import IntentStore
 from polybot.ers.market_meta import ResolutionSubjectMetadata
 from polybot.ers.validator import Decision
-from polybot.harness.execution import make_shadow_execution_planner
+from polybot.harness.execution import ShadowExecutionDispatcher, make_shadow_execution_planner
+from polybot.harness.ledger import ShadowLedger
 from polybot.ingestion.orderbook import LocalBook
+from polybot.core.clock import MonotonicStamper
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.maker.ledger import MakerLedger
 from polybot.maker.reward import reward_accrual
+from polybot.resolution.errors import ConditionAlreadyTerminal, SettlementConflict
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 
 def _book(*, bid="0.48", ask="0.52"):
@@ -61,6 +72,45 @@ def _subject(**overrides):
 
 def _config():
     return MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
+
+
+def _enqueue_execution(store, execution=None):
+    if execution is None:
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("25"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("2.50"),
+        )
+    store.propose_trade(
+        execution.execution_id, token_id=execution.token_id,
+        condition_id=execution.condition_id, event_id=execution.event_id,
+        side="SELL", target_price="0.01", max_price="0.90",
+        size_usd_suggestion="999", p="0.80", p_confidence="0.75",
+    )
+    store.record_decision(
+        execution.execution_id,
+        Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "cap"),
+        shadow_execution=execution,
+    )
+    return execution
+
+
+def _terminal(*, dispute=DisputeState.CLEAR, payout=PayoutVector((1, 0), 1)):
+    return TerminalResolution(
+        subject=ResolutionSubject(
+            "event-1", "0x" + "11" * 32, ("101", "202"), "politics"
+        ),
+        payout=payout,
+        dispute=dispute,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
 
 
 def test_planner_uses_fresh_best_bid_forced_buy_and_ers_approved_notional():
@@ -164,3 +214,178 @@ def test_planner_rejects_noncanonical_or_mismatched_subject(subject):
             _intent(),
             Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
         )
+
+
+def test_dispatcher_projects_exact_canonical_execution_to_both_ledgers(tmp_path):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        _enqueue_execution(store)
+
+        assert ShadowExecutionDispatcher(store, maker, shadow).drain(2) == 2
+
+        assert store.pending_shadow_executions(10) == ()
+        maker_row = maker.all()[0]
+        shadow_row = shadow.all()[0]
+        assert maker_row.fill_id == shadow_row.trade_id == "intent-1"
+        assert maker_row.token_id == shadow_row.token_id == "101"
+        assert maker_row.condition_id == shadow_row.condition_id == "0x" + "11" * 32
+        assert maker_row.event_id == shadow_row.event_id == "event-1"
+        assert maker_row.category == shadow_row.category == "politics"
+        assert maker_row.outcome_slot == shadow_row.outcome_slot == 0
+        assert maker_row.sibling_token_ids == shadow_row.sibling_token_ids == ("101", "202")
+        assert maker_row.side == shadow_row.side == "BUY"
+        assert maker_row.shares == shadow_row.shares == Decimal("25")
+        assert maker_row.price_exec == shadow_row.fill_price == Decimal("0.48")
+        assert maker_row.fill_mid == shadow_row.fill_mid == Decimal("0.50")
+        assert maker_row.reward_accrued == shadow_row.reward_accrued == Decimal("2.50")
+
+
+def test_dispatcher_crash_after_maker_commit_replays_then_reaches_shadow(tmp_path):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        _enqueue_execution(store)
+        dispatcher = ShadowExecutionDispatcher(store, maker, shadow)
+
+        def crash(record, changed):
+            assert record.role == "MAKER"
+            assert changed is True
+            raise RuntimeError("crash after maker commit")
+
+        dispatcher._after_apply = crash
+        with pytest.raises(RuntimeError, match="maker commit"):
+            dispatcher.drain(2)
+        assert len(maker.all()) == 1
+        assert shadow.all() == []
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER", "SHADOW",
+        ]
+
+        replay = []
+        dispatcher._after_apply = lambda record, changed: replay.append((record.role, changed))
+        assert dispatcher.drain(2) == 2
+        assert replay == [("MAKER", False), ("SHADOW", True)]
+        assert len(maker.all()) == len(shadow.all()) == 1
+        assert store.pending_shadow_executions(10) == ()
+
+
+def test_dispatcher_does_not_acknowledge_contradictory_duplicate(tmp_path):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        execution = _enqueue_execution(store)
+        maker.record_fill(
+            execution.execution_id, token_id=execution.token_id,
+            condition_id=execution.condition_id, category=execution.category,
+            side=execution.side, shares=Decimal("999"), price_exec=execution.price_exec,
+            fill_mid=execution.fill_mid, reward_accrued=execution.reward_accrued,
+            event_id=execution.event_id, outcome_slot=execution.outcome_slot,
+            sibling_token_ids=execution.sibling_token_ids,
+        )
+
+        with pytest.raises(SettlementConflict, match="contradicts shadow execution"):
+            ShadowExecutionDispatcher(store, maker, shadow).drain(2)
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER", "SHADOW",
+        ]
+        assert shadow.all() == []
+
+
+def test_terminal_before_execution_replay_inserts_exact_already_settled_rows(tmp_path):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        execution = _enqueue_execution(store)
+        terminal = _terminal()
+        assert maker.apply_terminal(terminal) == 0
+        assert shadow.apply_terminal(terminal) == 0
+
+        with pytest.raises(ConditionAlreadyTerminal):
+            maker.record_fill(
+                "legacy-late", token_id="101", condition_id=execution.condition_id,
+                category="politics", side="BUY", shares=Decimal("1"),
+                price_exec=Decimal("0.48"), fill_mid=Decimal("0.50"),
+                reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=0,
+                sibling_token_ids=("101", "202"),
+            )
+        with pytest.raises(ConditionAlreadyTerminal):
+            shadow.record_trade(
+                "legacy-late", token_id="101", condition_id=execution.condition_id,
+                category="politics", side="BUY", shares=Decimal("1"),
+                fill_price=Decimal("0.48"), fill_mid=Decimal("0.50"),
+                reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=0,
+                sibling_token_ids=("101", "202"),
+            )
+
+        assert ShadowExecutionDispatcher(store, maker, shadow).drain(2) == 2
+        maker_row = maker.all()[0]
+        shadow_row = shadow.all()[0]
+        assert maker_row.status == shadow_row.status == "WON"
+        assert maker_row.resolution_value == shadow_row.resolution_value == Decimal("1")
+        assert maker_row.resolution_numerator == shadow_row.resolution_numerator == 1
+        assert maker_row.resolution_denominator == shadow_row.resolution_denominator == 1
+        assert maker_row.terminal_id == shadow_row.terminal_id == terminal.terminal_id
+
+
+@pytest.mark.parametrize(
+    ("terminal", "status", "value", "numerator", "denominator"),
+    [
+        (_terminal(payout=PayoutVector((3, 1), 4)), "SETTLED", Decimal("0.75"), 3, 4),
+        (_terminal(dispute=DisputeState.DISPUTED), "DISPUTED", None, 1, 1),
+    ],
+)
+def test_terminal_race_preserves_fractional_and_dispute_authority(
+        tmp_path, terminal, status, value, numerator, denominator):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        _enqueue_execution(store)
+        maker.apply_terminal(terminal)
+        shadow.apply_terminal(terminal)
+
+        assert ShadowExecutionDispatcher(store, maker, shadow).drain(2) == 2
+        for row in (maker.all()[0], shadow.all()[0]):
+            assert row.status == status
+            assert row.resolution_value == value
+            assert row.resolution_numerator == numerator
+            assert row.resolution_denominator == denominator
+            assert row.terminal_id == terminal.terminal_id
+
+
+def test_terminal_race_subject_contradiction_stays_pending_and_loud(tmp_path):
+    stamper = MonotonicStamper()
+    with (
+        IntentStore(str(tmp_path / "intent.db"), stamper) as store,
+        MakerLedger(str(tmp_path / "maker.db"), stamper) as maker,
+        ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow,
+    ):
+        _enqueue_execution(store)
+        wrong = replace(
+            _terminal(),
+            subject=ResolutionSubject(
+                "wrong-event", "0x" + "11" * 32, ("101", "202"), "politics"
+            ),
+        )
+        maker.apply_terminal(wrong)
+
+        with pytest.raises(SettlementConflict, match="terminal subject contradicts"):
+            ShadowExecutionDispatcher(store, maker, shadow).drain(2)
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER", "SHADOW",
+        ]
