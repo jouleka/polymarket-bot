@@ -735,6 +735,76 @@ def test_empty_unrelated_or_missing_positive_resolution_is_unknown():
     ).audit_event_ids == ()
 
 
+def test_adapter_event_decoders_enforce_frozen_abi_shapes_and_values():
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+    question_id = "0x" + "26" * 32
+    payout = PayoutVector((3, 1), 4)
+
+    def decode(policy, topic, data):
+        log = {
+            "address": policy.address,
+            "blockNumber": "0x64",
+            "transactionHash": "0x" + "29" * 32,
+            "logIndex": "0x1",
+            "removed": False,
+            "topics": [topic, question_id],
+            "data": "0x" + data,
+        }
+        return provider._decode_adapter_history(policy, (log,), payout)
+
+    v1 = ADAPTER_POLICIES[0]
+    update_words = [192, 123, int("11" * 20, 16), 4, 5, 0, 3]
+    valid_update = "".join(_word(value) for value in update_words)
+    valid_update += "010203" + "00" * 29
+    assert decode(v1, QUESTION_UPDATED_V1_TOPIC, valid_update)[0].kind == (
+        "QUESTION_UPDATED"
+    )
+
+    malformed_updates = []
+    for index, value in ((0, 160), (2, 1 << 248), (5, 2), (6, 33)):
+        changed = list(update_words)
+        changed[index] = value
+        malformed_updates.append(
+            "".join(_word(word) for word in changed) + "010203" + "00" * 29
+        )
+    malformed_updates.extend((
+        valid_update[:-64],
+        valid_update[:-2] + "01",
+    ))
+    for malformed in malformed_updates:
+        with pytest.raises(ResolutionUnavailable, match="v1 update|v1 update bytes"):
+            decode(v1, QUESTION_UPDATED_V1_TOPIC, malformed)
+
+    with pytest.raises(ResolutionUnavailable, match="bool"):
+        decode(v1, QUESTION_RESOLVED_V1_TOPIC, _word(2))
+
+    v2_plus = ADAPTER_POLICIES[-1]
+    normal_words = (1, 64, 2, 3, 1)
+    emergency_words = (32, 2, 3, 1)
+    assert decode(
+        v2_plus, QUESTION_RESOLVED_V2_TOPIC,
+        "".join(_word(value) for value in normal_words),
+    )[0].kind == "QUESTION_RESOLVED"
+    assert decode(
+        v2_plus, QUESTION_EMERGENCY_RESOLVED_V2_TOPIC,
+        "".join(_word(value) for value in emergency_words),
+    )[0].kind == "QUESTION_EMERGENCY_RESOLVED"
+
+    malformed_payouts = (
+        (QUESTION_RESOLVED_V2_TOPIC, normal_words[:-1]),
+        (QUESTION_RESOLVED_V2_TOPIC, (1, 32, 2, 3, 1)),
+        (QUESTION_RESOLVED_V2_TOPIC, (1, 64, 3, 3, 1)),
+        (QUESTION_RESOLVED_V2_TOPIC, (1, 64, 2, 2, 2)),
+        (QUESTION_EMERGENCY_RESOLVED_V2_TOPIC, emergency_words[:-1]),
+        (QUESTION_EMERGENCY_RESOLVED_V2_TOPIC, (64, 2, 3, 1)),
+        (QUESTION_EMERGENCY_RESOLVED_V2_TOPIC, (32, 3, 3, 1)),
+        (QUESTION_EMERGENCY_RESOLVED_V2_TOPIC, (32, 2, 2, 2)),
+    )
+    for topic, words in malformed_payouts:
+        with pytest.raises(ResolutionUnavailable, match=r"v2\+|payout"):
+            decode(v2_plus, topic, "".join(_word(value) for value in words))
+
+
 def test_adapter_history_pages_only_derived_interval_in_exact_10000_block_ranges():
     question_id = "0x" + "27" * 32
     provider = JsonRpcResolutionProvider("archive-a", _Rpc())
