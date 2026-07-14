@@ -474,7 +474,7 @@ def test_ctf_events_tie_condition_adapter_question_and_payout():
         }]),
     ]
 
-    for changed in ("condition", "adapter", "question", "payout", "duplicate"):
+    for changed in ("condition", "adapter", "question", "payout"):
         bad_preparation = dict(preparation)
         bad_resolution = dict(resolution)
         if changed == "condition":
@@ -494,12 +494,31 @@ def test_ctf_events_tie_condition_adapter_question_and_payout():
             )
         invalid_rpc = _Rpc(
             [bad_preparation],
-            [bad_resolution, bad_resolution] if changed == "duplicate"
-            else [bad_resolution],
+            [bad_resolution],
         )
         invalid = JsonRpcResolutionProvider("archive-a", invalid_rpc)
         with pytest.raises(ResolutionUnavailable):
             invalid._ctf_authority(condition_id, 100, 200, payout)
+
+    duplicate_provider = JsonRpcResolutionProvider(
+        "archive-a", _Rpc(
+            [preparation, dict(preparation)],
+            [resolution, dict(resolution)],
+        )
+    )
+    assert duplicate_provider._ctf_authority(
+        condition_id, 100, 200, payout
+    ) == authority
+
+    conflicting_preparation = dict(preparation)
+    conflicting_preparation["data"] = "0x" + _word(3)
+    conflict_provider = JsonRpcResolutionProvider(
+        "archive-a", _Rpc(
+            [preparation, conflicting_preparation], [resolution]
+        )
+    )
+    with pytest.raises(ResolutionUnavailable, match="coordinate"):
+        conflict_provider._ctf_authority(condition_id, 100, 200, payout)
 
     unsupported_log = _ctf_log(
         CONDITION_PREPARATION_TOPIC, condition_id, "0x" + "99" * 20,
