@@ -406,6 +406,9 @@ def test_provider_derives_pusd_positions_in_slot_order():
         "0x856296f7", "0x39dd7530", "0x856296f7", "0x39dd7530",
     ]
     assert all(params[1] == "0x63" for _, params in rpc.calls)
+    assert [rpc.calls[index][1][0]["data"][-64:] for index in (0, 2)] == [
+        f"{1:064x}", f"{2:064x}",
+    ]
     collateral_word = "00" * 12 + PUSD_ADDRESS[2:]
     assert all(
         params[0]["data"][10:74] == collateral_word
