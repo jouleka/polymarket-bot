@@ -163,6 +163,19 @@ class _ObservationRpc:
                     _word(2) + _word(64) + _word(2) + _word(3) + _word(1),
                 )]
             allowed_topics = topic if isinstance(topic, list) else [topic]
+            if (self.policy.generation == "v1"
+                    and QUESTION_RESOLVED_V1_TOPIC in allowed_topics
+                    and int(event_filter["fromBlock"], 16) <= self.resolution_block
+                    <= int(event_filter["toBlock"], 16)):
+                return [{
+                    "address": self.policy.address,
+                    "blockNumber": hex(self.resolution_block),
+                    "transactionHash": self.adapter_transaction_hash,
+                    "logIndex": hex(self.adapter_log_index),
+                    "removed": False,
+                    "topics": [QUESTION_RESOLVED_V1_TOPIC, self.question_id],
+                    "data": "0x" + _word(1),
+                }]
             if (QUESTION_RESOLVED_V2_TOPIC in allowed_topics
                     and int(event_filter["fromBlock"], 16) <= self.resolution_block
                     <= int(event_filter["toBlock"], 16)):
@@ -1089,6 +1102,43 @@ def test_json_rpc_provider_returns_fully_bound_observation():
             JsonRpcResolutionProvider("archive-a", unlinked_rpc).observe(
                 subject, acceptance_block
             )
+
+
+@pytest.mark.parametrize("policy", ADAPTER_POLICIES, ids=lambda value: value.policy_id)
+def test_strict_rpc_observation_covers_every_frozen_adapter_policy(policy):
+    policy_index = ADAPTER_POLICIES.index(policy)
+    subject = ResolutionSubject(
+        f"event-{policy_index}", "0x" + f"{0x70 + policy_index:02x}" * 32,
+        ("101", "202"), "politics",
+    )
+    preparation_block = policy.deployment_block + 90
+    resolution_block = policy.deployment_block + 95
+    acceptance_block = policy.deployment_block + 100
+    block_hash = "0x" + f"{0x80 + policy_index:02x}" * 32
+    question_id = "0x" + f"{0x90 + policy_index:02x}" * 32
+    transaction_hash = "0x" + f"{0xa0 + policy_index:02x}" * 32
+    rpc = _ObservationRpc(
+        subject, policy, preparation_block, resolution_block,
+        acceptance_block, block_hash, question_id, transaction_hash,
+    )
+
+    observation = JsonRpcResolutionProvider("archive-a", rpc).observe(
+        subject, acceptance_block
+    )
+
+    assert observation.phase is LifecyclePhase.FINALIZED
+    assert observation.payout == PayoutVector((3, 1), 4)
+    assert observation.collateral_address == PUSD_ADDRESS
+    assert observation.derived_token_ids == subject.token_ids
+    assert observation.adapter_address == policy.address
+    assert observation.question_id == question_id
+    assert observation.dispute is (
+        DisputeState.MANUAL
+        if policy.generation == "v1" else DisputeState.CLEAR
+    )
+    assert observation.audit_event_ids[-1].endswith(
+        ":QUESTION_RESOLVED"
+    )
 
 
 def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
