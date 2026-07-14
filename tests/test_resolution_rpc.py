@@ -165,6 +165,47 @@ class _ObservationRpc:
         raise AssertionError(f"unexpected RPC method {method}")
 
 
+def test_frozen_polygon_authority_registry_is_exact():
+    assert CTF_ADDRESS == "0x4d97dcd97ec945f40cf65f87097ace5ea0476045"
+    assert PUSD_ADDRESS == "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb"
+    assert CTF_DEPLOYMENT_BLOCK == 4_023_686
+    assert tuple(
+        (policy.policy_id, policy.address, policy.deployment_block,
+         policy.generation)
+        for policy in ADAPTER_POLICIES
+    ) == (
+        ("UMA_V1_0_1", "0xb97455fcf78eb37375e8be6f26df895341ca073d",
+         29_838_630, "v1"),
+        ("UMA_V2_0_0", "0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74",
+         34_876_144, "v2_plus"),
+        ("UMA_V3_0_0", "0x71392e133063cc0d16f40e1f9b60227404bc03f7",
+         43_375_847, "v2_plus"),
+        ("UMA_V3_1_0", "0x157ce2d672854c848c9b79c49a8cc6cc89176a49",
+         46_755_254, "v2_plus"),
+    )
+    assert (
+        CONDITION_PREPARATION_TOPIC,
+        CONDITION_RESOLUTION_TOPIC,
+        QUESTION_RESET_TOPIC,
+        QUESTION_FLAGGED_ADMIN_V1_TOPIC,
+        QUESTION_UPDATED_V1_TOPIC,
+        QUESTION_RESOLVED_V1_TOPIC,
+        QUESTION_FLAGGED_V2_TOPIC,
+        QUESTION_RESOLVED_V2_TOPIC,
+        QUESTION_EMERGENCY_RESOLVED_V2_TOPIC,
+    ) == (
+        "0xab3760c3bd2bb38b5bcf54dc79802ed67338b4cf29f3054ded67ed24661e4177",
+        "0xb44d84d3289691f71497564b85d4233648d9dbae8cbdbb4329f301c3a0185894",
+        "0x7981b5832932948db4e32a4a16a0f44b2ce7ff088574afb9364b313f70f82e8f",
+        "0xd96b8927b38f8cc48e678eeb45ee1c3a281d2ba49078ed4a5c00895d251e573b",
+        "0x32da4770ea275a14ae9d822d58709fe7bfb296969d46357149ed02fb4135a17b",
+        "0x5c3937ed929cd157b73b417381d743daf6e1ef65999e3ccb5dd64bc3247e28d6",
+        "0x2435a0347185933b12027c6f394a5fd9c03646dba233e956f50658719dfc0b35",
+        "0x566c3fbdd12dd86bb341787f6d531f79fd7ad4ce7e3ae2d15ac0ca1b601af9df",
+        "0x6edb5841a476c9c29c34a652d1a44f785fe71a6157a3da9a6a6a589a1bd2945a",
+    )
+
+
 def test_rpc_correlates_monotonic_request_id():
     http = _HttpClient(
         {"jsonrpc": "2.0", "id": 1, "result": "0x89"},
