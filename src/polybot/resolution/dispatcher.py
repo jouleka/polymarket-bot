@@ -1,6 +1,6 @@
 """Durable ordered delivery of immutable resolution terminals."""
 
-from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.errors import RecoveryRequired, SettlementConflict
 
 
 class ResolutionDispatcher:
@@ -15,6 +15,8 @@ class ResolutionDispatcher:
     def drain(self, limit):
         """Apply and acknowledge at most ``limit`` pending outbox records."""
         self._store.require_healthy()
+        if self._store.recovery_required:
+            raise RecoveryRequired("resolution outbox requires restart recovery")
         acknowledged = 0
         for record in self._store.pending_outbox(limit):
             try:
