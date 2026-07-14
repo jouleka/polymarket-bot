@@ -790,9 +790,12 @@ class JsonRpcResolutionProvider:
             "toBlock": _encode_quantity(block_number),
             "topics": [topic, condition_id],
         }])
-        if not isinstance(result, list) or len(result) != 1:
+        if not isinstance(result, list):
             raise ResolutionUnavailable("CTF event authority is not unique")
-        log = result[0]
+        normalized = self._normalize_log_records(tuple(result))
+        if len(normalized) != 1:
+            raise ResolutionUnavailable("CTF event authority is not unique")
+        log = normalized[0]
         if (not isinstance(log, dict) or log.get("address") != CTF_ADDRESS
                 or log.get("removed") is not False
                 or decode_quantity(log.get("blockNumber")) != block_number):
