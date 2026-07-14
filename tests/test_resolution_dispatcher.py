@@ -82,6 +82,14 @@ class _ConflictTarget:
         raise SettlementConflict(self._message)
 
 
+class _ExactConflictTarget:
+    def __init__(self, conflict):
+        self._conflict = conflict
+
+    def apply_terminal(self, terminal):
+        raise self._conflict
+
+
 def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
     first = _terminal("81")
     second = _terminal("82")
@@ -320,3 +328,28 @@ def test_dispatcher_requires_positive_integer_limit(tmp_path, limit):
         with pytest.raises(ValueError, match="limit"):
             dispatcher.drain(limit)
         assert events == []
+
+
+def test_target_conflict_halts_then_reraises_original_exception(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("8b")
+    conflict = SettlementConflict("exact target contradiction")
+    events = []
+
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        dispatcher = ResolutionDispatcher(
+            store,
+            _ExactConflictTarget(conflict),
+            _Target("MAKER", events),
+            _Target("SHADOW", events),
+        )
+        with pytest.raises(SettlementConflict) as caught:
+            dispatcher.drain(1)
+        assert caught.value is conflict
+        with pytest.raises(IntegrityHalted, match="exact target contradiction"):
+            store.require_healthy()
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        with pytest.raises(IntegrityHalted, match="exact target contradiction"):
+            reopened.require_healthy()
