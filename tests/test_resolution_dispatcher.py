@@ -4,7 +4,11 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.resolution.dispatcher import ResolutionDispatcher
-from polybot.resolution.errors import IntegrityHalted, SettlementConflict
+from polybot.resolution.errors import (
+    IntegrityHalted,
+    RecoveryRequired,
+    SettlementConflict,
+)
 from polybot.resolution.models import (
     DisputeState,
     PayoutVector,
@@ -233,3 +237,43 @@ def test_target_settlement_conflict_persistently_halts_central_store(tmp_path):
         with pytest.raises(IntegrityHalted, match="target receipt"):
             reopened_dispatcher.drain(1)
         assert forecast.calls == [terminal.terminal_id]
+
+
+def test_dispatcher_refuses_reopened_or_partially_recovered_store(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    first = _terminal("88")
+    second = _terminal("89")
+    events = []
+
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(first)
+        store.accept_terminal(second)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        assert reopened.recovery_required is True
+        dispatcher = ResolutionDispatcher(
+            reopened,
+            _Target("FORECAST", events),
+            _Target("MAKER", events),
+            _Target("SHADOW", events),
+        )
+
+        with pytest.raises(RecoveryRequired, match="recovery"):
+            dispatcher.drain(6)
+        assert events == []
+
+        pending_ids = tuple(
+            terminal.terminal_id for terminal in reopened.pending_terminals()
+        )
+        assert pending_ids == (first.terminal_id, second.terminal_id)
+        with pytest.raises(RecoveryRequired, match="exact current"):
+            reopened._complete_recovery((first.terminal_id,))
+        assert reopened.recovery_required is True
+        with pytest.raises(RecoveryRequired, match="recovery"):
+            dispatcher.drain(6)
+        assert events == []
+
+        reopened._complete_recovery(pending_ids)
+        assert reopened.recovery_required is False
+        assert dispatcher.drain(1) == 1
+        assert events == [("APPLY", "FORECAST", first.terminal_id)]
