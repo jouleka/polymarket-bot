@@ -1,12 +1,17 @@
 # POL-15 resolution and settlement verification evidence
 
-Status: reviewed feature candidate; not merge, deployment, or live-money authorization
+Status: landed and installed; service activation, runtime composition, and live money remain unauthorized
 
 Base: `77dddef5e0988779a809572ceceeca372c5745e1`
 
 Branch: `pol-15-resolution-settlement`
 
 Code/test candidate: `c3378f22a8181437a6f98838f550cadd665f15dd`
+
+Exact reviewed head: `6dc9f6ad893db2e5999776ef8eef7b07018c81f1`
+
+GitHub landing: [PR #3](https://github.com/jouleka/polymarket-bot/pull/3), merge
+`5c4eb7b94c0ba5ae46cea0fa9087a052894887e5`
 
 POL-15 adds a read-only, two-provider Polygon resolution feed, immutable terminal authority,
 restart-fenced durable outbox, and idempotent projection into Forecast, Maker, and Shadow ledgers.
@@ -106,6 +111,12 @@ Fresh final reviewers evaluated docs-inclusive code candidate
   checks: PASS;
 - `polymarket-ingestion.service`: inactive and disabled.
 
-The only remaining gate is explicit owner approval of the final documentation-reconciliation SHA
-before any push or `--no-ff` merge. No deployment, database migration, service activation, signing
-change, chain write, or live-money action is authorized by this evidence.
+The owner approved push and deployment. Exact reviewed head
+`6dc9f6ad893db2e5999776ef8eef7b07018c81f1` landed through a true two-parent merge commit
+`5c4eb7b94c0ba5ae46cea0fa9087a052894887e5`. Before installation, the required endurance gate passed:
+1,800.052 seconds, 5,287,936 bytes, 29 `clob-midpoint` batches, 3,500 `data-api` rows, 342 usable
+quotes, zero raw rows, and 0.236382 GiB/day projected. The old raw database and sidecars are preserved
+with verified SHA-256 manifests under `/opt/polymarket-bot/data/raw-firehose-20260714T155112Z`.
+The GitHub-linked service checkout is installed at the merge commit with a 60-second snapshot cadence;
+the service remains inactive and disabled. Runtime composition, service activation, signing changes,
+chain writes, and live-money action are not authorized by this evidence.
