@@ -444,6 +444,7 @@ def test_provider_binary_searches_exact_preparation_and_resolution_transitions()
         if params[0]["data"].startswith("0xdd34de67")
     ]
     assert min(slot_blocks + denominator_blocks) >= CTF_DEPLOYMENT_BLOCK
+    assert min(slot_blocks + denominator_blocks) >= 4_023_686
     assert len(slot_blocks) <= 28
     assert len(denominator_blocks) <= 28
 
@@ -457,6 +458,17 @@ def test_provider_binary_searches_exact_preparation_and_resolution_transitions()
     reversed_provider = JsonRpcResolutionProvider("archive-a", reversed_rpc)
     with pytest.raises(ResolutionUnavailable, match="transition"):
         reversed_provider._transition_blocks(condition_id, acceptance_block)
+
+    near_deployment_rpc = _TransitionRpc(4_023_686, 4_023_687)
+    near_deployment = JsonRpcResolutionProvider(
+        "archive-a", near_deployment_rpc
+    )
+    assert near_deployment._transition_blocks(
+        condition_id, 4_023_696
+    ) == (4_023_686, 4_023_687)
+    assert min(
+        int(params[1], 16) for _, params in near_deployment_rpc.calls
+    ) >= 4_023_686
 
 
 def _word(value):
