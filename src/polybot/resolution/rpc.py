@@ -468,6 +468,43 @@ class JsonRpcResolutionProvider:
         return tuple(filters)
 
     @staticmethod
+    def _normalize_log_records(logs):
+        if not isinstance(logs, tuple):
+            raise TypeError("adapter logs must be a tuple")
+        by_coordinate = {}
+        ordered = []
+        for log in logs:
+            try:
+                if (not isinstance(log, dict) or log.get("removed") is not False):
+                    raise ResolutionUnavailable("invalid adapter log object")
+                decode_fixed_bytes(log.get("address"), 20)
+                block_number = decode_quantity(log.get("blockNumber"))
+                log_index = decode_quantity(log.get("logIndex"))
+                transaction_hash = "0x" + decode_fixed_bytes(
+                    log.get("transactionHash"), 32
+                ).hex()
+                topics = log.get("topics")
+                if not isinstance(topics, list) or not topics:
+                    raise ResolutionUnavailable("invalid adapter log topics")
+                for topic in topics:
+                    decode_fixed_bytes(topic, 32)
+                _decode_hex_data(log.get("data"))
+            except ResolutionUnavailable as exc:
+                raise ResolutionUnavailable("adapter log is malformed") from exc
+            coordinate = (block_number, log_index)
+            prior = by_coordinate.get(coordinate)
+            if prior is not None:
+                if prior != log:
+                    raise ResolutionUnavailable(
+                        "different adapter logs claim one chain coordinate"
+                    )
+                continue
+            by_coordinate[coordinate] = log
+            ordered.append((block_number, log_index, transaction_hash, log))
+        ordered.sort(key=lambda item: item[:3])
+        return tuple(item[3] for item in ordered)
+
+    @staticmethod
     def _validate_adapter_events(events, question_id):
         if not isinstance(events, tuple):
             raise TypeError("adapter events must be a tuple")

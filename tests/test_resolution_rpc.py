@@ -614,3 +614,37 @@ def test_adapter_history_pages_only_derived_interval_in_exact_10000_block_ranges
             provider._adapter_history_filters(
                 v2_plus, question_id, bounds[0], bounds[1]
             )
+
+
+def _raw_adapter_log(block_number, log_index, transaction_byte, *, data="0x"):
+    return {
+        "address": ADAPTER_POLICIES[-1].address,
+        "blockNumber": hex(block_number),
+        "transactionHash": "0x" + transaction_byte * 32,
+        "logIndex": hex(log_index),
+        "removed": False,
+        "topics": [QUESTION_RESET_TOPIC, "0x" + "27" * 32],
+        "data": data,
+    }
+
+
+def test_log_normalization_orders_exact_duplicates_and_rejects_coordinate_conflict():
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+    first = _raw_adapter_log(100, 1, "31")
+    second = _raw_adapter_log(100, 2, "32")
+    third = _raw_adapter_log(101, 0, "33")
+
+    normalized = provider._normalize_log_records((
+        third, second, dict(first), first,
+    ))
+    assert normalized == (first, second, third)
+
+    conflict = dict(first)
+    conflict["data"] = "0x00"
+    with pytest.raises(ResolutionUnavailable, match="coordinate"):
+        provider._normalize_log_records((first, conflict))
+
+    malformed = dict(first)
+    malformed["logIndex"] = "0x00"
+    with pytest.raises(ResolutionUnavailable, match="log"):
+        provider._normalize_log_records((malformed,))
