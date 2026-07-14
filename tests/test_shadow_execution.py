@@ -7,8 +7,12 @@ import pytest
 
 from polybot.ers.intent_store import PendingIntent, ShadowExecutionRecord
 from polybot.ers.intent_store import IntentStore
+from polybot.ers.caps import RiskCaps
+from polybot.ers.controller import ERSController
 from polybot.ers.market_meta import ResolutionSubjectMetadata
-from polybot.ers.validator import Decision
+from polybot.ers.service import PaperSigner, process_pending
+from polybot.ers.safety import RUNNING, SafetyController
+from polybot.ers.validator import Decision, Portfolio
 from polybot.harness.execution import (
     ShadowExecutionDispatcher,
     make_mark_for,
@@ -509,3 +513,145 @@ def test_mark_fails_loud_on_contradictory_terminal_rows_for_one_token(tmp_path):
 
         with pytest.raises(SettlementConflict, match="contradictory terminal shadow marks"):
             make_mark_for(maker, book_for=lambda token_id: _book())("101")
+
+
+def test_process_pending_atomically_persists_filled_shadow_plan_on_accept(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="SELL", target_price="0.01", max_price="0.90",
+            size_usd_suggestion="12", p="0.90", p_confidence="0.75",
+        )
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("25"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("2.50"),
+        )
+        calls = []
+
+        def planner(intent, decision):
+            calls.append((intent.intent_id, decision.verdict))
+            return execution
+
+        signer = PaperSigner()
+        final = process_pending(
+            store,
+            book_for={"101": _book(bid="0.48", ask="0.52")}.get,
+            portfolio=Portfolio(nav=Decimal("300")),
+            caps=RiskCaps(),
+            signer=signer,
+            shadow_planner=planner,
+        )
+
+        assert calls == [("intent-1", "ACCEPT")]
+        assert store.get("intent-1").status == "ACCEPTED"
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER", "SHADOW",
+        ]
+        assert [row["intent_id"] for row in signer.placed] == ["intent-1"]
+        assert len(final.positions) == 1
+
+
+def test_process_pending_never_plans_rejected_or_skipped_intents(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        base = dict(
+            condition_id="0x" + "11" * 32, event_id="event-1", side="BUY",
+            target_price="0.49", max_price="0.90", size_usd_suggestion="12",
+            p_confidence="0.75",
+        )
+        store.propose_trade("rejected", token_id="missing", p="0.90", **base)
+        store.propose_trade("skipped", token_id="101", p="0.52", **base)
+
+        process_pending(
+            store,
+            book_for={"101": _book(bid="0.48", ask="0.52")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=PaperSigner(),
+            shadow_planner=lambda intent, decision: (_ for _ in ()).throw(
+                AssertionError("non-ACCEPT must not invoke planner")
+            ),
+        )
+
+        assert store.get("rejected").status == "REJECTED"
+        assert store.get("skipped").status == "SKIPPED"
+        assert store.pending_shadow_executions(10) == ()
+
+
+def test_unfilled_shadow_plan_keeps_accept_audit_without_economic_outbox(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49", max_price="0.90",
+            size_usd_suggestion="12", p="0.90", p_confidence="0.75",
+        )
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"101": _book()}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            shadow_planner=lambda intent, decision: None,
+        )
+
+        assert store.get("intent-1").status == "ACCEPTED"
+        assert store.audit_log()[-1]["verdict"] == "ACCEPT"
+        assert store.pending_shadow_executions(10) == ()
+        assert len(signer.placed) == len(final.positions) == 1
+
+
+def test_shadow_planner_error_rejects_before_signer_or_portfolio_side_effect(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49", max_price="0.90",
+            size_usd_suggestion="12", p="0.90", p_confidence="0.75",
+        )
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"101": _book()}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            shadow_planner=lambda intent, decision: (_ for _ in ()).throw(
+                RuntimeError("planner broke")
+            ),
+        )
+
+        intent = store.get("intent-1")
+        assert intent.status == "REJECTED"
+        assert intent.decision_reason == "shadow_execution_error"
+        assert signer.placed == []
+        assert final.positions == ()
+        assert store.pending_shadow_executions(10) == ()
+
+
+def test_ers_controller_threads_optional_shadow_planner_into_accept_path(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49", max_price="0.90",
+            size_usd_suggestion="12", p="0.90", p_confidence="0.75",
+        )
+        caps = RiskCaps()
+        safety = SafetyController(caps=caps, store=store, clock=lambda: 0)
+        safety.set_state(RUNNING, reason="test_reconcile")
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("25"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("2.50"),
+        )
+        controller = ERSController(
+            store=store,
+            book_for={"101": _book()}.get,
+            caps=caps,
+            signer=PaperSigner(),
+            controller=safety,
+            shadow_planner=lambda intent, decision: execution,
+            clock=lambda: 0,
+        )
+
+        controller.run_cycle()
+
+        assert store.get("intent-1").status == "ACCEPTED"
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER", "SHADOW",
+        ]
