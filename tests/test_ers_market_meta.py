@@ -15,6 +15,7 @@ from polybot.ers.market_meta import (
     MarketMetadataUnavailable,
     MarketRegistry,
     MarketSnapshotError,
+    ResolutionSubjectMetadata,
     StubMarketMeta,
 )
 
@@ -488,6 +489,47 @@ def test_registry_fails_when_no_market_is_usable(markets, events):
 
 
 # POL-14 Task 3: lookup clock + dual-identifier contract -----------------------
+
+
+def test_registry_returns_resolution_subject_after_three_identifier_check():
+    condition_id = "0x" + "ab" * 32
+    tokens = ("101", "202")
+    registry = _registry(
+        markets=[_market(condition_id, tokens)],
+        events=[_event(condition_id=condition_id, tokens=tokens)],
+    )
+
+    assert registry.resolution_subject_for(
+        _intent(condition_id=condition_id, token_id="202", event_id="e1")
+    ) == ResolutionSubjectMetadata(
+        event_id="e1",
+        condition_id=condition_id,
+        category="politics",
+        token_id="202",
+        outcome_slot=1,
+        sibling_token_ids=tokens,
+    )
+
+    for intent in (
+        _intent(condition_id="missing", token_id="202", event_id="e1"),
+        _intent(condition_id=condition_id, token_id="missing", event_id="e1"),
+        _intent(condition_id=condition_id, token_id="202", event_id="forged"),
+    ):
+        with pytest.raises(MarketMetadataUnavailable):
+            registry.resolution_subject_for(intent)
+
+    base = dict(
+        event_id="e1", condition_id=condition_id, category="politics", token_id="202",
+        outcome_slot=1, sibling_token_ids=tokens,
+    )
+    for change in (
+        {"condition_id": "c1"},
+        {"sibling_token_ids": ("t1", "t2")},
+        {"outcome_slot": 0},
+        {"token_id": "101"},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            ResolutionSubjectMetadata(**(base | change))
 
 
 def test_lookup_returns_gamma_owned_metadata_not_proposal_values():

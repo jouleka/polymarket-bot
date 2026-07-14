@@ -1,11 +1,19 @@
 """S9 / POL-11 — shadow trade ledger (append-only, restart-stable, dispute-honest)."""
 
+import sqlite3
 from decimal import Decimal
 
 import pytest
 
 from polybot.core.clock import MonotonicStamper
-from polybot.harness.ledger import ShadowLedger
+from polybot.harness.ledger import ShadowLedger, ShadowTradeRecord
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
+from polybot.resolution.errors import ConditionAlreadyTerminal, SettlementConflict
 
 
 def _ledger(path, stamper=None):
@@ -18,6 +26,189 @@ def _trade(ledger, tid, *, token="t1", cond="c1", category="politics", side="BUY
                                side=side, shares=Decimal(shares),
                                fill_price=Decimal(fill_price), fill_mid=Decimal(fill_mid),
                                reward_accrued=Decimal(reward))
+
+
+def _terminal(condition_id, payout, *, dispute=DisputeState.CLEAR):
+    return TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
+        payout=payout,
+        dispute=dispute,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+
+
+def test_shadow_terminal_projects_clear_and_excluded_values(tmp_path):
+    clear_condition = "0x" + "31" * 32
+    clear = _terminal(clear_condition, PayoutVector((1, 2), 3))
+    with _ledger(str(tmp_path / "clear.db")) as ledger:
+        ledger.record_trade(
+            "fractional", token_id="101", condition_id=clear_condition,
+            category="politics", side="BUY", shares=Decimal("10"),
+            fill_price=Decimal("0.48"), fill_mid=Decimal("0.50"),
+            reward_accrued=Decimal("0.25"), event_id="event-1", outcome_slot=0,
+            sibling_token_ids=("101", "202"),
+        )
+        assert ledger.apply_terminal(clear) == 1
+        record = ledger.all()[0]
+        assert record.status == "SETTLED"
+        assert str(record.resolution_value) == "0." + "3" * 78
+        assert (record.resolution_numerator, record.resolution_denominator) == (1, 3)
+        assert record.terminal_id == clear.terminal_id
+
+    for byte, dispute in (("32", DisputeState.DISPUTED), ("33", DisputeState.MANUAL)):
+        condition_id = "0x" + byte * 32
+        terminal = _terminal(condition_id, PayoutVector((3, 1), 4), dispute=dispute)
+        with _ledger(str(tmp_path / f"{dispute.value}.db")) as ledger:
+            ledger.record_trade(
+                dispute.value, token_id="101", condition_id=condition_id,
+                category="politics", side="BUY", shares=Decimal("10"),
+                fill_price=Decimal("0.48"), fill_mid=Decimal("0.50"),
+                reward_accrued=Decimal("0.25"), event_id="event-1", outcome_slot=0,
+                sibling_token_ids=("101", "202"),
+            )
+            assert ledger.apply_terminal(terminal) == 1
+            record = ledger.all()[0]
+            assert record.status == "DISPUTED" and record.resolution_value is None
+            assert record.terminal_id == terminal.terminal_id
+
+
+def test_shadow_terminal_conflict_rolls_back_every_row_and_receipt(tmp_path):
+    condition_id = "0x" + "34" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "conflict.db")) as ledger:
+        for trade_id, event_id, slot, token in (
+            ("first", "event-1", 0, "101"),
+            ("later-conflict", "wrong-event", 1, "202"),
+        ):
+            ledger.record_trade(
+                trade_id, token_id=token, condition_id=condition_id, category="politics",
+                side="BUY", shares=Decimal("10"), fill_price=Decimal("0.48"),
+                fill_mid=Decimal("0.50"), reward_accrued=Decimal("0.25"),
+                event_id=event_id, outcome_slot=slot, sibling_token_ids=("101", "202"),
+            )
+
+        with pytest.raises(SettlementConflict, match="identity"):
+            ledger.apply_terminal(terminal)
+
+        assert all(row.status is None and row.terminal_id is None for row in ledger.all())
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM resolution_receipts"
+        ).fetchone()[0] == 0
+
+
+def test_shadow_zero_row_receipt_blocks_later_creation(tmp_path):
+    condition_id = "0x" + "35" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "zero.db")) as ledger:
+        assert ledger.apply_terminal(terminal) == 0
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()[0] == 1
+
+        with pytest.raises(ConditionAlreadyTerminal):
+            ledger.record_trade(
+                "late", token_id="101", condition_id=condition_id, category="politics",
+                side="BUY", shares=Decimal("10"), fill_price=Decimal("0.48"),
+                fill_mid=Decimal("0.50"), reward_accrued=Decimal("0.25"),
+                event_id="event-1", outcome_slot=0, sibling_token_ids=("101", "202"),
+            )
+        assert ledger.all() == []
+
+
+def test_shadow_receipt_replay_is_idempotent_and_payload_conflict_fails(tmp_path):
+    condition_id = "0x" + "36" * 32
+    terminal = _terminal(condition_id, PayoutVector((1, 0), 1))
+    with _ledger(str(tmp_path / "replay.db")) as ledger:
+        assert ledger.apply_terminal(terminal) == 0
+        assert ledger.apply_terminal(terminal) == 0
+
+        ledger._conn.execute(
+            "UPDATE resolution_receipts SET payload=? WHERE condition_id=?",
+            (b"changed-payload", condition_id),
+        )
+        ledger._conn.commit()
+        with pytest.raises(SettlementConflict, match="receipt|payload"):
+            ledger.apply_terminal(terminal)
+        assert ledger._conn.execute(
+            "SELECT payload FROM resolution_receipts WHERE condition_id=?", (condition_id,)
+        ).fetchone()[0] == b"changed-payload"
+
+
+def test_shadow_v0_database_migrates_to_nullable_identity(tmp_path):
+    path = str(tmp_path / "shadow-v0.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE shadow_trades (
+            trade_id TEXT PRIMARY KEY, token_id TEXT NOT NULL, condition_id TEXT NOT NULL,
+            category TEXT NOT NULL, side TEXT NOT NULL, shares TEXT NOT NULL,
+            fill_price TEXT NOT NULL, fill_mid TEXT NOT NULL, reward_accrued TEXT NOT NULL,
+            created_at INTEGER NOT NULL, status TEXT, resolution_value TEXT, settled_at INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO shadow_trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("legacy", "t1", "c1", "politics", "BUY", "10", "0.48", "0.50", "0.25",
+         123, "WON", "1", 456),
+    )
+    conn.commit()
+    conn.close()
+
+    with _ledger(path) as ledger:
+        columns = {
+            row[1] for row in ledger._conn.execute("PRAGMA table_info(shadow_trades)").fetchall()
+        }
+        assert columns - {
+            "trade_id", "token_id", "condition_id", "category", "side", "shares",
+            "fill_price", "fill_mid", "reward_accrued", "created_at", "status",
+            "resolution_value", "settled_at",
+        } == {
+            "event_id", "outcome_slot", "sibling_token_ids", "resolution_numerator",
+            "resolution_denominator", "terminal_id",
+        }
+        assert ledger.all() == [ShadowTradeRecord(
+            "legacy", "t1", "c1", "politics", "BUY", Decimal("10"), Decimal("0.48"),
+            Decimal("0.50"), Decimal("0.25"), 123, "WON", Decimal("1"), 456,
+            None, None, None, None, None, None,
+        )]
+
+
+def test_shadow_canonical_identity_is_all_or_none_and_slot_matches_token(tmp_path):
+    condition_id = "0x" + "ab" * 32
+    siblings = ("11", "22")
+    base = {
+        "token_id": "22", "condition_id": condition_id, "category": "politics",
+        "side": "BUY", "shares": Decimal("10"), "fill_price": Decimal("0.48"),
+        "fill_mid": Decimal("0.50"), "reward_accrued": Decimal("0.25"),
+    }
+    with _ledger(str(tmp_path / "s.db")) as ledger:
+        assert ledger.record_trade(
+            "canonical", **base, event_id="e1", outcome_slot=1,
+            sibling_token_ids=siblings,
+        ) is True
+        record = ledger.all()[0]
+        assert (
+            record.event_id, record.outcome_slot, record.sibling_token_ids
+        ) == ("e1", 1, siblings)
+        assert ledger._conn.execute(
+            "SELECT sibling_token_ids FROM shadow_trades WHERE trade_id='canonical'"
+        ).fetchone()[0] == '["11","22"]'
+
+        for trade_id, identity in (
+            ("mixed", {"event_id": "e1", "outcome_slot": 1}),
+            ("wrong-slot", {
+                "event_id": "e1", "outcome_slot": 0, "sibling_token_ids": siblings,
+            }),
+        ):
+            with pytest.raises(ValueError, match="identity|slot|token"):
+                ledger.record_trade(trade_id, **base, **identity)
+            assert [row.trade_id for row in ledger.all()] == ["canonical"]
 
 
 def test_record_trade_round_trips_every_field_via_all(tmp_path):

@@ -2,7 +2,7 @@
 
 Scores the shadow maker sample per category, honestly: every leg of
 ``net = reward + rebate + spread_capture - adverse_selection - fees - lockup_cost -
-dispute_haircut`` is derived from the ledger's settled WON/LOST rows; DISPUTED/VOID are counted
+dispute_haircut`` is derived from the ledger's settled WON/LOST/SETTLED rows; DISPUTED/VOID are counted
 separately and EXCLUDED from every leg (whale-flip immunity); GO reads ``.net`` ONLY -- never a
 reward-gross leg (the master design's "bleeds invisibly" pin). Binary and data-gated: cold or
 below ``min_samples`` -> no GO. ``lockup_cost`` = ``lockup_rate * total notional``; the
@@ -17,7 +17,7 @@ from polybot.maker.fees import rebate, taker_fee
 from polybot.maker.inventory import _SGN, MakerFill, adverse_selection
 from polybot.maker.netpnl import net_pnl
 
-_HONEST = ("WON", "LOST")
+_HONEST = ("WON", "LOST", "SETTLED")
 
 
 @dataclass(frozen=True)
@@ -54,8 +54,8 @@ class MakerTracker:
             elif r.status == "VOID":
                 n_void += 1
             else:
-                # Exhaustive: a status outside {WON,LOST,DISPUTED,VOID} (DB corruption, or a
-                # future 5th VALID_STATUSES not taught here) must fail loud, never silently
+                # Exhaustive: an unknown status (DB corruption or an unhandled future value) must
+                # fail loud, never silently
                 # vanish from the accounting.
                 raise ValueError(f"unhandled settlement status {r.status!r}")
 

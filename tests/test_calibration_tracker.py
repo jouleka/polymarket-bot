@@ -6,6 +6,12 @@ from polybot.calibration.config import CalibrationConfig
 from polybot.calibration.ledger import ForecastLedger
 from polybot.calibration.tracker import CalibrationTracker
 from polybot.core.clock import MonotonicStamper
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 
 def _ledger(path):
@@ -84,6 +90,37 @@ def test_void_outcomes_are_excluded_from_scoring(tmp_path):
         _build(l, "politics", _PASSING + [(0.5, 0.5, "VOID", 7)])
         r = CalibrationTracker(l, CalibrationConfig(min_n=20)).report_for("politics")
         assert r.n_scored == 40 and r.n_void == 7
+
+
+def test_calibration_excludes_fractional_void_with_exact_value(tmp_path):
+    condition_id = "0x" + "51" * 32
+    terminal = TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "politics"),
+        payout=PayoutVector((1, 2), 3),
+        dispute=DisputeState.CLEAR,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+    with _ledger(str(tmp_path / "f.db")) as ledger:
+        ledger.record_forecast(
+            "fractional", category="politics", condition_id=condition_id,
+            p=Decimal("0.9"), market_mid=Decimal("0.5"), event_id="event-1",
+            token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+        )
+        ledger.apply_terminal(terminal)
+        stored = ledger.get("fractional")
+        assert stored.resolution_status == "VOID"
+        assert str(stored.resolution_value) == "0." + "3" * 78
+
+        report = CalibrationTracker(
+            ledger, CalibrationConfig(min_n=1)
+        ).report_for("politics")
+        assert report.n_scored == 0 and report.n_void == 1
+        assert report.bot_brier is None and report.k == Decimal("0")
 
 
 def test_category_with_no_honest_resolutions_is_cold(tmp_path):

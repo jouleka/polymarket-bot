@@ -62,6 +62,17 @@ def test_window_net_over_a_free_category_zeroes_rebate_and_fees():
     assert window_net(free_window, maker_config=_cfg()) == Decimal("17.9380")
 
 
+def test_window_net_uses_settled_fractional_mark():
+    fractional = _row(
+        "fractional", token="fractional", category="geopolitics", side="BUY",
+        shares="10", fill_price="0.4", fill_mid="0.4", reward="0", status="SETTLED",
+        resolution_value="0.5",
+    )
+    assert window_net(
+        [fractional], maker_config=_cfg(lockup_rate=Decimal(0), dispute_p=Decimal(0))
+    ) == Decimal("1.0")
+
+
 def test_window_net_excludes_disputed_and_void_rows():
     # a DISPUTED/VOID row whose inclusion WOULD change the net (big reward) must be skipped:
     # the net must equal the honest-only 17.96464000, not the naive-include -6.18536000.
