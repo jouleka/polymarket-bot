@@ -1,8 +1,10 @@
 """POL-15 strict Polygon JSON-RPC provider boundary."""
 
+from dataclasses import replace
+
 import pytest
 
-from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.errors import ResolutionUnavailable, SettlementConflict
 from polybot.resolution.models import (
     CTF_ADDRESS,
     DisputeState,
@@ -11,6 +13,7 @@ from polybot.resolution.models import (
     PayoutVector,
     ProviderObservation,
     ResolutionSubject,
+    TerminalResolution,
 )
 from polybot.resolution.rpc import (
     ADAPTER_POLICIES,
@@ -786,3 +789,80 @@ def test_json_rpc_provider_returns_fully_bound_observation():
         ),
     )
     assert all(method != "eth_blockNumber" for method, _ in rpc.calls)
+
+
+def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
+        monkeypatch):
+    subject = ResolutionSubject(
+        "event-1", "0x" + "2a" * 32, ("101", "202"), "politics"
+    )
+    policy = ADAPTER_POLICIES[-1]
+    acceptance_block = 50_000_005
+    block_hash = "0x" + "45" * 32
+    question_id = "0x" + "46" * 32
+    transaction_hash = "0x" + "47" * 32
+    terminal = TerminalResolution(
+        subject=subject,
+        payout=PayoutVector((3, 1), 4),
+        dispute=DisputeState.CLEAR,
+        block_number=acceptance_block,
+        block_hash=block_hash,
+        adapter_address=policy.address,
+        question_id=question_id,
+        audit_event_ids=(
+            "49990000:1:" + "0x" + "41" * 32
+            + ":CONDITION_PREPARATION",
+            f"50000000:2:{transaction_hash}:CONDITION_RESOLUTION",
+            f"50000000:3:{transaction_hash}:QUESTION_RESOLVED",
+        ),
+        provider_ids=("archive-a", "archive-b"),
+    )
+
+    def make_rpc(hash_value=block_hash):
+        return _ObservationRpc(
+            subject, policy, 49_990_000, 50_000_000,
+            acceptance_block, hash_value, question_id, transaction_hash,
+        )
+
+    rpc = make_rpc()
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+    assert provider.verify_terminal(terminal) is None
+    assert all(method not in ("eth_getLogs", "eth_blockNumber")
+               for method, _ in rpc.calls)
+    assert all(
+        params[1] == hex(acceptance_block)
+        for method, params in rpc.calls if method == "eth_call"
+    )
+
+    wrong_hash = JsonRpcResolutionProvider(
+        "archive-a", make_rpc("0x" + "48" * 32)
+    )
+    with pytest.raises(SettlementConflict, match="hash"):
+        wrong_hash.verify_terminal(terminal)
+
+    wrong_payout = JsonRpcResolutionProvider("archive-a", make_rpc())
+    with pytest.raises(SettlementConflict, match="payout"):
+        wrong_payout.verify_terminal(
+            replace(terminal, payout=PayoutVector((1, 3), 4))
+        )
+
+    wrong_tokens = JsonRpcResolutionProvider("archive-a", make_rpc())
+    with pytest.raises(SettlementConflict, match="token"):
+        wrong_tokens.verify_terminal(replace(
+            terminal,
+            subject=replace(subject, token_ids=("303", "404")),
+        ))
+
+    bad_code_rpc = make_rpc()
+    original_call = bad_code_rpc.call
+
+    def changed_code(method, params):
+        if (method == "eth_getCode" and params == [
+                policy.address, hex(policy.deployment_block - 1)]):
+            return "0x60"
+        return original_call(method, params)
+
+    monkeypatch.setattr(bad_code_rpc, "call", changed_code)
+    changed_code_provider = JsonRpcResolutionProvider("archive-a", bad_code_rpc)
+    with pytest.raises(SettlementConflict, match="deployment"):
+        changed_code_provider.verify_terminal(terminal)

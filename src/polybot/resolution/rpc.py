@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import httpx
 import re
 
-from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.errors import ResolutionUnavailable, SettlementConflict
 from polybot.resolution.models import (
     CTF_ADDRESS,
     DisputeState,
@@ -344,6 +344,57 @@ class JsonRpcResolutionProvider:
             audit_event_ids=audit_event_ids,
         )
 
+    def verify_terminal(self, terminal):
+        from polybot.resolution.models import TerminalResolution
+
+        if not isinstance(terminal, TerminalResolution):
+            raise TypeError("terminal must be a TerminalResolution")
+        if self.provider_id not in terminal.provider_ids:
+            raise SettlementConflict(
+                "terminal provider authority does not include this provider"
+            )
+        if self.block_hash(terminal.block_number) != terminal.block_hash:
+            raise SettlementConflict("terminal acceptance block hash changed")
+
+        slot_count = self._outcome_slot_count(
+            terminal.subject.condition_id, terminal.block_number
+        )
+        denominator = self._payout_denominator(
+            terminal.subject.condition_id, terminal.block_number
+        )
+        if slot_count != 2 or denominator <= 0:
+            raise SettlementConflict("terminal CTF payout authority changed")
+        numerators = tuple(
+            self._payout_numerator(
+                terminal.subject.condition_id, slot, terminal.block_number
+            )
+            for slot in (0, 1)
+        )
+        try:
+            payout = PayoutVector(numerators, denominator)
+        except (TypeError, ValueError) as exc:
+            raise SettlementConflict("terminal CTF payout authority changed") from exc
+        if payout != terminal.payout:
+            raise SettlementConflict("terminal payout changed")
+
+        positions = self._chain_positions(terminal.subject, terminal.block_number)
+        if positions != terminal.subject.token_ids:
+            raise SettlementConflict("terminal chain-derived token mapping changed")
+        policy = next(
+            (candidate for candidate in ADAPTER_POLICIES
+             if candidate.address == terminal.adapter_address),
+            None,
+        )
+        if policy is None:
+            raise SettlementConflict("terminal adapter authority is unsupported")
+        self._verify_code_transition(
+            CTF_ADDRESS, CTF_DEPLOYMENT_BLOCK, force=True, contradiction=True
+        )
+        self._verify_code_transition(
+            policy.address, policy.deployment_block,
+            force=True, contradiction=True,
+        )
+
     def _verify_deployments(self, adapter_address):
         policy = next(
             (candidate for candidate in ADAPTER_POLICIES
@@ -355,8 +406,9 @@ class JsonRpcResolutionProvider:
         self._verify_code_transition(CTF_ADDRESS, CTF_DEPLOYMENT_BLOCK)
         self._verify_code_transition(policy.address, policy.deployment_block)
 
-    def _verify_code_transition(self, address, deployment_block):
-        if address in self._verified_deployments:
+    def _verify_code_transition(self, address, deployment_block, *, force=False,
+                                contradiction=False):
+        if address in self._verified_deployments and not force:
             return
         try:
             before = _decode_hex_data(self._rpc.call(
@@ -370,9 +422,10 @@ class JsonRpcResolutionProvider:
                 "frozen contract deployment evidence is unavailable"
             ) from exc
         if before or not deployed:
-            raise ResolutionUnavailable(
-                "frozen contract deployment transition does not match"
-            )
+            message = "frozen contract deployment transition does not match"
+            if contradiction:
+                raise SettlementConflict(message)
+            raise ResolutionUnavailable(message)
         self._verified_deployments.add(address)
 
     def _outcome_slot_count(self, condition_id, block_number):
@@ -809,18 +862,23 @@ class JsonRpcResolutionProvider:
     def _derive_positions(self, subject, block_number):
         if not isinstance(subject, ResolutionSubject):
             raise TypeError("position subject must be a ResolutionSubject")
-        derived = tuple(
+        derived = self._chain_positions(subject, block_number)
+        if derived != subject.token_ids:
+            raise ResolutionUnavailable(
+                "chain-derived pUSD token order does not match subject"
+            )
+        return derived
+
+    def _chain_positions(self, subject, block_number):
+        if not isinstance(subject, ResolutionSubject):
+            raise TypeError("position subject must be a ResolutionSubject")
+        return tuple(
             str(self._position_id(
                 self._collection_id(subject.condition_id, index_set, block_number),
                 block_number,
             ))
             for index_set in (1, 2)
         )
-        if derived != subject.token_ids:
-            raise ResolutionUnavailable(
-                "chain-derived pUSD token order does not match subject"
-            )
-        return derived
 
     def _position_id(self, collection_id, block_number):
         collateral_word = "00" * 12 + decode_fixed_bytes(PUSD_ADDRESS, 20).hex()
