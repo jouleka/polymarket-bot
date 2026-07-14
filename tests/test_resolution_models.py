@@ -5,13 +5,16 @@ from dataclasses import replace
 from decimal import getcontext
 from fractions import Fraction
 import hashlib
+import inspect
 import json
+from typing import get_type_hints
 
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
     PayoutVector,
     ProviderObservation,
+    ResolutionProvider,
     ResolutionSubject,
     TerminalResolution,
     fold_dispute,
@@ -25,6 +28,35 @@ _BLOCK_HASH = "0x" + "22" * 32
 _ADDRESS = "0x" + "33" * 20
 _QUESTION = "0x" + "44" * 32
 _TX_HASH = "0x" + "55" * 32
+
+
+def test_resolution_provider_protocol_pins_public_boundary():
+    assert ResolutionProvider._is_protocol is True
+    assert ResolutionProvider.__annotations__ == {"provider_id": str}
+    expected = {
+        "chain_id": (["self"], {"return": int}),
+        "latest_block": (["self"], {"return": int}),
+        "block_hash": (
+            ["self", "block_number"],
+            {"block_number": int, "return": str},
+        ),
+        "observe": (
+            ["self", "subject", "block_number"],
+            {
+                "subject": ResolutionSubject,
+                "block_number": int,
+                "return": ProviderObservation,
+            },
+        ),
+        "verify_terminal": (
+            ["self", "terminal"],
+            {"terminal": TerminalResolution, "return": type(None)},
+        ),
+    }
+    for name, (parameters, hints) in expected.items():
+        method = getattr(ResolutionProvider, name)
+        assert list(inspect.signature(method).parameters) == parameters
+        assert get_type_hints(method) == hints
 
 
 def test_resolution_subject_requires_exact_binary_identity():

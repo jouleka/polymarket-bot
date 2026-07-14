@@ -6,6 +6,7 @@ from enum import Enum
 from fractions import Fraction
 import hashlib
 import re
+from typing import Protocol
 
 from polybot.resolution.canonical import canonical_bytes
 from polybot.resolution.errors import ResolutionUnavailable
@@ -187,6 +188,22 @@ class ProviderObservation:
         if not isinstance(self.question_id, str) or _BYTES32.fullmatch(self.question_id) is None:
             raise ValueError("finalized observations require a canonical question ID")
         _validate_audit_event_ids(self.audit_event_ids)
+
+
+class ResolutionProvider(Protocol):
+    provider_id: str
+
+    def chain_id(self) -> int: ...
+
+    def latest_block(self) -> int: ...
+
+    def block_hash(self, block_number: int) -> str: ...
+
+    def observe(
+        self, subject: ResolutionSubject, block_number: int
+    ) -> ProviderObservation: ...
+
+    def verify_terminal(self, terminal: "TerminalResolution") -> None: ...
 
 
 @dataclass(frozen=True)
