@@ -467,6 +467,27 @@ class JsonRpcResolutionProvider:
             start = end + 1
         return tuple(filters)
 
+    def _read_adapter_history(self, policy, question_id, preparation_block,
+                              resolution_block):
+        logs = []
+        for event_filter in self._adapter_history_filters(
+                policy, question_id, preparation_block, resolution_block):
+            page = self._rpc.call("eth_getLogs", [event_filter])
+            if not isinstance(page, list):
+                raise ResolutionUnavailable(
+                    "filtered adapter history response is malformed"
+                )
+            logs.extend(page)
+        normalized = self._normalize_log_records(tuple(logs))
+        for log in normalized:
+            block_number = decode_quantity(log["blockNumber"])
+            if (log["address"] != policy.address
+                    or not preparation_block <= block_number <= resolution_block):
+                raise ResolutionUnavailable(
+                    "adapter history log is outside requested authority"
+                )
+        return normalized
+
     @staticmethod
     def _normalize_log_records(logs):
         if not isinstance(logs, tuple):

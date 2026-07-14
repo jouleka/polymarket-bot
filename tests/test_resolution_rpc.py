@@ -58,7 +58,10 @@ class _Rpc:
 
     def call(self, method, params):
         self.calls.append((method, params))
-        return self._results.pop(0)
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class _TransitionRpc:
@@ -648,3 +651,22 @@ def test_log_normalization_orders_exact_duplicates_and_rejects_coordinate_confli
     malformed["logIndex"] = "0x00"
     with pytest.raises(ResolutionUnavailable, match="log"):
         provider._normalize_log_records((malformed,))
+
+
+def test_failed_filtered_history_is_unavailable_never_unknown_or_clear():
+    policy = ADAPTER_POLICIES[-1]
+    question_id = "0x" + "28" * 32
+    failed_rpc = _Rpc([], ResolutionUnavailable("range failed"))
+    provider = JsonRpcResolutionProvider("archive-a", failed_rpc)
+    with pytest.raises(ResolutionUnavailable, match="range failed"):
+        provider._read_adapter_history(policy, question_id, 100, 10_100)
+    assert len(failed_rpc.calls) == 2
+
+    malformed = JsonRpcResolutionProvider("archive-a", _Rpc(None))
+    with pytest.raises(ResolutionUnavailable, match="history"):
+        malformed._read_adapter_history(policy, question_id, 100, 100)
+
+    complete = JsonRpcResolutionProvider("archive-a", _Rpc([]))
+    assert complete._read_adapter_history(
+        policy, question_id, 100, 100
+    ) == ()
