@@ -25,6 +25,27 @@ CONDITION_PREPARATION_TOPIC = (
 CONDITION_RESOLUTION_TOPIC = (
     "0xb44d84d3289691f71497564b85d4233648d9dbae8cbdbb4329f301c3a0185894"
 )
+QUESTION_RESET_TOPIC = (
+    "0x7981b5832932948db4e32a4a16a0f44b2ce7ff088574afb9364b313f70f82e8f"
+)
+QUESTION_FLAGGED_ADMIN_V1_TOPIC = (
+    "0xd96b8927b38f8cc48e678eeb45ee1c3a281d2ba49078ed4a5c00895d251e573b"
+)
+QUESTION_UPDATED_V1_TOPIC = (
+    "0x32da4770ea275a14ae9d822d58709fe7bfb296969d46357149ed02fb4135a17b"
+)
+QUESTION_RESOLVED_V1_TOPIC = (
+    "0x5c3937ed929cd157b73b417381d743daf6e1ef65999e3ccb5dd64bc3247e28d6"
+)
+QUESTION_FLAGGED_V2_TOPIC = (
+    "0x2435a0347185933b12027c6f394a5fd9c03646dba233e956f50658719dfc0b35"
+)
+QUESTION_RESOLVED_V2_TOPIC = (
+    "0x566c3fbdd12dd86bb341787f6d531f79fd7ad4ce7e3ae2d15ac0ca1b601af9df"
+)
+QUESTION_EMERGENCY_RESOLVED_V2_TOPIC = (
+    "0x6edb5841a476c9c29c34a652d1a44f785fe71a6157a3da9a6a6a589a1bd2945a"
+)
 
 
 @dataclass(frozen=True)
@@ -405,6 +426,46 @@ class JsonRpcResolutionProvider:
             audit_event_ids=tuple(event.audit_event_id for event in relevant),
             terminal_event=terminal,
         )
+
+    def _adapter_history_filters(self, policy, question_id, preparation_block,
+                                 resolution_block):
+        if policy not in ADAPTER_POLICIES:
+            raise ResolutionUnavailable("adapter history policy is unsupported")
+        decode_fixed_bytes(question_id, 32)
+        if (isinstance(preparation_block, bool)
+                or not isinstance(preparation_block, int)
+                or isinstance(resolution_block, bool)
+                or not isinstance(resolution_block, int)
+                or preparation_block < 0
+                or resolution_block < preparation_block):
+            raise ResolutionUnavailable("adapter history interval is invalid")
+        filters = []
+        start = preparation_block
+        while start <= resolution_block:
+            end = min(start + 9_999, resolution_block)
+            base = {
+                "address": policy.address,
+                "fromBlock": _encode_quantity(start),
+                "toBlock": _encode_quantity(end),
+            }
+            if policy.generation == "v1":
+                filters.append({**base, "topics": [[
+                    QUESTION_RESET_TOPIC,
+                    QUESTION_UPDATED_V1_TOPIC,
+                    QUESTION_RESOLVED_V1_TOPIC,
+                ], question_id]})
+                filters.append({
+                    **base, "topics": [QUESTION_FLAGGED_ADMIN_V1_TOPIC]
+                })
+            else:
+                filters.append({**base, "topics": [[
+                    QUESTION_RESET_TOPIC,
+                    QUESTION_FLAGGED_V2_TOPIC,
+                    QUESTION_RESOLVED_V2_TOPIC,
+                    QUESTION_EMERGENCY_RESOLVED_V2_TOPIC,
+                ], question_id]})
+            start = end + 1
+        return tuple(filters)
 
     @staticmethod
     def _validate_adapter_events(events, question_id):
