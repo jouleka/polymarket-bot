@@ -22,7 +22,11 @@ class ResolutionDispatcher:
             try:
                 changed = self._targets[record.role].apply_terminal(record.terminal)
             except SettlementConflict as exc:
-                self._store.halt(f"target settlement conflict: {exc}")
+                detail = str(exc).strip()
+                reason = "target settlement conflict"
+                if detail:
+                    reason += f": {detail}"
+                self._store.halt(reason)
                 raise
             self._after_apply(record, changed)
             self._store.acknowledge(
