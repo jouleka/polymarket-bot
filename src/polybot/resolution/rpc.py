@@ -364,11 +364,13 @@ class JsonRpcResolutionProvider:
             raise ResolutionUnavailable("v1 adapter terminal events conflict")
         terminal = terminal_events[0] if terminal_events else None
         states = [DisputeState.UNKNOWN]
-        if any(event.kind == "QUESTION_RESET" for event in relevant):
+        if (terminal is not None
+                and any(event.kind == "QUESTION_RESET" for event in relevant)):
             states.append(DisputeState.DISPUTED)
-        if (any(event.kind == "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION"
-                for event in relevant)
-                or (terminal is not None and terminal.manual)):
+        if terminal is not None and (
+                any(event.kind == "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION"
+                    for event in relevant)
+                or terminal.manual):
             states.append(DisputeState.MANUAL)
         return PathProof(
             dispute=fold_dispute(tuple(states)),
@@ -391,11 +393,12 @@ class JsonRpcResolutionProvider:
         states = [
             DisputeState.CLEAR if terminal is not None else DisputeState.UNKNOWN
         ]
-        if any(event.kind == "QUESTION_RESET" for event in relevant):
+        if (terminal is not None
+                and any(event.kind == "QUESTION_RESET" for event in relevant)):
             states.append(DisputeState.DISPUTED)
-        if (any(event.kind == "QUESTION_FLAGGED" for event in relevant)
-                or (terminal is not None
-                    and terminal.kind == "QUESTION_EMERGENCY_RESOLVED")):
+        if terminal is not None and (
+                any(event.kind == "QUESTION_FLAGGED" for event in relevant)
+                or terminal.kind == "QUESTION_EMERGENCY_RESOLVED"):
             states.append(DisputeState.MANUAL)
         return PathProof(
             dispute=fold_dispute(tuple(states)),
