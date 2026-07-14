@@ -349,6 +349,12 @@ class JsonRpcResolutionProvider:
 
         if not isinstance(terminal, TerminalResolution):
             raise TypeError("terminal must be a TerminalResolution")
+        chain_id = self.chain_id()
+        if (isinstance(chain_id, bool) or not isinstance(chain_id, int)
+                or chain_id != 137):
+            raise ResolutionUnavailable(
+                "terminal verification chain is not Polygon 137"
+            )
         if self.provider_id not in terminal.provider_ids:
             raise SettlementConflict(
                 "terminal provider authority does not include this provider"

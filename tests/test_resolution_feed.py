@@ -886,3 +886,21 @@ def test_recovery_normalizes_malformed_provider_verification_as_unavailable(
             feed.recover_pending()
         assert reopened.recovery_required is True
         assert len(reopened.pending_outbox(100)) == 3
+
+
+@pytest.mark.parametrize("chain", [1, 137.0])
+def test_recovery_rechecks_exact_polygon_chain_before_terminal_verification(
+        tmp_path, chain):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("a6")
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        first = _Provider("archive-a", chain=chain)
+        second = _Provider("archive-b", chain=137)
+        feed = ResolutionFeed(reopened, (first, second))
+        with pytest.raises(ResolutionUnavailable, match="chain"):
+            feed.recover_pending()
+        assert reopened.recovery_required is True
+        assert first.verify_calls == second.verify_calls == []
