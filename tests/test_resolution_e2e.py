@@ -162,9 +162,20 @@ def test_fractional_terminal_fans_out_crash_safely_to_all_real_ledgers(tmp_path)
         assert [record.sequence for record in store.pending_outbox(10)] == [
             1, 2, 3, 4, 5, 6,
         ]
+        committed_forecast = forecast.get("forecast-canonical")
+        assert committed_forecast.terminal_id == terminal.terminal_id
+        assert committed_forecast.resolution_status == "VOID"
+        assert forecast._conn.execute(
+            "SELECT terminal_id, payload FROM resolution_receipts "
+            "WHERE condition_id=?", (condition_id,),
+        ).fetchone() == (terminal.terminal_id, terminal.canonical_bytes)
 
-        dispatcher._after_apply = lambda record, changed: None
+        replay = []
+        dispatcher._after_apply = lambda record, changed: replay.append(
+            (record.role, record.terminal.terminal_id, changed)
+        )
         assert dispatcher.drain(6) == 6
+        assert replay[0] == ("FORECAST", terminal.terminal_id, 0)
         assert store.pending_outbox(10) == ()
 
         forecasts = {row.forecast_id: row for row in forecast.all()}
