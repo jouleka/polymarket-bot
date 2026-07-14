@@ -12,6 +12,7 @@ tests stay green). pipeline supplied -> the S6 chain plus the POL-14 metadata ga
 calib_score is IGNORED in favor of the per-intent k = pipeline.calib_gate.k_for(category).
 """
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -25,7 +26,12 @@ from polybot.ers.validator import (
     evaluate_intent,
 )
 from polybot.fusion.engine import FusionError
-from polybot.ers.market_meta import MarketMetadataUnavailable
+from polybot.resolution.errors import ConditionAlreadyTerminal
+from polybot.ers.market_meta import (
+    MarketMetadataUnavailable,
+    ResolutionSubjectMetadata,
+    StubMarketMeta,
+)
 from polybot.detectors.orchestrator import DetectorInputs, REASON_DETECTOR_AVOID
 
 _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move model is wired
@@ -33,6 +39,8 @@ _COLD = ClusterView(warm=False, rho=None)  # fail-closed default when no co-move
 # New S6/POL-14 Decision.reason codes (free-form strings; no validator change).
 REASON_ANCHOR_ERROR = "anchor_error"
 REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
+REASON_RESOLUTION_IDENTITY_UNAVAILABLE = "resolution_identity_unavailable"
+REASON_MARKET_RESOLVED = "market_resolved"
 
 
 @dataclass(frozen=True)
@@ -103,27 +111,44 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             # and keep processing the rest.
             decision = Decision("REJECT", None, None, "internal_error")
             trade_intent = None
-        store.record_decision(intent.intent_id, decision)
-        if decision.verdict == "ACCEPT":
-            signer.place(intent, decision)
-            portfolio = _fold(portfolio, trade_intent, decision)
-            if gtd_for is not None:
-                # Pre-stage the protective GTD exit for the just-folded position (the passive
-                # backstop), enforcing caps.gtd_bracket_aggregate via the derivation. The folded
-                # position is the last one. NOTE (shadow limitation): standing sums the append-only
-                # gtd_exits, which is never decremented on exit/flatten -- it's CUMULATIVE, not
-                # currently-standing, so over a long shadow run it can over-approximate and
-                # fail-CLOSED (refuse a legitimate new bracket). Safe (never over-stages); the live
-                # POL-4 signer must track currently-STANDING exits, not the cumulative total.
-                position = portfolio.positions[-1]
-                standing = sum((Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0))
-                bracket = gtd_for(decision, position, caps=caps, standing_exit_total=standing)
-                signer.place_gtd_bracket(position, exit_price=bracket.exit_price,
-                                         expiry=bracket.expiry)
-            if fill_sink is not None:
-                # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded position.
-                # fill_sink=None (the default) => no fills row => byte-for-byte today's behavior.
-                fill_sink(intent, decision, portfolio.positions[-1])
+        guard = nullcontext()
+        if decision.verdict == "ACCEPT" and pipeline is not None:
+            guard = pipeline.forecast_ledger.signing_guard(intent.condition_id)
+        try:
+            with guard:
+                store.record_decision(intent.intent_id, decision)
+                if decision.verdict == "ACCEPT":
+                    signer.place(intent, decision)
+                    portfolio = _fold(portfolio, trade_intent, decision)
+                    if gtd_for is not None:
+                        # Pre-stage the protective GTD exit for the just-folded position (the
+                        # passive backstop), enforcing caps.gtd_bracket_aggregate via the
+                        # derivation. The folded position is the last one. NOTE (shadow
+                        # limitation): standing sums the append-only gtd_exits, which is never
+                        # decremented on exit/flatten -- it's CUMULATIVE, not currently-standing,
+                        # so over a long shadow run it can over-approximate and fail-CLOSED (refuse
+                        # a legitimate new bracket). Safe (never over-stages); the live POL-4
+                        # signer must track currently-STANDING exits, not the cumulative total.
+                        position = portfolio.positions[-1]
+                        standing = sum(
+                            (Decimal(b["size"]) for b in signer.gtd_exits), Decimal(0)
+                        )
+                        bracket = gtd_for(
+                            decision, position, caps=caps, standing_exit_total=standing
+                        )
+                        signer.place_gtd_bracket(
+                            position, exit_price=bracket.exit_price, expiry=bracket.expiry
+                        )
+                    if fill_sink is not None:
+                        # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded
+                        # position. fill_sink=None (the default) => no fills row => byte-for-byte
+                        # today's behavior.
+                        fill_sink(intent, decision, portfolio.positions[-1])
+        except ConditionAlreadyTerminal:
+            # A terminal receipt won after the estimate was logged but before the final signing
+            # fence. The signing guard raises before the intent decision or any order side effect.
+            decision = Decision("REJECT", None, None, REASON_MARKET_RESOLVED)
+            store.record_decision(intent.intent_id, decision)
     return portfolio
 
 
@@ -200,9 +225,34 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         metadata = pipeline.market_meta.metadata_for(intent)
     except MarketMetadataUnavailable:
         return Decision("REJECT", None, None, REASON_MARKET_META_UNAVAILABLE), trade_intent
+    resolution_subject = None
+    if not isinstance(pipeline.market_meta, StubMarketMeta):
+        subject_for = getattr(pipeline.market_meta, "resolution_subject_for", None)
+        if not callable(subject_for):
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
+        try:
+            resolution_subject = subject_for(intent)
+        except MarketMetadataUnavailable:
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
+        if not isinstance(resolution_subject, ResolutionSubjectMetadata):
+            return Decision(
+                "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+            ), trade_intent
     category = metadata.category
     question_text = metadata.question_text
     seconds = metadata.seconds_to_resolution
+    if resolution_subject is not None and (
+            resolution_subject.category != category
+            or resolution_subject.event_id != intent.event_id
+            or resolution_subject.condition_id != intent.condition_id
+            or resolution_subject.token_id != intent.token_id):
+        return Decision(
+            "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+        ), trade_intent
 
     # 6. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
     #    p_base/p_micro/p_flow are ERS-derived; at MVP p_base = mid (no base-rate model wired here
@@ -220,6 +270,11 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         return Decision("REJECT", None, None, REASON_ANCHOR_ERROR), trade_intent
     p_clamped = anchor.p_clamped
 
+    try:
+        pipeline.forecast_ledger.require_condition_open(intent.condition_id)
+    except ConditionAlreadyTerminal:
+        return Decision("REJECT", None, None, REASON_MARKET_RESOLVED), trade_intent
+
     # 8. Record the genuine estimate: per-signal components THEN the forecast (the calibration
     #    substrate). Components FIRST: component_log fails-loud on a non-finite raw p_news (Hermes
     #    can supply Decimal("NaN")), so doing it first aborts BEFORE any forecast row is written ->
@@ -231,9 +286,18 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
         forecast_id, p_news=components["p_news"], p_base=components["p_base"],
         p_micro=components["p_micro"], p_flow=components["p_flow"],
         w_news_effective=fusion_result.w_news_effective, corroborated=truth.corroborated, mid=mid)
-    pipeline.forecast_ledger.record_forecast(
-        forecast_id, category=category, condition_id=intent.condition_id,
-        p=p_clamped, market_mid=mid)
+    try:
+        pipeline.forecast_ledger.record_forecast(
+            forecast_id, category=category, condition_id=intent.condition_id,
+            p=p_clamped, market_mid=mid,
+            event_id=None if resolution_subject is None else resolution_subject.event_id,
+            token_id=None if resolution_subject is None else resolution_subject.token_id,
+            outcome_slot=None if resolution_subject is None else resolution_subject.outcome_slot,
+            sibling_token_ids=(
+                None if resolution_subject is None else resolution_subject.sibling_token_ids
+            ))
+    except ConditionAlreadyTerminal:
+        return Decision("REJECT", None, None, REASON_MARKET_RESOLVED), trade_intent
 
     # 9. Per-intent calibration k (Decimal{0,1}); supersedes the batch calib_score. k=0 -> paper-only.
     k = pipeline.calib_gate.k_for(category)

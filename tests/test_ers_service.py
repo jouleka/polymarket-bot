@@ -17,7 +17,12 @@ from polybot.core.clock import MonotonicStamper
 from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
-from polybot.ers.market_meta import MarketMetadata, MarketMetadataUnavailable
+from polybot.ers.market_meta import (
+    MarketMetadata,
+    MarketMetadataUnavailable,
+    ResolutionSubjectMetadata,
+    StubMarketMeta,
+)
 from polybot.ers.service import PaperSigner, process_pending
 from polybot.ers.validator import ClusterView, OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
@@ -295,7 +300,7 @@ class _AnchorResult:
         self.reason = "within_band"
 
 
-class _StubMeta:
+class _StubMeta(StubMarketMeta):
     def __init__(self, category="unknown", seconds=10**12):
         self._cat = category
         self._secs = seconds
@@ -415,7 +420,7 @@ def test_pipeline_truth_gate_refuse_maps_truth_gate_refuse_reason(tmp_path, monk
 # POL-14: one real metadata result, typed fail-closed rejection before logging.
 
 
-class _RecordingMeta:
+class _RecordingMeta(StubMarketMeta):
     def __init__(self, result=None, raises=None):
         self.result = result or MarketMetadata("politics", "Gamma canonical question", 123)
         self.raises = raises
@@ -426,6 +431,149 @@ class _RecordingMeta:
         if self.raises is not None:
             raise self.raises
         return self.result
+
+
+def test_only_explicit_stub_market_meta_may_write_legacy_forecast(tmp_path, monkeypatch):
+    class DuckTypedMeta:
+        def metadata_for(self, intent):
+            return MarketMetadata("politics", "apparently valid", 123)
+
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=DuckTypedMeta())
+
+    import polybot.fusion.engine as fusion_mod
+
+    def forbidden_fusion(*args, **kwargs):
+        raise AssertionError("fusion ran without canonical resolution identity")
+
+    monkeypatch.setattr(fusion_mod, "fuse", forbidden_fusion, raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason == "resolution_identity_unavailable"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+
+@pytest.mark.parametrize("mismatch", ["event_id", "condition_id", "category", "token_id"])
+def test_typed_resolution_subject_must_match_the_intent_before_component_write(
+        tmp_path, monkeypatch, mismatch):
+    condition_id = "0x" + "ab" * 32
+    intent_values = dict(_P, token_id="101", condition_id=condition_id)
+
+    class MismatchedMeta:
+        def metadata_for(self, intent):
+            return MarketMetadata("politics", "canonical question", 123)
+
+        def resolution_subject_for(self, intent):
+            values = dict(
+                event_id="e1", condition_id=condition_id, category="politics",
+                token_id="101", outcome_slot=0, sibling_token_ids=("101", "202"),
+            )
+            if mismatch == "event_id":
+                values["event_id"] = "other-event"
+            elif mismatch == "condition_id":
+                values["condition_id"] = "0x" + "cd" * 32
+            elif mismatch == "category":
+                values["category"] = "sports"
+            else:
+                values["token_id"] = "202"
+                values["outcome_slot"] = 1
+            return ResolutionSubjectMetadata(**values)
+
+    pipe, ledger, clog = _pipeline(tmp_path, monkeypatch, meta=MismatchedMeta())
+    with _store(str(tmp_path / f"{mismatch}.db")) as store:
+        store.propose_trade("i1", **intent_values)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"101": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason == "resolution_identity_unavailable"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+
+def test_ers_terminal_race_never_writes_forecast_or_reaches_signing(tmp_path, monkeypatch):
+    def add_receipt(ledger, terminal_id):
+        ledger._conn.execute(
+            "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+            "VALUES (?, ?, ?)",
+            ("m1", terminal_id, b"terminal"),
+        )
+        ledger._conn.commit()
+
+    known_dir = tmp_path / "known"
+    known_dir.mkdir()
+    pipe, ledger, clog = _pipeline(known_dir, monkeypatch)
+    add_receipt(ledger, "known-terminal")
+    with _store(str(known_dir / "i.db")) as store:
+        store.propose_trade("known", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+        assert store.get("known").decision_reason == "market_resolved"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+    race_dir = tmp_path / "race"
+    race_dir.mkdir()
+    pipe, ledger, clog = _pipeline(race_dir, monkeypatch)
+    original_record = clog.record
+
+    def record_then_resolve(*args, **kwargs):
+        inserted = original_record(*args, **kwargs)
+        add_receipt(ledger, "racing-terminal")
+        return inserted
+
+    clog.record = record_then_resolve
+    with _store(str(race_dir / "i.db")) as store:
+        store.propose_trade("racing", **_P)
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+        assert store.get("racing").decision_reason == "market_resolved"
+        assert ledger.all() == [] and len(clog.all()) == 1
+        assert signer.placed == [] and final.positions == ()
+
+
+def test_ers_post_forecast_terminal_race_cannot_reach_signing(tmp_path, monkeypatch):
+    calib = _FakeCalibGate(k=Decimal("1"), clamp_to=Decimal("0.90"))
+    pipe, ledger, _clog = _pipeline(tmp_path, monkeypatch, calib=calib)
+
+    def resolve_during_calibration(category):
+        ledger._conn.execute(
+            "INSERT INTO resolution_receipts(condition_id, terminal_id, payload) "
+            "VALUES (?, ?, ?)",
+            ("m1", "racing-terminal", b"terminal"),
+        )
+        ledger._conn.commit()
+        return Decimal("1")
+
+    calib.k_for = resolve_during_calibration
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert ledger.get("i1") is not None  # the race deliberately wins after this commit
+        assert store.get("i1").status == "REJECTED"
+        assert store.get("i1").decision_reason == "market_resolved"
+        assert signer.placed == [] and final.positions == ()
 
 
 def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp_path, monkeypatch):

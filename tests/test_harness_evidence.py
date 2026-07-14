@@ -301,6 +301,34 @@ def test_disputed_and_void_are_counted_but_excluded_from_the_honest_sample(tmp_p
     assert rep.n_oos == 2
 
 
+def test_evidence_evaluator_keeps_settled_fractional_shadow_rows(tmp_path):
+    shadow, forecast = _shadow(tmp_path), _forecast(tmp_path)
+    shadow.record_trade(
+        "fractional", token_id="fractional", condition_id="c", category="politics",
+        side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
+        fill_mid=Decimal("0.4"), reward_accrued=Decimal("0"),
+    )
+    shadow._conn.execute(
+        "UPDATE shadow_trades SET status='SETTLED', resolution_value='0.5', settled_at=1 "
+        "WHERE trade_id='fractional'"
+    )
+    shadow._conn.commit()
+    shadow.record_trade(
+        "excluded", token_id="excluded", condition_id="other", category="politics",
+        side="BUY", shares=Decimal("10"), fill_price=Decimal("0.4"),
+        fill_mid=Decimal("0.4"), reward_accrued=Decimal("99"),
+    )
+    shadow.record_settlement("excluded", status="DISPUTED", resolution_value=None)
+
+    report = _evaluate(
+        shadow, forecast, ramp=_ramp_config(
+            min_resolved=1, min_oos_resolved=1, oos_holdout_fraction=Decimal("0.5")
+        )
+    )
+    assert report.n_resolved == 1 and report.n_disputed == 1 and report.n_oos == 1
+    assert report.net_full == report.net_oos == Decimal("1.0")
+
+
 def test_unknown_shadow_status_fails_loud(tmp_path):
     # Insert a corrupt status directly via raw sqlite (bypassing record_settlement's guard) to
     # simulate DB corruption / an untaught 5th status. evaluate_category must fail LOUD, mirroring

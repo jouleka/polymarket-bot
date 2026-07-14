@@ -10,6 +10,12 @@ from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
 from polybot.maker.gate import MakerGate, MakerTracker
 from polybot.maker.ledger import MakerLedger
 from polybot.maker.quote_policy import PULL, QUOTE
+from polybot.resolution.models import (
+    DisputeState,
+    PayoutVector,
+    ResolutionSubject,
+    TerminalResolution,
+)
 
 
 def _ledger(path):
@@ -93,6 +99,41 @@ def test_full_report_hand_computed_on_active_sports(tmp_path):
     assert r.net == (r.reward + r.rebate + r.spread_capture - r.adverse_selection
                      - r.fees - r.lockup_cost - r.dispute_haircut)
     assert r.go is False
+
+
+def test_maker_tracker_uses_settled_fractional_mark(tmp_path):
+    condition_id = "0x" + "61" * 32
+    terminal = TerminalResolution(
+        subject=ResolutionSubject("event-1", condition_id, ("101", "202"), "geopolitics"),
+        payout=PayoutVector((1, 1), 2),
+        dispute=DisputeState.CLEAR,
+        block_number=100,
+        block_hash="0x" + "22" * 32,
+        adapter_address="0x" + "33" * 20,
+        question_id="0x" + "44" * 32,
+        audit_event_ids=("99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",),
+        provider_ids=("archive-a", "archive-b"),
+    )
+    with _ledger(tmp_path / "m.db") as ledger:
+        ledger.record_fill(
+            "fractional", token_id="101", condition_id=condition_id,
+            category="geopolitics", side="BUY", shares=Decimal("10"),
+            price_exec=Decimal("0.4"), fill_mid=Decimal("0.4"),
+            reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=0,
+            sibling_token_ids=("101", "202"),
+        )
+        ledger.apply_terminal(terminal)
+        report = MakerTracker(ledger, _cfg(min_samples=1)).report_for("geopolitics")
+        assert report.n_settled == 1 and report.adverse_selection == Decimal("-1.0")
+        assert report.net == Decimal("1.0")
+
+        ledger._conn.execute(
+            "UPDATE maker_fills SET resolution_value=NULL WHERE fill_id='fractional'"
+        )
+        ledger._conn.commit()
+        fail_closed = MakerTracker(ledger, _cfg(min_samples=1)).report_for("geopolitics")
+        assert fail_closed.adverse_selection == Decimal("4.0")
+        assert fail_closed.net == Decimal("-4.0")
 
 
 # A passing geopolitics (FREE fee category -> cf/rebate/fees all 0) seed, hand-computed:

@@ -29,6 +29,9 @@ UNKNOWN_CATEGORY = "unknown"
 _RFC3339 = re.compile(
     r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\Z"
 )
+_RESOLUTION_CONDITION = re.compile(r"0x[0-9a-f]{64}\Z")
+_RESOLUTION_TOKEN = re.compile(r"[1-9][0-9]*\Z")
+_UINT256_MAX = 2**256 - 1
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,39 @@ class MarketMetadata:
             raise TypeError("market metadata seconds must be an integer")
         if self.seconds_to_resolution < 0:
             raise ValueError("market metadata seconds must be non-negative")
+
+
+@dataclass(frozen=True)
+class ResolutionSubjectMetadata:
+    """Canonical binary market identity retained for eventual settlement."""
+
+    event_id: str
+    condition_id: str
+    category: str
+    token_id: str
+    outcome_slot: int
+    sibling_token_ids: tuple[str, str]
+
+    def __post_init__(self):
+        for name in ("event_id", "category"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"resolution {name} must be a non-empty exact string")
+        if (not isinstance(self.condition_id, str)
+                or _RESOLUTION_CONDITION.fullmatch(self.condition_id) is None):
+            raise ValueError("resolution condition_id must be a canonical lowercase bytes32")
+        tokens = self.sibling_token_ids
+        if not isinstance(tokens, tuple) or len(tokens) != 2 or tokens[0] == tokens[1]:
+            raise ValueError("resolution sibling_token_ids must be a distinct ordered pair")
+        for token in tokens:
+            if (not isinstance(token, str) or _RESOLUTION_TOKEN.fullmatch(token) is None
+                    or int(token) > _UINT256_MAX):
+                raise ValueError("resolution tokens must be canonical positive uint256 strings")
+        if (isinstance(self.outcome_slot, bool) or not isinstance(self.outcome_slot, int)
+                or self.outcome_slot not in (0, 1)):
+            raise ValueError("resolution outcome_slot must be 0 or 1")
+        if self.token_id != tokens[self.outcome_slot]:
+            raise ValueError("resolution outcome slot does not match selected token")
 
 
 @dataclass(frozen=True)
@@ -421,8 +457,8 @@ class MarketRegistry:
     def __len__(self):
         return len(self._by_condition)
 
-    def metadata_for(self, intent):
-        """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
+    def _definition_for(self, intent):
+        """Resolve one intent only after condition, token, and event identity agree."""
         condition_id = getattr(intent, "condition_id", None)
         token_id = getattr(intent, "token_id", None)
         event_id = getattr(intent, "event_id", None)
@@ -449,6 +485,31 @@ class MarketRegistry:
             raise MarketMetadataUnavailable(
                 f"market event identity mismatch: {event_id!r}, {condition_definition.event_id!r}"
             )
+        return condition_definition, token_id
+
+    def resolution_subject_for(self, intent):
+        """Return settlement identity without consulting the wall clock."""
+        definition, token_id = self._definition_for(intent)
+        category = definition.category
+        if category is None:  # defensive invariant: unavailable rows never enter the public indices
+            raise MarketMetadataUnavailable("market category is unavailable")
+        try:
+            return ResolutionSubjectMetadata(
+                event_id=definition.event_id,
+                condition_id=definition.condition_id,
+                category=category,
+                token_id=token_id,
+                outcome_slot=definition.token_ids.index(token_id),
+                sibling_token_ids=definition.token_ids,
+            )
+        except (TypeError, ValueError) as exc:
+            raise MarketMetadataUnavailable(
+                "market resolution identity is not canonical"
+            ) from exc
+
+    def metadata_for(self, intent):
+        """Resolve one intent by condition, token, and event identity plus one wall-clock read."""
+        condition_definition, _token_id = self._definition_for(intent)
 
         try:
             now = self._clock()
