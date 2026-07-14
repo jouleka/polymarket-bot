@@ -12,6 +12,8 @@ from polybot.resolution.models import (
 )
 from polybot.resolution.rpc import (
     ADAPTER_POLICIES,
+    CONDITION_PREPARATION_TOPIC,
+    CONDITION_RESOLUTION_TOPIC,
     CTF_DEPLOYMENT_BLOCK,
     JsonRpcClient,
     JsonRpcResolutionProvider,
@@ -318,3 +320,113 @@ def test_provider_binary_searches_exact_preparation_and_resolution_transitions()
     reversed_provider = JsonRpcResolutionProvider("archive-a", reversed_rpc)
     with pytest.raises(ResolutionUnavailable, match="transition"):
         reversed_provider._transition_blocks(condition_id, acceptance_block)
+
+
+def _word(value):
+    return f"{value:064x}"
+
+
+def _ctf_log(topic, condition_id, adapter, question_id, block_number,
+             log_index, transaction_hash, data):
+    return {
+        "address": CTF_ADDRESS,
+        "blockNumber": hex(block_number),
+        "transactionHash": transaction_hash,
+        "logIndex": hex(log_index),
+        "removed": False,
+        "topics": [
+            topic, condition_id, "0x" + "00" * 12 + adapter[2:], question_id,
+        ],
+        "data": "0x" + data,
+    }
+
+
+def test_ctf_events_tie_condition_adapter_question_and_payout():
+    condition_id = "0x" + "15" * 32
+    question_id = "0x" + "16" * 32
+    transaction_hash = "0x" + "17" * 32
+    adapter = ADAPTER_POLICIES[-1].address
+    payout = PayoutVector((3, 1), 4)
+    preparation = _ctf_log(
+        CONDITION_PREPARATION_TOPIC, condition_id, adapter, question_id,
+        100, 1, "0x" + "18" * 32, _word(2),
+    )
+    resolution = _ctf_log(
+        CONDITION_RESOLUTION_TOPIC, condition_id, adapter, question_id,
+        200, 2, transaction_hash,
+        _word(2) + _word(64) + _word(2) + _word(3) + _word(1),
+    )
+    rpc = _Rpc([preparation], [resolution])
+    provider = JsonRpcResolutionProvider("archive-a", rpc)
+
+    authority = provider._ctf_authority(condition_id, 100, 200, payout)
+    assert authority.adapter_address == adapter
+    assert authority.question_id == question_id
+    assert authority.policy == ADAPTER_POLICIES[-1]
+    assert authority.audit_event_ids == (
+        "100:1:" + "0x" + "18" * 32 + ":CONDITION_PREPARATION",
+        "200:2:" + transaction_hash + ":CONDITION_RESOLUTION",
+    )
+    assert provider._link_adapter_terminal(
+        authority, question_id, 200, 3, transaction_hash
+    ) is None
+    assert rpc.calls == [
+        ("eth_getLogs", [{
+            "address": CTF_ADDRESS, "fromBlock": "0x64", "toBlock": "0x64",
+            "topics": [CONDITION_PREPARATION_TOPIC, condition_id],
+        }]),
+        ("eth_getLogs", [{
+            "address": CTF_ADDRESS, "fromBlock": "0xc8", "toBlock": "0xc8",
+            "topics": [CONDITION_RESOLUTION_TOPIC, condition_id],
+        }]),
+    ]
+
+    for changed in ("condition", "adapter", "question", "payout", "duplicate"):
+        bad_preparation = dict(preparation)
+        bad_resolution = dict(resolution)
+        if changed == "condition":
+            bad_resolution["topics"] = list(resolution["topics"])
+            bad_resolution["topics"][1] = "0x" + "19" * 32
+        elif changed == "adapter":
+            bad_resolution["topics"] = list(resolution["topics"])
+            bad_resolution["topics"][2] = (
+                "0x" + "00" * 12 + ADAPTER_POLICIES[-2].address[2:]
+            )
+        elif changed == "question":
+            bad_resolution["topics"] = list(resolution["topics"])
+            bad_resolution["topics"][3] = "0x" + "20" * 32
+        elif changed == "payout":
+            bad_resolution["data"] = (
+                "0x" + _word(2) + _word(64) + _word(2) + _word(2) + _word(2)
+            )
+        invalid_rpc = _Rpc(
+            [bad_preparation],
+            [bad_resolution, bad_resolution] if changed == "duplicate"
+            else [bad_resolution],
+        )
+        invalid = JsonRpcResolutionProvider("archive-a", invalid_rpc)
+        with pytest.raises(ResolutionUnavailable):
+            invalid._ctf_authority(condition_id, 100, 200, payout)
+
+    unsupported_log = _ctf_log(
+        CONDITION_PREPARATION_TOPIC, condition_id, "0x" + "99" * 20,
+        question_id, 100, 1, "0x" + "18" * 32, _word(2),
+    )
+    unsupported_resolution = _ctf_log(
+        CONDITION_RESOLUTION_TOPIC, condition_id, "0x" + "99" * 20,
+        question_id, 200, 2, transaction_hash,
+        _word(2) + _word(64) + _word(2) + _word(3) + _word(1),
+    )
+    unsupported = JsonRpcResolutionProvider(
+        "archive-a", _Rpc([unsupported_log], [unsupported_resolution])
+    )._ctf_authority(condition_id, 100, 200, payout)
+    assert unsupported.policy is None
+
+    for link in (
+        ("0x" + "21" * 32, 200, 3, transaction_hash),
+        (question_id, 201, 3, transaction_hash),
+        (question_id, 200, 1, transaction_hash),
+        (question_id, 200, 3, "0x" + "22" * 32),
+    ):
+        with pytest.raises(ResolutionUnavailable, match="terminal"):
+            provider._link_adapter_terminal(authority, *link)

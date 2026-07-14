@@ -17,6 +17,12 @@ from polybot.resolution.models import (
 _QUANTITY = re.compile(r"0x(?:0|[1-9a-f][0-9a-f]*)\Z")
 _UINT256_MAX = 2**256 - 1
 CTF_DEPLOYMENT_BLOCK = 4_023_686
+CONDITION_PREPARATION_TOPIC = (
+    "0xab3760c3bd2bb38b5bcf54dc79802ed67338b4cf29f3054ded67ed24661e4177"
+)
+CONDITION_RESOLUTION_TOPIC = (
+    "0xb44d84d3289691f71497564b85d4233648d9dbae8cbdbb4329f301c3a0185894"
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,17 @@ ADAPTER_POLICIES = (
         46_755_254, "v2_plus",
     ),
 )
+
+
+@dataclass(frozen=True)
+class CtfAuthority:
+    adapter_address: str
+    question_id: str
+    policy: AdapterPolicy | None
+    audit_event_ids: tuple[str, str]
+    resolution_block: int
+    resolution_log_index: int
+    resolution_transaction_hash: str
 
 
 def decode_quantity(value):
@@ -239,6 +256,101 @@ class JsonRpcResolutionProvider:
                 "CTF preparation/resolution transition order is invalid"
             )
         return preparation, resolution
+
+    def _ctf_authority(self, condition_id, preparation_block, resolution_block,
+                       payout):
+        if not isinstance(payout, PayoutVector):
+            raise TypeError("CTF authority payout must be a PayoutVector")
+        preparation = self._single_ctf_log(
+            CONDITION_PREPARATION_TOPIC, condition_id, preparation_block
+        )
+        resolution = self._single_ctf_log(
+            CONDITION_RESOLUTION_TOPIC, condition_id, resolution_block
+        )
+        prep_adapter, prep_question, prep_index, prep_tx, prep_data = preparation
+        res_adapter, res_question, res_index, res_tx, res_data = resolution
+        if len(prep_data) != 32 or int.from_bytes(prep_data) != 2:
+            raise ResolutionUnavailable("CTF preparation event is not binary")
+        if len(res_data) != 160:
+            raise ResolutionUnavailable("CTF resolution event ABI is malformed")
+        words = tuple(
+            int.from_bytes(res_data[offset:offset + 32])
+            for offset in range(0, len(res_data), 32)
+        )
+        if (words[:3] != (2, 64, 2)
+                or words[3:] != payout.numerators):
+            raise ResolutionUnavailable("CTF resolution event payout disagrees")
+        if prep_adapter != res_adapter or prep_question != res_question:
+            raise ResolutionUnavailable("CTF event authority linkage disagrees")
+        policy = next(
+            (candidate for candidate in ADAPTER_POLICIES
+             if candidate.address == prep_adapter),
+            None,
+        )
+        return CtfAuthority(
+            adapter_address=prep_adapter,
+            question_id=prep_question,
+            policy=policy,
+            audit_event_ids=(
+                f"{preparation_block}:{prep_index}:{prep_tx}:CONDITION_PREPARATION",
+                f"{resolution_block}:{res_index}:{res_tx}:CONDITION_RESOLUTION",
+            ),
+            resolution_block=resolution_block,
+            resolution_log_index=res_index,
+            resolution_transaction_hash=res_tx,
+        )
+
+    def _single_ctf_log(self, topic, condition_id, block_number):
+        _bytes32_word(condition_id)
+        result = self._rpc.call("eth_getLogs", [{
+            "address": CTF_ADDRESS,
+            "fromBlock": _encode_quantity(block_number),
+            "toBlock": _encode_quantity(block_number),
+            "topics": [topic, condition_id],
+        }])
+        if not isinstance(result, list) or len(result) != 1:
+            raise ResolutionUnavailable("CTF event authority is not unique")
+        log = result[0]
+        if (not isinstance(log, dict) or log.get("address") != CTF_ADDRESS
+                or log.get("removed") is not False
+                or decode_quantity(log.get("blockNumber")) != block_number):
+            raise ResolutionUnavailable("CTF event coordinate is malformed")
+        transaction_hash = "0x" + decode_fixed_bytes(
+            log.get("transactionHash"), 32
+        ).hex()
+        log_index = decode_quantity(log.get("logIndex"))
+        topics = log.get("topics")
+        if not isinstance(topics, list) or len(topics) != 4:
+            raise ResolutionUnavailable("CTF event topics are malformed")
+        if topics[0] != topic or topics[1] != condition_id:
+            raise ResolutionUnavailable("CTF event condition does not match")
+        address_word = decode_fixed_bytes(topics[2], 32)
+        if address_word[:12] != bytes(12):
+            raise ResolutionUnavailable("CTF event adapter topic is malformed")
+        adapter_address = "0x" + address_word[12:].hex()
+        question_id = "0x" + decode_fixed_bytes(topics[3], 32).hex()
+        data = _decode_hex_data(log.get("data"))
+        return (
+            adapter_address, question_id, log_index, transaction_hash, data
+        )
+
+    @staticmethod
+    def _link_adapter_terminal(authority, question_id, block_number, log_index,
+                               transaction_hash):
+        if not isinstance(authority, CtfAuthority):
+            raise TypeError("authority must be CtfAuthority")
+        try:
+            canonical_question = "0x" + decode_fixed_bytes(question_id, 32).hex()
+            canonical_tx = "0x" + decode_fixed_bytes(transaction_hash, 32).hex()
+        except ResolutionUnavailable as exc:
+            raise ResolutionUnavailable("adapter terminal linkage is malformed") from exc
+        if (isinstance(block_number, bool) or not isinstance(block_number, int)
+                or isinstance(log_index, bool) or not isinstance(log_index, int)
+                or canonical_question != authority.question_id
+                or block_number != authority.resolution_block
+                or canonical_tx != authority.resolution_transaction_hash
+                or log_index <= authority.resolution_log_index):
+            raise ResolutionUnavailable("adapter terminal linkage does not match")
 
     @staticmethod
     def _first_positive_block(reader, upper_block, label):
