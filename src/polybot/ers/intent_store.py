@@ -13,8 +13,11 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+from polybot.resolution.errors import SettlementConflict
+
 _PROPOSED = "PROPOSED"
 _STATUS_FOR_VERDICT = {"ACCEPT": "ACCEPTED", "REJECT": "REJECTED", "SKIP": "SKIPPED"}
+_SHADOW_ROLES = ("MAKER", "SHADOW")
 
 _COLUMNS = (
     "intent_id, status, token_id, condition_id, event_id, side, target_price, max_price, "
@@ -47,6 +50,66 @@ class PendingIntent:
     decision_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ShadowExecutionRecord:
+    """Canonical filled paper execution persisted with its ERS ACCEPT decision."""
+
+    execution_id: str
+    token_id: str
+    condition_id: str
+    event_id: str
+    category: str
+    outcome_slot: int
+    sibling_token_ids: tuple[str, str]
+    side: str
+    shares: Decimal
+    price_exec: Decimal
+    fill_mid: Decimal
+    reward_accrued: Decimal
+
+    def __post_init__(self):
+        for name in ("execution_id", "token_id", "condition_id", "event_id", "category"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        if (isinstance(self.outcome_slot, bool) or not isinstance(self.outcome_slot, int)
+                or self.outcome_slot not in (0, 1)):
+            raise ValueError("outcome_slot must be 0 or 1")
+        siblings = self.sibling_token_ids
+        if (not isinstance(siblings, tuple) or len(siblings) != 2
+                or any(not isinstance(value, str) or not value for value in siblings)
+                or siblings[0] == siblings[1]):
+            raise ValueError("sibling_token_ids must contain two distinct non-empty strings")
+        if siblings[self.outcome_slot] != self.token_id:
+            raise ValueError("outcome_slot does not select token_id")
+        if self.side != "BUY":
+            raise ValueError("shadow execution side must be BUY")
+        if not self.shares.is_finite() or self.shares <= 0:
+            raise ValueError("shares must be finite and > 0")
+        for name in ("price_exec", "fill_mid"):
+            value = getattr(self, name)
+            if not value.is_finite() or not (Decimal(0) <= value <= Decimal(1)):
+                raise ValueError(f"{name} must be finite and in [0, 1]")
+        if not self.reward_accrued.is_finite() or self.reward_accrued < 0:
+            raise ValueError("reward_accrued must be finite and >= 0")
+
+
+@dataclass(frozen=True)
+class ShadowExecutionOutboxRecord:
+    sequence: int
+    role: str
+    execution: ShadowExecutionRecord
+
+    def __post_init__(self):
+        if (isinstance(self.sequence, bool) or not isinstance(self.sequence, int)
+                or self.sequence <= 0):
+            raise ValueError("outbox sequence must be a positive integer")
+        if self.role not in _SHADOW_ROLES:
+            raise ValueError("shadow execution outbox role is invalid")
+        if not isinstance(self.execution, ShadowExecutionRecord):
+            raise TypeError("outbox execution must be a ShadowExecutionRecord")
+
+
 def _dec(value):
     return None if value is None else Decimal(value)
 
@@ -57,6 +120,7 @@ class IntentStore:
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_intents (
@@ -145,7 +209,39 @@ class IntentStore:
             )
             """
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_executions (
+                execution_id      TEXT PRIMARY KEY,
+                token_id          TEXT    NOT NULL,
+                condition_id      TEXT    NOT NULL,
+                event_id          TEXT    NOT NULL,
+                category          TEXT    NOT NULL,
+                outcome_slot      INTEGER NOT NULL,
+                sibling_token_ids TEXT    NOT NULL,
+                side              TEXT    NOT NULL,
+                shares            TEXT    NOT NULL,
+                price_exec        TEXT    NOT NULL,
+                fill_mid          TEXT    NOT NULL,
+                reward_accrued    TEXT    NOT NULL,
+                created_at        INTEGER NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_execution_outbox (
+                sequence      INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id  TEXT NOT NULL REFERENCES shadow_executions(execution_id),
+                role          TEXT NOT NULL CHECK (role IN ('MAKER', 'SHADOW')),
+                state         TEXT NOT NULL CHECK (state IN ('PENDING', 'DELIVERED')),
+                delivered_at  INTEGER,
+                UNIQUE (execution_id, role)
+            )
+            """
+        )
         self._conn.commit()
+        self._validate_shadow_outbox_integrity()
 
     def propose_trade(self, intent_id, *, token_id, condition_id, event_id, side,
                       target_price, max_price, size_usd_suggestion, p, p_confidence,
@@ -165,24 +261,135 @@ class IntentStore:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def record_decision(self, intent_id, decision):
+    def record_decision(self, intent_id, decision, *, shadow_execution=None):
         """ERS-ONLY (never exposed to Hermes): transition the intent's status per the
-        Decision verdict, store the decision, and append an immutable audit row."""
+        Decision verdict, store the decision, and append an immutable audit row. When a
+        canonical filled shadow execution is supplied for ACCEPT, its two-role delivery
+        outbox is committed in the same transaction."""
         status = _STATUS_FOR_VERDICT[decision.verdict]
         at = self._stamper.stamp()
         stake = None if decision.stake_usd is None else str(decision.stake_usd)
         price = None if decision.price_exec is None else str(decision.price_exec)
-        self._conn.execute(
-            "UPDATE pending_intents SET status=?, decided_at=?, decision_verdict=?, "
-            "decision_stake_usd=?, decision_price_exec=?, decision_reason=? WHERE intent_id=?",
-            (status, at, decision.verdict, stake, price, decision.reason, intent_id),
-        )
-        self._conn.execute(
-            "INSERT INTO intent_audit (intent_id, at, verdict, stake_usd, price_exec, reason) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (intent_id, at, decision.verdict, stake, price, decision.reason),
-        )
-        self._conn.commit()
+        if shadow_execution is not None:
+            if not isinstance(shadow_execution, ShadowExecutionRecord):
+                raise TypeError("shadow_execution must be a ShadowExecutionRecord")
+            if decision.verdict != "ACCEPT":
+                raise ValueError("only ACCEPT may persist a shadow execution")
+            if shadow_execution.execution_id != intent_id:
+                raise ValueError("shadow execution ID must equal intent ID")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            intent_row = self._conn.execute(
+                "SELECT status, token_id, condition_id, event_id FROM pending_intents "
+                "WHERE intent_id=?", (intent_id,),
+            ).fetchone()
+            if intent_row is None:
+                raise KeyError(f"no intent {intent_id!r} to decide")
+            if shadow_execution is not None and (
+                    intent_row[1] != shadow_execution.token_id
+                    or intent_row[2] != shadow_execution.condition_id
+                    or intent_row[3] != shadow_execution.event_id):
+                raise ValueError("shadow execution identity contradicts intent")
+            self._conn.execute(
+                "UPDATE pending_intents SET status=?, decided_at=?, decision_verdict=?, "
+                "decision_stake_usd=?, decision_price_exec=?, decision_reason=? WHERE intent_id=?",
+                (status, at, decision.verdict, stake, price, decision.reason, intent_id),
+            )
+            self._conn.execute(
+                "INSERT INTO intent_audit (intent_id, at, verdict, stake_usd, price_exec, reason) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (intent_id, at, decision.verdict, stake, price, decision.reason),
+            )
+            if shadow_execution is not None:
+                execution = shadow_execution
+                sibling_json = json.dumps(
+                    list(execution.sibling_token_ids), ensure_ascii=False, separators=(",", ":")
+                )
+                self._conn.execute(
+                    "INSERT INTO shadow_executions "
+                    "(execution_id, token_id, condition_id, event_id, category, outcome_slot, "
+                    "sibling_token_ids, side, shares, price_exec, fill_mid, reward_accrued, "
+                    "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (execution.execution_id, execution.token_id, execution.condition_id,
+                     execution.event_id, execution.category, execution.outcome_slot, sibling_json,
+                     execution.side, str(execution.shares), str(execution.price_exec),
+                     str(execution.fill_mid), str(execution.reward_accrued), at),
+                )
+                self._conn.executemany(
+                    "INSERT INTO shadow_execution_outbox (execution_id, role, state) "
+                    "VALUES (?, ?, 'PENDING')",
+                    ((execution.execution_id, role) for role in _SHADOW_ROLES),
+                )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+
+    def pending_shadow_executions(self, limit):
+        """Return pending canonical paper executions in durable target order."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        rows = self._conn.execute(
+            "SELECT o.sequence, o.role, e.execution_id, e.token_id, e.condition_id, "
+            "e.event_id, e.category, e.outcome_slot, e.sibling_token_ids, e.side, "
+            "e.shares, e.price_exec, e.fill_mid, e.reward_accrued "
+            "FROM shadow_execution_outbox AS o "
+            "JOIN shadow_executions AS e USING (execution_id) "
+            "WHERE o.state='PENDING' ORDER BY o.sequence LIMIT ?",
+            (limit,),
+        ).fetchall()
+        records = []
+        for row in rows:
+            siblings = json.loads(row[8])
+            execution = ShadowExecutionRecord(
+                execution_id=row[2], token_id=row[3], condition_id=row[4], event_id=row[5],
+                category=row[6], outcome_slot=row[7], sibling_token_ids=tuple(siblings),
+                side=row[9], shares=Decimal(row[10]), price_exec=Decimal(row[11]),
+                fill_mid=Decimal(row[12]), reward_accrued=Decimal(row[13]),
+            )
+            records.append(ShadowExecutionOutboxRecord(row[0], row[1], execution))
+        return tuple(records)
+
+    def acknowledge_shadow_execution(self, sequence, execution_id, role):
+        """Mark one exact target delivery complete; exact replay is idempotent."""
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0:
+            raise ValueError("outbox sequence must be a positive integer")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise ValueError("execution_id must be a non-empty string")
+        if role not in _SHADOW_ROLES:
+            raise ValueError("shadow execution outbox role is invalid")
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            row = self._conn.execute(
+                "SELECT execution_id, role, state FROM shadow_execution_outbox "
+                "WHERE sequence=?", (sequence,),
+            ).fetchone()
+            if row is None or row[0] != execution_id or row[1] != role:
+                raise SettlementConflict("outbox acknowledgement identity does not match")
+            if row[2] == "DELIVERED":
+                self._conn.commit()
+                return False
+            self._conn.execute(
+                "UPDATE shadow_execution_outbox SET state='DELIVERED', delivered_at=? "
+                "WHERE sequence=?",
+                (self._stamper.stamp(), sequence),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        return True
+
+    def _validate_shadow_outbox_integrity(self):
+        orphan = self._conn.execute(
+            "SELECT 1 FROM shadow_execution_outbox AS o "
+            "LEFT JOIN shadow_executions AS e USING (execution_id) "
+            "WHERE e.execution_id IS NULL LIMIT 1"
+        ).fetchone()
+        if orphan is not None:
+            raise SettlementConflict("orphaned shadow execution outbox")
 
     def pending(self):
         # FIFO by rowid (insertion order) -- monotonic + restart-stable, unlike a per-process
