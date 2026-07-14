@@ -172,3 +172,57 @@ def test_outbox_limit_and_acknowledgement_replay_boundaries(tmp_path):
         assert [record.role for record in store.pending_shadow_executions(1)] == ["MAKER"]
         assert store.acknowledge_shadow_execution(1, "intent-1", "MAKER") is True
         assert store.acknowledge_shadow_execution(1, "intent-1", "MAKER") is False
+
+
+def test_failure_before_accept_outbox_commit_rolls_back_every_surface(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade("intent-1", **_PROPOSAL)
+        store._before_shadow_execution_commit = lambda: (_ for _ in ()).throw(
+            RuntimeError("injected precommit failure")
+        )
+
+        with pytest.raises(RuntimeError, match="precommit failure"):
+            store.record_decision(
+                "intent-1",
+                Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+                shadow_execution=_execution(),
+            )
+
+        assert store.get("intent-1").status == "PROPOSED"
+        assert store.audit_log() == []
+        assert store.pending_shadow_executions(10) == ()
+        assert store._conn.execute("SELECT * FROM shadow_executions").fetchall() == []
+
+
+def test_reopen_rejects_missing_target_role_and_noncanonical_sibling_json(tmp_path):
+    role_path = str(tmp_path / "missing-role.db")
+    with IntentStore(role_path, MonotonicStamper()) as store:
+        store.propose_trade("intent-1", **_PROPOSAL)
+        store.record_decision(
+            "intent-1",
+            Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+            shadow_execution=_execution(),
+        )
+    with sqlite3.connect(role_path) as corrupt:
+        corrupt.execute(
+            "DELETE FROM shadow_execution_outbox WHERE execution_id='intent-1' AND role='SHADOW'"
+        )
+        corrupt.commit()
+    with pytest.raises(SettlementConflict, match="target roles"):
+        IntentStore(role_path, MonotonicStamper())
+
+    json_path = str(tmp_path / "bad-json.db")
+    with IntentStore(json_path, MonotonicStamper()) as store:
+        store.propose_trade("intent-1", **_PROPOSAL)
+        store.record_decision(
+            "intent-1",
+            Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+            shadow_execution=_execution(),
+        )
+    with sqlite3.connect(json_path) as corrupt:
+        corrupt.execute(
+            "UPDATE shadow_executions SET sibling_token_ids='[\"101\", \"202\"]'"
+        )
+        corrupt.commit()
+    with pytest.raises(SettlementConflict, match="canonical sibling JSON"):
+        IntentStore(json_path, MonotonicStamper())

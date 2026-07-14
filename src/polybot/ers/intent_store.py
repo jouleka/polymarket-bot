@@ -11,7 +11,7 @@ is deliberately separate from the append-only Market-Memory EventStore.
 import json
 import sqlite3
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from polybot.resolution.errors import SettlementConflict
 
@@ -320,6 +320,7 @@ class IntentStore:
                     "VALUES (?, ?, 'PENDING')",
                     ((execution.execution_id, role) for role in _SHADOW_ROLES),
                 )
+                self._before_shadow_execution_commit()
         except Exception:
             self._conn.rollback()
             raise
@@ -341,13 +342,7 @@ class IntentStore:
         ).fetchall()
         records = []
         for row in rows:
-            siblings = json.loads(row[8])
-            execution = ShadowExecutionRecord(
-                execution_id=row[2], token_id=row[3], condition_id=row[4], event_id=row[5],
-                category=row[6], outcome_slot=row[7], sibling_token_ids=tuple(siblings),
-                side=row[9], shares=Decimal(row[10]), price_exec=Decimal(row[11]),
-                fill_mid=Decimal(row[12]), reward_accrued=Decimal(row[13]),
-            )
+            execution = self._shadow_execution_from_row(row[2:])
             records.append(ShadowExecutionOutboxRecord(row[0], row[1], execution))
         return tuple(records)
 
@@ -390,6 +385,47 @@ class IntentStore:
         ).fetchone()
         if orphan is not None:
             raise SettlementConflict("orphaned shadow execution outbox")
+        roles = self._conn.execute(
+            "SELECT e.execution_id, COUNT(o.sequence), "
+            "SUM(CASE WHEN o.role='MAKER' THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN o.role='SHADOW' THEN 1 ELSE 0 END) "
+            "FROM shadow_executions AS e "
+            "LEFT JOIN shadow_execution_outbox AS o USING (execution_id) "
+            "GROUP BY e.execution_id"
+        ).fetchall()
+        if any(count != 2 or maker != 1 or shadow != 1
+               for _execution_id, count, maker, shadow in roles):
+            raise SettlementConflict("shadow execution outbox target roles are incomplete")
+        rows = self._conn.execute(
+            "SELECT execution_id, token_id, condition_id, event_id, category, outcome_slot, "
+            "sibling_token_ids, side, shares, price_exec, fill_mid, reward_accrued "
+            "FROM shadow_executions ORDER BY execution_id"
+        ).fetchall()
+        for row in rows:
+            self._shadow_execution_from_row(row)
+
+    @staticmethod
+    def _shadow_execution_from_row(row):
+        try:
+            siblings = json.loads(row[6])
+            if (not isinstance(siblings, list)
+                    or row[6] != json.dumps(
+                        siblings, ensure_ascii=False, separators=(",", ":")
+                    )):
+                raise SettlementConflict("shadow execution has non-canonical sibling JSON")
+            return ShadowExecutionRecord(
+                execution_id=row[0], token_id=row[1], condition_id=row[2], event_id=row[3],
+                category=row[4], outcome_slot=row[5], sibling_token_ids=tuple(siblings),
+                side=row[7], shares=Decimal(row[8]), price_exec=Decimal(row[9]),
+                fill_mid=Decimal(row[10]), reward_accrued=Decimal(row[11]),
+            )
+        except SettlementConflict:
+            raise
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise SettlementConflict("stored shadow execution is not canonical") from exc
+
+    def _before_shadow_execution_commit(self):
+        """Failure-injection seam immediately before ACCEPT/outbox commit."""
 
     def pending(self):
         # FIFO by rowid (insertion order) -- monotonic + restart-stable, unlike a per-process

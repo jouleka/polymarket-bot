@@ -622,6 +622,25 @@ def test_shadow_planner_error_rejects_before_signer_or_portfolio_side_effect(tmp
         assert store.pending_shadow_executions(10) == ()
 
 
+def test_shadow_planner_wrong_return_type_rejects_before_signer(tmp_path):
+    with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49", max_price="0.90",
+            size_usd_suggestion="12", p="0.90", p_confidence="0.75",
+        )
+        signer = PaperSigner()
+        final = process_pending(
+            store, book_for={"101": _book()}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            shadow_planner=lambda intent, decision: object(),
+        )
+
+        assert store.get("intent-1").decision_reason == "shadow_execution_error"
+        assert signer.placed == []
+        assert final.positions == ()
+
+
 def test_ers_controller_threads_optional_shadow_planner_into_accept_path(tmp_path):
     with IntentStore(str(tmp_path / "intent.db"), MonotonicStamper()) as store:
         store.propose_trade(
