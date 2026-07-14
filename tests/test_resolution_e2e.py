@@ -1,5 +1,6 @@
 """POL-15 whole-slice resolution and settlement verification."""
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -9,10 +10,18 @@ from polybot.core.clock import MonotonicStamper
 from polybot.harness.ledger import ShadowLedger
 from polybot.maker.ledger import MakerLedger
 from polybot.resolution.dispatcher import ResolutionDispatcher
-from polybot.resolution.errors import ConditionAlreadyTerminal
+from polybot.resolution.errors import (
+    ConditionAlreadyTerminal,
+    IntegrityHalted,
+    SettlementConflict,
+)
+from polybot.resolution.feed import PollDisposition, ResolutionFeed
 from polybot.resolution.models import (
+    PUSD_ADDRESS,
     DisputeState,
+    LifecyclePhase,
     PayoutVector,
+    ProviderObservation,
     ResolutionSubject,
     TerminalResolution,
 )
@@ -35,6 +44,56 @@ def _terminal(condition_byte, *, payout=PayoutVector((3, 1), 4)):
             "99:1:" + "0x" + "55" * 32 + ":CONDITION_RESOLUTION",
         ),
         provider_ids=("archive-a", "archive-b"),
+    )
+
+
+class _Provider:
+    def __init__(self, provider_id, observations, block_hash):
+        self.provider_id = provider_id
+        self._observations = observations
+        self._block_hash = block_hash
+        self.verification_error = None
+        self.verify_calls = []
+
+    def chain_id(self):
+        return 137
+
+    def latest_block(self):
+        return 20
+
+    def block_hash(self, block_number):
+        assert block_number == 15
+        return self._block_hash
+
+    def observe(self, subject, block_number):
+        assert block_number == 15
+        return self._observations[subject.condition_id]
+
+    def verify_terminal(self, terminal):
+        self.verify_calls.append(terminal)
+        if self.verification_error is not None:
+            raise self.verification_error
+
+
+def _observation(provider_id, subject, block_hash, *, payout=None,
+                 dispute=DisputeState.UNKNOWN):
+    if payout is None:
+        return ProviderObservation(
+            provider_id, 15, block_hash, LifecyclePhase.UNRESOLVED, None,
+            DisputeState.UNKNOWN, None, None, None, None, (),
+        )
+    classified = dispute is not DisputeState.UNKNOWN
+    audit_event_ids = (
+        "14:1:" + "0x" + "77" * 32 + ":CONDITION_RESOLUTION",
+    )
+    if classified:
+        audit_event_ids += (
+            "14:2:" + "0x" + "77" * 32 + ":QUESTION_RESOLVED",
+        )
+    return ProviderObservation(
+        provider_id, 15, block_hash, LifecyclePhase.FINALIZED, payout, dispute,
+        PUSD_ADDRESS, subject.token_ids, "0x" + "55" * 20,
+        "0x" + "66" * 32, audit_event_ids,
     )
 
 
@@ -158,3 +217,89 @@ def test_fractional_terminal_fans_out_crash_safely_to_all_real_ledgers(tmp_path)
                 reward_accrued=Decimal("0"), event_id="event-1", outcome_slot=0,
                 sibling_token_ids=("101", "202"),
             )
+
+
+def test_fake_provider_whole_slice_isolates_lifecycles_and_recovers(tmp_path):
+    path = str(tmp_path / "resolution.db")
+    block_hash = "0x" + "ab" * 32
+    subjects = tuple(
+        ResolutionSubject(
+            f"event-{index}", "0x" + f"{0x93 + index:02x}" * 32,
+            ("101", "202"), "politics",
+        )
+        for index in range(7)
+    )
+    (unresolved, unknown, binary, fractional, disputed, manual,
+     disagreement) = subjects
+    cases = (
+        (unresolved, None, DisputeState.UNKNOWN),
+        (unknown, PayoutVector((1, 1), 2), DisputeState.UNKNOWN),
+        (binary, PayoutVector((1, 0), 1), DisputeState.CLEAR),
+        (fractional, PayoutVector((3, 1), 4), DisputeState.CLEAR),
+        (disputed, PayoutVector((1, 0), 1), DisputeState.DISPUTED),
+        (manual, PayoutVector((0, 1), 1), DisputeState.MANUAL),
+        (disagreement, PayoutVector((1, 0), 1), DisputeState.CLEAR),
+    )
+    first_observations = {
+        subject.condition_id: _observation(
+            "archive-a", subject, block_hash, payout=payout, dispute=dispute
+        )
+        for subject, payout, dispute in cases
+    }
+    second_observations = {
+        condition_id: replace(observation, provider_id="archive-b")
+        for condition_id, observation in first_observations.items()
+    }
+    second_observations[disagreement.condition_id] = replace(
+        second_observations[disagreement.condition_id],
+        payout=PayoutVector((0, 1), 1),
+    )
+    first = _Provider("archive-a", first_observations, block_hash)
+    second = _Provider("archive-b", second_observations, block_hash)
+
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, (first, second))
+        results = feed.poll(subjects)
+        assert tuple(result.disposition for result in results) == (
+            PollDisposition.UNRESOLVED,
+            PollDisposition.UNKNOWN,
+            PollDisposition.ACCEPTED,
+            PollDisposition.ACCEPTED,
+            PollDisposition.ACCEPTED,
+            PollDisposition.ACCEPTED,
+            PollDisposition.UNAVAILABLE,
+        )
+        assert tuple(result.dispute for result in results[2:6]) == (
+            DisputeState.CLEAR,
+            DisputeState.CLEAR,
+            DisputeState.DISPUTED,
+            DisputeState.MANUAL,
+        )
+        assert store.assessment_for(unresolved.condition_id).phase is (
+            LifecyclePhase.UNRESOLVED
+        )
+        assert store.assessment_for(unknown.condition_id).phase is (
+            LifecyclePhase.FINALIZED
+        )
+        assert store.assessment_for(disagreement.condition_id) is None
+        assert len(store.pending_outbox(20)) == 12
+
+        repeated, = feed.poll((binary,))
+        binary_terminal = store.terminal_for(binary.condition_id)
+        assert repeated.disposition is PollDisposition.ALREADY_TERMINAL
+        assert repeated.terminal_id == binary_terminal.terminal_id
+        assert first.verify_calls[-1] == second.verify_calls[-1] == binary_terminal
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        assert reopened.recovery_required is True
+        feed = ResolutionFeed(reopened, (first, second))
+        assert feed.recover_pending() == 4
+        assert reopened.recovery_required is False
+
+        contradiction = SettlementConflict("accepted payout changed")
+        first.verification_error = contradiction
+        with pytest.raises(SettlementConflict) as caught:
+            feed.verify_terminal(reopened.terminal_for(binary.condition_id))
+        assert caught.value is contradiction
+        with pytest.raises(IntegrityHalted, match="accepted payout changed"):
+            reopened.require_healthy()
