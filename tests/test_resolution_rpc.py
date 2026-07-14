@@ -18,6 +18,13 @@ from polybot.resolution.rpc import (
     CTF_DEPLOYMENT_BLOCK,
     JsonRpcClient,
     JsonRpcResolutionProvider,
+    QUESTION_EMERGENCY_RESOLVED_V2_TOPIC,
+    QUESTION_FLAGGED_ADMIN_V1_TOPIC,
+    QUESTION_FLAGGED_V2_TOPIC,
+    QUESTION_RESET_TOPIC,
+    QUESTION_RESOLVED_V1_TOPIC,
+    QUESTION_RESOLVED_V2_TOPIC,
+    QUESTION_UPDATED_V1_TOPIC,
     decode_fixed_bytes,
     decode_quantity,
 )
@@ -551,3 +558,59 @@ def test_empty_unrelated_or_missing_positive_resolution_is_unknown():
     assert provider._normalize_v2_plus(
         question_id, (unrelated_resolution,)
     ).audit_event_ids == ()
+
+
+def test_adapter_history_pages_only_derived_interval_in_exact_10000_block_ranges():
+    question_id = "0x" + "27" * 32
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+    v1 = ADAPTER_POLICIES[0]
+    v2_plus = ADAPTER_POLICIES[-1]
+    expected_ranges = (
+        (100, 10_099), (10_100, 20_099), (20_100, 20_105)
+    )
+
+    v2_filters = provider._adapter_history_filters(
+        v2_plus, question_id, 100, 20_105
+    )
+    assert tuple(
+        (int(item["fromBlock"], 16), int(item["toBlock"], 16))
+        for item in v2_filters
+    ) == expected_ranges
+    assert all(item["address"] == v2_plus.address for item in v2_filters)
+    assert all(item["topics"] == [[
+        QUESTION_RESET_TOPIC,
+        QUESTION_FLAGGED_V2_TOPIC,
+        QUESTION_RESOLVED_V2_TOPIC,
+        QUESTION_EMERGENCY_RESOLVED_V2_TOPIC,
+    ], question_id] for item in v2_filters)
+
+    v1_filters = provider._adapter_history_filters(
+        v1, question_id, 100, 20_105
+    )
+    assert len(v1_filters) == 6
+    assert tuple(
+        (int(v1_filters[index]["fromBlock"], 16),
+         int(v1_filters[index]["toBlock"], 16))
+        for index in range(0, len(v1_filters), 2)
+    ) == expected_ranges
+    for index in range(0, len(v1_filters), 2):
+        assert v1_filters[index]["topics"] == [[
+            QUESTION_RESET_TOPIC,
+            QUESTION_UPDATED_V1_TOPIC,
+            QUESTION_RESOLVED_V1_TOPIC,
+        ], question_id]
+        assert v1_filters[index + 1]["topics"] == [
+            QUESTION_FLAGGED_ADMIN_V1_TOPIC
+        ]
+
+    single = provider._adapter_history_filters(
+        v2_plus, question_id, 500, 500
+    )
+    assert [(item["fromBlock"], item["toBlock"]) for item in single] == [
+        ("0x1f4", "0x1f4")
+    ]
+    for bounds in ((99, 98), (-1, 10), (True, 10)):
+        with pytest.raises(ResolutionUnavailable, match="interval"):
+            provider._adapter_history_filters(
+                v2_plus, question_id, bounds[0], bounds[1]
+            )
