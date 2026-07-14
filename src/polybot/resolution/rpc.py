@@ -11,6 +11,7 @@ from polybot.resolution.models import (
     LifecyclePhase,
     PUSD_ADDRESS,
     PayoutVector,
+    ProviderObservation,
     ResolutionSubject,
     fold_dispute,
 )
@@ -257,6 +258,92 @@ class JsonRpcResolutionProvider:
         self._rpc = rpc
         self._verified_deployments = set()
 
+    def chain_id(self):
+        return decode_quantity(self._rpc.call("eth_chainId", []))
+
+    def latest_block(self):
+        return decode_quantity(self._rpc.call("eth_blockNumber", []))
+
+    def block_hash(self, block_number):
+        block_tag = _encode_quantity(block_number)
+        block = self._rpc.call("eth_getBlockByNumber", [block_tag, False])
+        if (not isinstance(block, dict)
+                or decode_quantity(block.get("number")) != block_number):
+            raise ResolutionUnavailable("JSON-RPC block coordinate is malformed")
+        return "0x" + decode_fixed_bytes(block.get("hash"), 32).hex()
+
+    def observe(self, subject, block_number):
+        if not isinstance(subject, ResolutionSubject):
+            raise TypeError("observation subject must be a ResolutionSubject")
+        block_hash = self.block_hash(block_number)
+        phase, payout = self._read_payout(subject.condition_id, block_number)
+        if phase is LifecyclePhase.UNRESOLVED:
+            return ProviderObservation(
+                provider_id=self.provider_id,
+                block_number=block_number,
+                block_hash=block_hash,
+                phase=phase,
+                payout=None,
+                dispute=DisputeState.UNKNOWN,
+                collateral_address=None,
+                derived_token_ids=None,
+                adapter_address=None,
+                question_id=None,
+                audit_event_ids=(),
+            )
+
+        derived_token_ids = self._derive_positions(subject, block_number)
+        preparation_block, resolution_block = self._transition_blocks(
+            subject.condition_id, block_number
+        )
+        authority = self._ctf_authority(
+            subject.condition_id, preparation_block, resolution_block, payout
+        )
+        if authority.policy is None:
+            proof = PathProof(
+                DisputeState.UNKNOWN, (), None
+            )
+        else:
+            self._verify_deployments(authority.adapter_address)
+            raw_history = self._read_adapter_history(
+                authority.policy, authority.question_id,
+                preparation_block, resolution_block,
+            )
+            events = self._decode_adapter_history(
+                authority.policy, raw_history, payout
+            )
+            proof = (
+                self._normalize_v1(authority.question_id, events)
+                if authority.policy.generation == "v1"
+                else self._normalize_v2_plus(authority.question_id, events)
+            )
+            if proof.terminal_event is not None:
+                terminal = proof.terminal_event
+                self._link_adapter_terminal(
+                    authority, terminal.question_id, terminal.block_number,
+                    terminal.log_index, terminal.transaction_hash,
+                )
+        audit_event_ids = tuple(sorted(
+            authority.audit_event_ids + proof.audit_event_ids,
+            key=lambda value: (
+                int(value.split(":", 2)[0]),
+                int(value.split(":", 2)[1]),
+            ),
+        ))
+        return ProviderObservation(
+            provider_id=self.provider_id,
+            block_number=block_number,
+            block_hash=block_hash,
+            phase=phase,
+            payout=payout,
+            dispute=proof.dispute,
+            collateral_address=PUSD_ADDRESS,
+            derived_token_ids=derived_token_ids,
+            adapter_address=authority.adapter_address,
+            question_id=authority.question_id,
+            audit_event_ids=audit_event_ids,
+        )
+
     def _verify_deployments(self, adapter_address):
         policy = next(
             (candidate for candidate in ADAPTER_POLICIES
@@ -487,6 +574,103 @@ class JsonRpcResolutionProvider:
                     "adapter history log is outside requested authority"
                 )
         return normalized
+
+    def _decode_adapter_history(self, policy, logs, payout):
+        if policy not in ADAPTER_POLICIES:
+            raise ResolutionUnavailable("adapter decode policy is unsupported")
+        if not isinstance(payout, PayoutVector):
+            raise TypeError("adapter payout must be a PayoutVector")
+        events = []
+        for log in logs:
+            topics = log["topics"]
+            topic = topics[0]
+            data = _decode_hex_data(log["data"])
+            manual = False
+            if topic == QUESTION_FLAGGED_ADMIN_V1_TOPIC:
+                if policy.generation != "v1" or len(topics) != 1 or len(data) != 32:
+                    raise ResolutionUnavailable("v1 manual flag ABI is malformed")
+                question_id = "0x" + data.hex()
+                kind = "QUESTION_FLAGGED_FOR_ADMIN_RESOLUTION"
+            else:
+                if len(topics) != 2:
+                    raise ResolutionUnavailable("adapter indexed event ABI is malformed")
+                question_id = "0x" + decode_fixed_bytes(topics[1], 32).hex()
+                if topic == QUESTION_RESET_TOPIC:
+                    if data:
+                        raise ResolutionUnavailable("adapter reset ABI is malformed")
+                    kind = "QUESTION_RESET"
+                elif topic == QUESTION_UPDATED_V1_TOPIC:
+                    if policy.generation != "v1":
+                        raise ResolutionUnavailable("adapter update policy is invalid")
+                    self._validate_v1_update_data(data)
+                    kind = "QUESTION_UPDATED"
+                elif topic == QUESTION_RESOLVED_V1_TOPIC:
+                    if policy.generation != "v1" or len(data) != 32:
+                        raise ResolutionUnavailable("v1 resolution ABI is malformed")
+                    manual_value = int.from_bytes(data)
+                    if manual_value not in (0, 1):
+                        raise ResolutionUnavailable("v1 resolution bool is malformed")
+                    manual = bool(manual_value)
+                    kind = "QUESTION_RESOLVED"
+                elif topic == QUESTION_FLAGGED_V2_TOPIC:
+                    if policy.generation != "v2_plus" or data:
+                        raise ResolutionUnavailable("v2+ flag ABI is malformed")
+                    kind = "QUESTION_FLAGGED"
+                elif topic == QUESTION_RESOLVED_V2_TOPIC:
+                    if policy.generation != "v2_plus":
+                        raise ResolutionUnavailable("v2+ resolution policy is invalid")
+                    self._validate_v2_payout_data(data, payout, emergency=False)
+                    kind = "QUESTION_RESOLVED"
+                elif topic == QUESTION_EMERGENCY_RESOLVED_V2_TOPIC:
+                    if policy.generation != "v2_plus":
+                        raise ResolutionUnavailable("v2+ emergency policy is invalid")
+                    self._validate_v2_payout_data(data, payout, emergency=True)
+                    kind = "QUESTION_EMERGENCY_RESOLVED"
+                else:
+                    raise ResolutionUnavailable("adapter event topic is unsupported")
+            events.append(AdapterEvent(
+                kind=kind,
+                question_id=question_id,
+                block_number=decode_quantity(log["blockNumber"]),
+                log_index=decode_quantity(log["logIndex"]),
+                transaction_hash="0x" + decode_fixed_bytes(
+                    log["transactionHash"], 32
+                ).hex(),
+                manual=manual,
+            ))
+        return tuple(events)
+
+    @staticmethod
+    def _validate_v1_update_data(data):
+        if len(data) < 224 or len(data) % 32 != 0:
+            raise ResolutionUnavailable("v1 update ABI is malformed")
+        words = tuple(
+            data[offset:offset + 32] for offset in range(0, 192, 32)
+        )
+        if (int.from_bytes(words[0]) != 192
+                or words[2][:12] != bytes(12)
+                or int.from_bytes(words[5]) not in (0, 1)):
+            raise ResolutionUnavailable("v1 update ABI is malformed")
+        value_length = int.from_bytes(data[192:224])
+        padded_length = ((value_length + 31) // 32) * 32
+        if (len(data) != 224 + padded_length
+                or any(data[224 + value_length:])):
+            raise ResolutionUnavailable("v1 update bytes are malformed")
+
+    @staticmethod
+    def _validate_v2_payout_data(data, payout, *, emergency):
+        expected_length = 128 if emergency else 160
+        if len(data) != expected_length:
+            raise ResolutionUnavailable("v2+ resolution ABI is malformed")
+        words = tuple(
+            int.from_bytes(data[offset:offset + 32])
+            for offset in range(0, len(data), 32)
+        )
+        control = words[:2] if emergency else words[1:3]
+        numerators = words[2:] if emergency else words[3:]
+        expected_control = (32, 2) if emergency else (64, 2)
+        if control != expected_control or numerators != payout.numerators:
+            raise ResolutionUnavailable("adapter resolution payout disagrees")
 
     @staticmethod
     def _normalize_log_records(logs):
