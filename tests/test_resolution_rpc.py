@@ -90,7 +90,9 @@ class _TransitionRpc:
 
 class _ObservationRpc:
     def __init__(self, subject, policy, preparation_block, resolution_block,
-                 acceptance_block, block_hash, question_id, transaction_hash):
+                 acceptance_block, block_hash, question_id, transaction_hash,
+                 *, position_ids=(101, 202), adapter_transaction_hash=None,
+                 adapter_log_index=3):
         self.subject = subject
         self.policy = policy
         self.preparation_block = preparation_block
@@ -99,6 +101,12 @@ class _ObservationRpc:
         self.block_hash = block_hash
         self.question_id = question_id
         self.transaction_hash = transaction_hash
+        self.position_ids = position_ids
+        self.adapter_transaction_hash = (
+            transaction_hash if adapter_transaction_hash is None
+            else adapter_transaction_hash
+        )
+        self.adapter_log_index = adapter_log_index
         self.calls = []
 
     def call(self, method, params):
@@ -127,7 +135,10 @@ class _ObservationRpc:
             elif selector == "0x856296f7":
                 return "0x" + ("31" if int(data[-64:], 16) == 1 else "32") * 32
             elif selector == "0x39dd7530":
-                value = 101 if data[-64:] == "31" * 32 else 202
+                value = (
+                    self.position_ids[0] if data[-64:] == "31" * 32
+                    else self.position_ids[1]
+                )
             else:
                 raise AssertionError(f"unexpected call selector {selector}")
             return "0x" + f"{value:064x}"
@@ -154,8 +165,8 @@ class _ObservationRpc:
                 return [{
                     "address": self.policy.address,
                     "blockNumber": hex(self.resolution_block),
-                    "transactionHash": self.transaction_hash,
-                    "logIndex": "0x3",
+                    "transactionHash": self.adapter_transaction_hash,
+                    "logIndex": hex(self.adapter_log_index),
                     "removed": False,
                     "topics": [QUESTION_RESOLVED_V2_TOPIC, self.question_id],
                     "data": "0x" + _word(1) + _word(64) + _word(2)
@@ -907,6 +918,43 @@ def test_json_rpc_provider_returns_fully_bound_observation():
         ),
     )
     assert all(method != "eth_blockNumber" for method, _ in rpc.calls)
+    assert [params for method, params in rpc.calls if method == "eth_getCode"] == [
+        [CTF_ADDRESS, "0x3d6585"],
+        [CTF_ADDRESS, "0x3d6586"],
+        [policy.address, "0x2c96db5"],
+        [policy.address, "0x2c96db6"],
+    ]
+    position_calls = [
+        params for method, params in rpc.calls
+        if method == "eth_call"
+        and params[0]["data"][:10] in ("0x856296f7", "0x39dd7530")
+    ]
+    assert len(position_calls) == 4
+    assert all(params[1] == hex(acceptance_block) for params in position_calls)
+
+    mismapped_rpc = _ObservationRpc(
+        subject, policy, preparation_block, resolution_block,
+        acceptance_block, block_hash, question_id, transaction_hash,
+        position_ids=(202, 101),
+    )
+    with pytest.raises(ResolutionUnavailable, match="token"):
+        JsonRpcResolutionProvider("archive-a", mismapped_rpc).observe(
+            subject, acceptance_block
+        )
+
+    for adapter_tx, adapter_index in (
+        ("0x" + "49" * 32, 3), (transaction_hash, 1),
+    ):
+        unlinked_rpc = _ObservationRpc(
+            subject, policy, preparation_block, resolution_block,
+            acceptance_block, block_hash, question_id, transaction_hash,
+            adapter_transaction_hash=adapter_tx,
+            adapter_log_index=adapter_index,
+        )
+        with pytest.raises(ResolutionUnavailable, match="terminal"):
+            JsonRpcResolutionProvider("archive-a", unlinked_rpc).observe(
+                subject, acceptance_block
+            )
 
 
 def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
