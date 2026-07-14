@@ -520,3 +520,34 @@ def test_v2_plus_path_normalizes_normal_reset_flag_and_emergency():
     assert combined.audit_event_ids == tuple(
         event.audit_event_id for event in (reset, flagged, unflagged, normal)
     )
+
+
+def test_empty_unrelated_or_missing_positive_resolution_is_unknown():
+    question_id = "0x" + "25" * 32
+    unrelated_question = "0x" + "26" * 32
+    reset = _adapter_event("QUESTION_RESET", question_id, 150, 1)
+    flagged = _adapter_event("QUESTION_FLAGGED", question_id, 160, 2)
+    unrelated_resolution = _adapter_event(
+        "QUESTION_RESOLVED", unrelated_question, 200, 3
+    )
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+
+    for proof in (
+        provider._normalize_v1(question_id, ()),
+        provider._normalize_v2_plus(question_id, ()),
+        provider._normalize_v1(question_id, (reset,)),
+        provider._normalize_v2_plus(question_id, (flagged,)),
+        provider._normalize_v2_plus(question_id, (unrelated_resolution,)),
+    ):
+        assert proof.dispute.name == "UNKNOWN"
+        assert proof.terminal_event is None
+
+    assert provider._normalize_v1(
+        question_id, (reset,)
+    ).audit_event_ids == (reset.audit_event_id,)
+    assert provider._normalize_v2_plus(
+        question_id, (flagged,)
+    ).audit_event_ids == (flagged.audit_event_id,)
+    assert provider._normalize_v2_plus(
+        question_id, (unrelated_resolution,)
+    ).audit_event_ids == ()
