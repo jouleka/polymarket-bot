@@ -240,16 +240,16 @@ def test_fake_provider_whole_slice_isolates_lifecycles_and_recovers(tmp_path):
         )
         for index in range(7)
     )
-    (unresolved, unknown, binary, fractional, disputed, manual,
-     disagreement) = subjects
+    (unresolved, unknown, binary, disagreement, fractional, disputed,
+     manual) = subjects
     cases = (
         (unresolved, None, DisputeState.UNKNOWN),
         (unknown, PayoutVector((1, 1), 2), DisputeState.UNKNOWN),
         (binary, PayoutVector((1, 0), 1), DisputeState.CLEAR),
+        (disagreement, PayoutVector((1, 0), 1), DisputeState.CLEAR),
         (fractional, PayoutVector((3, 1), 4), DisputeState.CLEAR),
         (disputed, PayoutVector((1, 0), 1), DisputeState.DISPUTED),
         (manual, PayoutVector((0, 1), 1), DisputeState.MANUAL),
-        (disagreement, PayoutVector((1, 0), 1), DisputeState.CLEAR),
     )
     first_observations = {
         subject.condition_id: _observation(
@@ -275,12 +275,12 @@ def test_fake_provider_whole_slice_isolates_lifecycles_and_recovers(tmp_path):
             PollDisposition.UNRESOLVED,
             PollDisposition.UNKNOWN,
             PollDisposition.ACCEPTED,
-            PollDisposition.ACCEPTED,
-            PollDisposition.ACCEPTED,
-            PollDisposition.ACCEPTED,
             PollDisposition.UNAVAILABLE,
+            PollDisposition.ACCEPTED,
+            PollDisposition.ACCEPTED,
+            PollDisposition.ACCEPTED,
         )
-        assert tuple(result.dispute for result in results[2:6]) == (
+        assert tuple(results[index].dispute for index in (2, 4, 5, 6)) == (
             DisputeState.CLEAR,
             DisputeState.CLEAR,
             DisputeState.DISPUTED,
@@ -293,6 +293,7 @@ def test_fake_provider_whole_slice_isolates_lifecycles_and_recovers(tmp_path):
             LifecyclePhase.FINALIZED
         )
         assert store.assessment_for(disagreement.condition_id) is None
+        assert store.terminal_for(manual.condition_id).dispute is DisputeState.MANUAL
         assert len(store.pending_outbox(20)) == 12
 
         repeated, = feed.poll((binary,))
