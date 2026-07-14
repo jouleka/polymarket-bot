@@ -23,7 +23,7 @@ context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 | **POL-12** | C2 — off-loop EventStore writes | DONE | S1 ingestion runtime |
 | **POL-13** | D4a onward — shadow deployment work-stream | OPEN — downsample code/reviews/rate gate complete; broader build/deploy stream continues | POL-11, POL-12 |
 | **POL-14** | D1 — MarketRegistry from Gamma metadata | DONE — landed on `main` via [PR #1](https://github.com/jouleka/polymarket-bot/pull/1); merged suite 1,482 passed; 64/64 required mutants and 19/19 bounded sweep pass with zero survivors; not deployed or runtime-composed | POL-13 ingestion substrate |
-| **POL-15** | D2 — resolution / settlement feed | OPEN / REVIEW CANDIDATE — implementation and sub-slice reviews complete on `pol-15-resolution-settlement`; 2,069 tests at code/test candidate `e407fdf`; final docs-inclusive gate and owner-approved merge still required; not deployed | POL-13 substrate; Gamma/on-chain resolution sources |
+| **POL-15** | D2 — resolution / settlement feed | IN PROGRESS / REVIEWED CANDIDATE — implementation and final specification/security/mutation gates complete on `pol-15-resolution-settlement`; 2,070 tests at reviewed code candidate `c3378f2`; exact docs-reconciliation SHA and owner-approved merge still required; not deployed | POL-13 substrate; Gamma/on-chain resolution sources |
 | **POL-16** | D3 — shadow-execution and ledger wiring | OPEN | POL-15 |
 | **POL-17** | D4b — continuous ERS + harness runtime | OPEN | POL-14, POL-15, POL-16; brain proposal seam |
 | **POL-18** | deployed isolated propose-only Hermes brain | OPEN | facade/MCP deployment; consumed by POL-17 runtime |

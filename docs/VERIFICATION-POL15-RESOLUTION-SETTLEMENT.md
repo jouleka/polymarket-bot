@@ -6,7 +6,7 @@ Base: `77dddef5e0988779a809572ceceeca372c5745e1`
 
 Branch: `pol-15-resolution-settlement`
 
-Code/test candidate: `e407fdfdaa1524e964090668cc4b5f1fec643bf1`
+Code/test candidate: `c3378f22a8181437a6f98838f550cadd665f15dd`
 
 POL-15 adds a read-only, two-provider Polygon resolution feed, immutable terminal authority,
 restart-fenced durable outbox, and idempotent projection into Forecast, Maker, and Shadow ledgers.
@@ -81,7 +81,7 @@ counter omission for both DISPUTED and MANUAL.
 
 ## Candidate verification
 
-At `e407fdfdaa1524e964090668cc4b5f1fec643bf1`:
+At whole-slice candidate `e407fdfdaa1524e964090668cc4b5f1fec643bf1`:
 
 - `tests/test_resolution_e2e.py`, dispatcher, RPC, feed, and target-ledger suite: `519 passed`;
 - canonical full suite: `2,069 passed`;
@@ -91,6 +91,21 @@ At `e407fdfdaa1524e964090668cc4b5f1fec643bf1`:
 - no `MUTATION` marker under `src/`;
 - clean worktree.
 
-The final docs-inclusive exact SHA still requires the Task 9 whole-slice acceptance/mutation gate and
-explicit owner approval before any push or `--no-ff` merge. No deployment, database migration,
-service activation, signing change, chain write, or live-money action is authorized by this evidence.
+## Final whole-slice gate
+
+Fresh final reviewers evaluated docs-inclusive code candidate
+`c3378f22a8181437a6f98838f550cadd665f15dd` from base
+`77dddef5e0988779a809572ceceeca372c5745e1`:
+
+- specification/acceptance: PASS; full repository `2,070 passed`;
+- security/authority/ABI: PASS; full repository `2,070 passed`;
+- mutation: PASS; 49 meaningful configurations across all 33 required families plus seven public
+  `ResolutionProvider` protocol mutations, zero survivors;
+- restored mutation worktree: `888` focused and `2,070` full tests passed;
+- compile, base-to-head diff, Markdown links, no-marker, clean-tree, and untouched sacred-surface
+  checks: PASS;
+- `polymarket-ingestion.service`: inactive and disabled.
+
+The only remaining gate is explicit owner approval of the final documentation-reconciliation SHA
+before any push or `--no-ff` merge. No deployment, database migration, service activation, signing
+change, chain write, or live-money action is authorized by this evidence.

@@ -441,14 +441,15 @@ or runtime-composed, and POL-17 owns that composition.
 two agreeing Polygon providers at five confirmations; exact CTF payout and pUSD token-position
 authority; frozen reviewed UMA adapters with conservative dispute/manual classification; immutable
 canonical terminals; FULL-durability central outbox and target receipts; restart recovery fencing;
-and ordered idempotent fanout into Forecast, Maker, and Shadow. The code/test candidate `e407fdf`
-passes 2,069 tests. Independent architecture, ABI, and mutation reviews pass with zero Task-8
-survivors; repository evidence is in
+and ordered idempotent fanout into Forecast, Maker, and Shadow. The reviewed code candidate `c3378f2`
+passes 2,070 tests. Fresh final specification, security/ABI, and mutation reviews pass; the final
+ledger covers 49 meaningful configurations across all 33 required families plus seven public-protocol
+mutations with zero survivors. Repository evidence is in
 [`VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md`](VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md).
 Nothing is deployed or runtime-composed, no chain write/signing path was added, and the final
-docs-inclusive SHA still requires the whole-slice gate plus explicit owner approval before merge.
+documentation-reconciliation SHA requires explicit owner approval before merge.
 
-**Next work:** finish the final exact-SHA POL-15 gate and owner-approved `--no-ff` merge, then begin
+**Next work:** obtain owner approval for the exact POL-15 SHA and perform the `--no-ff` merge, then begin
 POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18 the isolated
 propose-only Hermes brain. Only after those land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
