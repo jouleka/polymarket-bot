@@ -54,6 +54,19 @@ class _IdempotentTarget:
         return changed
 
 
+class _TransientTarget:
+    def __init__(self, role, events):
+        self._role = role
+        self._events = events
+        self.fail = True
+
+    def apply_terminal(self, terminal):
+        self._events.append((self._role, terminal.terminal_id))
+        if self.fail:
+            raise RuntimeError("temporary target outage")
+        return 1
+
+
 def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
     first = _terminal("81")
     second = _terminal("82")
@@ -131,4 +144,39 @@ def test_dispatch_retry_after_target_commit_is_idempotent(tmp_path):
         assert [(record.sequence, record.role)
                 for record in store.pending_outbox(10)] == [
             (2, "MAKER"), (3, "SHADOW"),
+        ]
+
+
+def test_transient_target_failure_stops_without_ack_or_overtake(tmp_path):
+    first = _terminal("84")
+    second = _terminal("85")
+    events = []
+    forecast = _TransientTarget("FORECAST", events)
+
+    with ResolutionStore(
+        str(tmp_path / "resolution.db"), MonotonicStamper()
+    ) as store:
+        store.accept_terminal(first)
+        store.accept_terminal(second)
+        dispatcher = ResolutionDispatcher(
+            store,
+            forecast,
+            _Target("MAKER", events),
+            _Target("SHADOW", events),
+        )
+
+        with pytest.raises(RuntimeError, match="temporary target outage"):
+            dispatcher.drain(6)
+        assert events == [("FORECAST", first.terminal_id)]
+        assert [(record.sequence, record.role)
+                for record in store.pending_outbox(10)] == [
+            (1, "FORECAST"), (2, "MAKER"), (3, "SHADOW"),
+            (4, "FORECAST"), (5, "MAKER"), (6, "SHADOW"),
+        ]
+
+        forecast.fail = False
+        assert dispatcher.drain(1) == 1
+        assert events == [
+            ("FORECAST", first.terminal_id),
+            ("FORECAST", first.terminal_id),
         ]
