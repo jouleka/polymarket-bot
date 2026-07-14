@@ -73,12 +73,13 @@ class _TransientTarget:
 
 
 class _ConflictTarget:
-    def __init__(self):
+    def __init__(self, message="target receipt contradicts terminal"):
         self.calls = []
+        self._message = message
 
     def apply_terminal(self, terminal):
         self.calls.append(terminal.terminal_id)
-        raise SettlementConflict("target receipt contradicts terminal")
+        raise SettlementConflict(self._message)
 
 
 def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
@@ -277,3 +278,28 @@ def test_dispatcher_refuses_reopened_or_partially_recovered_store(tmp_path):
         assert reopened.recovery_required is False
         assert dispatcher.drain(1) == 1
         assert events == [("APPLY", "FORECAST", first.terminal_id)]
+
+
+@pytest.mark.parametrize("message", ["", "   "])
+def test_message_less_target_conflict_still_persists_halt(tmp_path, message):
+    path = str(tmp_path / "resolution.db")
+    terminal = _terminal("8a")
+    conflict = _ConflictTarget(message)
+    unused_events = []
+
+    with ResolutionStore(path, MonotonicStamper()) as store:
+        store.accept_terminal(terminal)
+        dispatcher = ResolutionDispatcher(
+            store,
+            conflict,
+            _Target("MAKER", unused_events),
+            _Target("SHADOW", unused_events),
+        )
+        with pytest.raises(SettlementConflict):
+            dispatcher.drain(1)
+        with pytest.raises(IntegrityHalted, match="target settlement conflict"):
+            store.require_healthy()
+
+    with ResolutionStore(path, MonotonicStamper()) as reopened:
+        with pytest.raises(IntegrityHalted, match="target settlement conflict"):
+            reopened.require_healthy()
