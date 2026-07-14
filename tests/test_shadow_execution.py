@@ -9,11 +9,16 @@ from polybot.ers.intent_store import PendingIntent, ShadowExecutionRecord
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.market_meta import ResolutionSubjectMetadata
 from polybot.ers.validator import Decision
-from polybot.harness.execution import ShadowExecutionDispatcher, make_shadow_execution_planner
+from polybot.harness.execution import (
+    ShadowExecutionDispatcher,
+    make_mark_for,
+    make_shadow_execution_planner,
+)
 from polybot.harness.ledger import ShadowLedger
 from polybot.ingestion.orderbook import LocalBook
 from polybot.core.clock import MonotonicStamper
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.maker.inventory import MakerFill, adverse_selection
 from polybot.maker.ledger import MakerLedger
 from polybot.maker.reward import reward_accrual
 from polybot.resolution.errors import ConditionAlreadyTerminal, SettlementConflict
@@ -389,3 +394,118 @@ def test_terminal_race_subject_contradiction_stays_pending_and_loud(tmp_path):
         assert [record.role for record in store.pending_shadow_executions(10)] == [
             "MAKER", "SHADOW",
         ]
+
+
+def test_mark_uses_live_midpoint_until_terminal_then_terminal_value_dominates(tmp_path):
+    stamper = MonotonicStamper()
+    with MakerLedger(str(tmp_path / "maker.db"), stamper) as maker:
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("25"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("2.50"),
+        )
+        maker.apply_shadow_execution(execution)
+        mark_for = make_mark_for(maker, book_for=lambda token_id: _book(bid="0.40", ask="0.60"))
+        assert mark_for("101") == Decimal("0.50")
+
+        maker.apply_terminal(_terminal())
+        terminal_mark = make_mark_for(
+            maker,
+            book_for=lambda token_id: (_ for _ in ()).throw(
+                AssertionError("terminal mark must not consult live book")
+            ),
+        )
+        assert terminal_mark("101") == Decimal("1")
+
+
+def test_mark_returns_none_for_unknown_missing_stale_and_disputed_data(tmp_path):
+    stamper = MonotonicStamper()
+    with ShadowLedger(str(tmp_path / "shadow.db"), stamper) as shadow:
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("25"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("2.50"),
+        )
+        shadow.apply_shadow_execution(execution)
+
+        assert make_mark_for(
+            shadow,
+            book_for=lambda token_id: (_ for _ in ()).throw(
+                AssertionError("unknown token must not consult book")
+            ),
+        )("unknown") is None
+        assert make_mark_for(shadow, book_for=lambda token_id: None)("101") is None
+        stale = _book()
+        stale.mark_stale()
+        assert make_mark_for(shadow, book_for=lambda token_id: stale)("101") is None
+
+        shadow.apply_terminal(_terminal(dispute=DisputeState.DISPUTED))
+        assert make_mark_for(
+            shadow,
+            book_for=lambda token_id: (_ for _ in ()).throw(
+                AssertionError("disputed terminal must not consult book")
+            ),
+        )("101") is None
+
+
+def test_fractional_terminal_mark_and_live_mark_feed_adverse_selection(tmp_path):
+    stamper = MonotonicStamper()
+    with MakerLedger(str(tmp_path / "maker.db"), stamper) as maker:
+        execution = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("10"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("0"),
+        )
+        maker.apply_shadow_execution(execution)
+        mark_for = make_mark_for(maker, book_for=lambda token_id: _book(bid="0.40", ask="0.50"))
+        fills = [
+            MakerFill(
+                token_id="101", condition_id=execution.condition_id, category="politics",
+                side="BUY", shares=Decimal("10"), price_exec=Decimal("0.48"),
+                fill_mid=Decimal("0.50"),
+            )
+        ]
+        assert mark_for("101") == Decimal("0.45")
+        assert adverse_selection(fills, mark_for) == Decimal("0.30")
+
+        maker.apply_terminal(_terminal(payout=PayoutVector((3, 1), 4)))
+        assert mark_for("101") == Decimal("0.75")
+
+
+def test_mark_fails_loud_on_contradictory_terminal_rows_for_one_token(tmp_path):
+    stamper = MonotonicStamper()
+    with MakerLedger(str(tmp_path / "maker.db"), stamper) as maker:
+        first = ShadowExecutionRecord(
+            execution_id="intent-1", token_id="101",
+            condition_id="0x" + "11" * 32, event_id="event-1",
+            category="politics", outcome_slot=0, sibling_token_ids=("101", "202"),
+            side="BUY", shares=Decimal("1"), price_exec=Decimal("0.48"),
+            fill_mid=Decimal("0.50"), reward_accrued=Decimal("0"),
+        )
+        second = replace(
+            first,
+            execution_id="intent-2",
+            condition_id="0x" + "22" * 32,
+            event_id="event-2",
+            sibling_token_ids=("101", "303"),
+        )
+        maker.apply_shadow_execution(first)
+        maker.apply_shadow_execution(second)
+        maker.apply_terminal(_terminal())
+        maker.apply_terminal(
+            replace(
+                _terminal(payout=PayoutVector((0, 1), 1)),
+                subject=ResolutionSubject(
+                    "event-2", "0x" + "22" * 32, ("101", "303"), "politics"
+                ),
+            )
+        )
+
+        with pytest.raises(SettlementConflict, match="contradictory terminal shadow marks"):
+            make_mark_for(maker, book_for=lambda token_id: _book())("101")
