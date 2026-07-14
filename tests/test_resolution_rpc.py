@@ -118,10 +118,12 @@ class _ObservationRpc:
             return {"number": params[0], "hash": self.block_hash}
         if method == "eth_getCode":
             address, block_tag = params
-            deployment = (
-                CTF_DEPLOYMENT_BLOCK if address == CTF_ADDRESS
-                else self.policy.deployment_block
-            )
+            if address == CTF_ADDRESS:
+                deployment = CTF_DEPLOYMENT_BLOCK
+            elif address == self.policy.address:
+                deployment = self.policy.deployment_block
+            else:
+                raise AssertionError(f"unexpected deployment address {address}")
             return "0x60" if int(block_tag, 16) >= deployment else "0x"
         if method == "eth_call":
             data = params[0]["data"]
@@ -1139,6 +1141,12 @@ def test_strict_rpc_observation_covers_every_frozen_adapter_policy(policy):
     assert observation.audit_event_ids[-1].endswith(
         ":QUESTION_RESOLVED"
     )
+    assert [params for method, params in rpc.calls if method == "eth_getCode"] == [
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK - 1)],
+        [CTF_ADDRESS, hex(CTF_DEPLOYMENT_BLOCK)],
+        [policy.address, hex(policy.deployment_block - 1)],
+        [policy.address, hex(policy.deployment_block)],
+    ]
 
 
 def test_provider_terminal_verification_uses_stored_block_without_log_rescan(
