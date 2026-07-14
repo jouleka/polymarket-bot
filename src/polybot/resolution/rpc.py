@@ -623,16 +623,40 @@ class JsonRpcResolutionProvider:
                 raise ResolutionUnavailable(
                     "filtered adapter history response is malformed"
                 )
+            for log in page:
+                self._validate_log_against_filter(log, event_filter)
             logs.extend(page)
         normalized = self._normalize_log_records(tuple(logs))
-        for log in normalized:
-            block_number = decode_quantity(log["blockNumber"])
-            if (log["address"] != policy.address
-                    or not preparation_block <= block_number <= resolution_block):
-                raise ResolutionUnavailable(
-                    "adapter history log is outside requested authority"
-                )
         return normalized
+
+    @staticmethod
+    def _validate_log_against_filter(log, event_filter):
+        try:
+            if (not isinstance(log, dict)
+                    or log.get("address") != event_filter["address"]):
+                raise ResolutionUnavailable("address mismatch")
+            block_number = decode_quantity(log.get("blockNumber"))
+            if not (decode_quantity(event_filter["fromBlock"])
+                    <= block_number
+                    <= decode_quantity(event_filter["toBlock"])):
+                raise ResolutionUnavailable("page mismatch")
+            topics = log.get("topics")
+            requested = event_filter["topics"]
+            if not isinstance(topics, list):
+                raise ResolutionUnavailable("topic shape mismatch")
+            if len(requested) == 1:
+                if (topics != requested
+                        or len(_decode_hex_data(log.get("data"))) != 32):
+                    raise ResolutionUnavailable("unindexed topic mismatch")
+            else:
+                if (len(topics) != 2
+                        or topics[0] not in requested[0]
+                        or topics[1] != requested[1]):
+                    raise ResolutionUnavailable("indexed topic mismatch")
+        except (KeyError, ResolutionUnavailable) as exc:
+            raise ResolutionUnavailable(
+                "adapter log does not match its exact requested filter"
+            ) from exc
 
     def _decode_adapter_history(self, policy, logs, payout):
         if policy not in ADAPTER_POLICIES:

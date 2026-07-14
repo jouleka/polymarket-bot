@@ -773,6 +773,47 @@ def test_failed_filtered_history_is_unavailable_never_unknown_or_clear():
     ) == ()
 
 
+@pytest.mark.parametrize("changed", [
+    "topic", "question", "address", "page", "v1 topics", "v1 data",
+])
+def test_adapter_history_rejects_any_log_outside_exact_page_filter(changed):
+    question_id = "0x" + "2b" * 32
+    if changed.startswith("v1"):
+        policy = ADAPTER_POLICIES[0]
+        log = {
+            "address": policy.address,
+            "blockNumber": "0x64",
+            "transactionHash": "0x" + "51" * 32,
+            "logIndex": "0x1",
+            "removed": False,
+            "topics": [QUESTION_FLAGGED_ADMIN_V1_TOPIC],
+            "data": question_id,
+        }
+        pages = [[], [log]]
+        if changed == "v1 topics":
+            log["topics"].append(question_id)
+        else:
+            log["data"] = "0x"
+    else:
+        policy = ADAPTER_POLICIES[-1]
+        log = _raw_adapter_log(100, 1, "52")
+        log["address"] = policy.address
+        log["topics"] = [QUESTION_RESOLVED_V2_TOPIC, question_id]
+        pages = [[log]]
+        if changed == "topic":
+            log["topics"][0] = CONDITION_RESOLUTION_TOPIC
+        elif changed == "question":
+            log["topics"][1] = "0x" + "2c" * 32
+        elif changed == "address":
+            log["address"] = ADAPTER_POLICIES[-2].address
+        else:
+            log["blockNumber"] = "0x65"
+
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc(*pages))
+    with pytest.raises(ResolutionUnavailable, match="filter"):
+        provider._read_adapter_history(policy, question_id, 100, 100)
+
+
 def test_json_rpc_provider_returns_fully_bound_observation():
     subject = ResolutionSubject(
         "event-1", "0x" + "29" * 32, ("101", "202"), "politics"
