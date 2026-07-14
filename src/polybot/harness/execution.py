@@ -11,6 +11,7 @@ from decimal import Decimal
 from polybot.ers.intent_store import ShadowExecutionRecord
 from polybot.ers.market_meta import ResolutionSubjectMetadata
 from polybot.harness.fill_sim import simulate_fill
+from polybot.resolution.errors import SettlementConflict
 
 
 def make_shadow_execution_planner(*, book_for, subject_for, maker_config):
@@ -93,3 +94,61 @@ class ShadowExecutionDispatcher:
 
     def _after_apply(self, record, changed):
         """Failure-injection seam after the target transaction commits."""
+
+
+def make_mark_for(ledger, *, book_for):
+    """Return terminal-first marks for canonical Maker or Shadow inventory."""
+    def _mark(token_id):
+        rows = [row for row in ledger.all() if row.token_id == token_id]
+        if not rows:
+            return None
+
+        # POL-16 marks only canonical rows. Legacy rows remain deliberately
+        # unsettleable and therefore fail closed rather than borrowing a live mark.
+        if any(
+                row.event_id is None or row.outcome_slot is None
+                or row.sibling_token_ids is None
+                for row in rows):
+            return None
+
+        terminal_rows = [row for row in rows if row.terminal_id is not None]
+        if terminal_rows:
+            if len(terminal_rows) != len(rows):
+                raise SettlementConflict("token has mixed pending and terminal shadow rows")
+            authority = {
+                (
+                    row.terminal_id, row.status, row.resolution_value,
+                    row.resolution_numerator, row.resolution_denominator,
+                )
+                for row in terminal_rows
+            }
+            if len(authority) != 1:
+                raise SettlementConflict("token has contradictory terminal shadow marks")
+            _terminal_id, status, value, numerator, denominator = authority.pop()
+            if (isinstance(numerator, bool) or not isinstance(numerator, int)
+                    or isinstance(denominator, bool) or not isinstance(denominator, int)
+                    or numerator < 0 or denominator <= 0 or numerator > denominator):
+                raise SettlementConflict("token has invalid terminal shadow payout")
+            if status in ("WON", "LOST", "SETTLED"):
+                if (value is None or not value.is_finite()
+                        or not (Decimal(0) <= value <= Decimal(1))):
+                    raise SettlementConflict("token has invalid terminal shadow value")
+                return value
+            if status in ("DISPUTED", "VOID"):
+                if value is not None:
+                    raise SettlementConflict("excluded terminal shadow mark carries a value")
+                return None
+            raise SettlementConflict(f"token has unknown terminal shadow status {status!r}")
+
+        if any(row.status is not None for row in rows):
+            raise SettlementConflict("pending canonical shadow row has settlement without terminal")
+        book = book_for(token_id)
+        if book is None:
+            return None
+        midpoint = book.midpoint()
+        if (midpoint is None or not midpoint.is_finite()
+                or not (Decimal(0) <= midpoint <= Decimal(1))):
+            return None
+        return midpoint
+
+    return _mark
