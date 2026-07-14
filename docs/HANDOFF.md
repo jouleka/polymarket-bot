@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-11)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-14)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -436,11 +436,21 @@ forecast/component writes. Merged `main` passes 1,482 tests; the 64/64 required 
 19/19 bounded equivalent sweep have zero survivors. The merge commit is `31f3390`; it is not deployed
 or runtime-composed, and POL-17 owns that composition.
 
-**Next work:** begin owner-review/design for **POL-15 resolution/settlement**; do not implement until
-its outcome model, authority hierarchy, dispute/finality rules, idempotency, and reorg behavior are
-approved.
-Continue with POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18
-the isolated propose-only Hermes brain. Only after all five land and are deployed does the ≤2-week
+**UPDATE 2026-07-14 — POL-15 resolution/settlement is a reviewed feature candidate on
+`pol-15-resolution-settlement`, not yet merged or pushed.** The owner-approved design is implemented:
+two agreeing Polygon providers at five confirmations; exact CTF payout and pUSD token-position
+authority; frozen reviewed UMA adapters with conservative dispute/manual classification; immutable
+canonical terminals; FULL-durability central outbox and target receipts; restart recovery fencing;
+and ordered idempotent fanout into Forecast, Maker, and Shadow. The code/test candidate `e407fdf`
+passes 2,069 tests. Independent architecture, ABI, and mutation reviews pass with zero Task-8
+survivors; repository evidence is in
+[`VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md`](VERIFICATION-POL15-RESOLUTION-SETTLEMENT.md).
+Nothing is deployed or runtime-composed, no chain write/signing path was added, and the final
+docs-inclusive SHA still requires the whole-slice gate plus explicit owner approval before merge.
+
+**Next work:** finish the final exact-SHA POL-15 gate and owner-approved `--no-ff` merge, then begin
+POL-16 shadow-execution wiring, POL-17 the continuous ERS/harness runtime, and POL-18 the isolated
+propose-only Hermes brain. Only after those land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
 
