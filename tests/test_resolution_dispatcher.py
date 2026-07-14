@@ -1,5 +1,7 @@
 """POL-15 durable terminal delivery dispatcher."""
 
+import pytest
+
 from polybot.core.clock import MonotonicStamper
 from polybot.resolution.dispatcher import ResolutionDispatcher
 from polybot.resolution.models import (
@@ -38,6 +40,18 @@ class _Target:
     def apply_terminal(self, terminal):
         self._events.append(("APPLY", self._role, terminal.terminal_id))
         return 1
+
+
+class _IdempotentTarget:
+    def __init__(self):
+        self._receipts = set()
+        self.apply_results = []
+
+    def apply_terminal(self, terminal):
+        changed = int(terminal.terminal_id not in self._receipts)
+        self._receipts.add(terminal.terminal_id)
+        self.apply_results.append(changed)
+        return changed
 
 
 def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
@@ -79,3 +93,42 @@ def test_dispatcher_applies_oldest_role_then_acknowledges(tmp_path):
             (record.sequence, record.role)
             for record in store.pending_outbox(10)
         ] == [(5, "MAKER"), (6, "SHADOW")]
+
+
+def test_dispatch_retry_after_target_commit_is_idempotent(tmp_path):
+    terminal = _terminal("83")
+    forecast = _IdempotentTarget()
+    unused_events = []
+
+    with ResolutionStore(
+        str(tmp_path / "resolution.db"), MonotonicStamper()
+    ) as store:
+        store.accept_terminal(terminal)
+        dispatcher = ResolutionDispatcher(
+            store,
+            forecast,
+            _Target("MAKER", unused_events),
+            _Target("SHADOW", unused_events),
+        )
+
+        def crash_after_apply(record, changed):
+            assert record.role == "FORECAST"
+            assert changed == 1
+            raise RuntimeError("crash after target commit")
+
+        dispatcher._after_apply = crash_after_apply
+        with pytest.raises(RuntimeError, match="after target commit"):
+            dispatcher.drain(1)
+        assert forecast.apply_results == [1]
+        assert [(record.sequence, record.role)
+                for record in store.pending_outbox(10)] == [
+            (1, "FORECAST"), (2, "MAKER"), (3, "SHADOW"),
+        ]
+
+        dispatcher._after_apply = lambda record, changed: None
+        assert dispatcher.drain(1) == 1
+        assert forecast.apply_results == [1, 0]
+        assert [(record.sequence, record.role)
+                for record in store.pending_outbox(10)] == [
+            (2, "MAKER"), (3, "SHADOW"),
+        ]
