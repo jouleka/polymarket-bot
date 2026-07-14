@@ -303,3 +303,20 @@ def test_message_less_target_conflict_still_persists_halt(tmp_path, message):
     with ResolutionStore(path, MonotonicStamper()) as reopened:
         with pytest.raises(IntegrityHalted, match="target settlement conflict"):
             reopened.require_healthy()
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.0, "1", None])
+def test_dispatcher_requires_positive_integer_limit(tmp_path, limit):
+    events = []
+    with ResolutionStore(
+        str(tmp_path / "resolution.db"), MonotonicStamper()
+    ) as store:
+        dispatcher = ResolutionDispatcher(
+            store,
+            _Target("FORECAST", events),
+            _Target("MAKER", events),
+            _Target("SHADOW", events),
+        )
+        with pytest.raises(ValueError, match="limit"):
+            dispatcher.drain(limit)
+        assert events == []
