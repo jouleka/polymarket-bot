@@ -478,3 +478,45 @@ def test_v1_path_never_claims_normal_resolution_is_clear():
     assert combined.audit_event_ids == tuple(
         event.audit_event_id for event in (updated, reset, flagged, normal)
     )
+
+
+def test_v2_plus_path_normalizes_normal_reset_flag_and_emergency():
+    question_id = "0x" + "24" * 32
+    normal = _adapter_event("QUESTION_RESOLVED", question_id, 200, 4)
+    reset = _adapter_event("QUESTION_RESET", question_id, 150, 1)
+    flagged = _adapter_event("QUESTION_FLAGGED", question_id, 160, 2)
+    unflagged = _adapter_event("QUESTION_UNFLAGGED", question_id, 170, 3)
+    emergency = _adapter_event(
+        "QUESTION_EMERGENCY_RESOLVED", question_id, 200, 4
+    )
+    provider = JsonRpcResolutionProvider("archive-a", _Rpc())
+
+    clear = provider._normalize_v2_plus(question_id, (normal,))
+    assert clear.dispute.name == "CLEAR"
+    assert clear.terminal_event == normal
+
+    disputed = provider._normalize_v2_plus(question_id, (reset, normal))
+    assert disputed.dispute.name == "DISPUTED"
+    assert disputed.audit_event_ids == (
+        reset.audit_event_id, normal.audit_event_id
+    )
+
+    flagged_proof = provider._normalize_v2_plus(
+        question_id, (flagged, unflagged, normal)
+    )
+    assert flagged_proof.dispute.name == "MANUAL"
+    assert flagged_proof.audit_event_ids == (
+        flagged.audit_event_id, unflagged.audit_event_id, normal.audit_event_id
+    )
+
+    emergency_proof = provider._normalize_v2_plus(question_id, (emergency,))
+    assert emergency_proof.dispute.name == "MANUAL"
+    assert emergency_proof.terminal_event == emergency
+
+    combined = provider._normalize_v2_plus(
+        question_id, (reset, flagged, unflagged, normal)
+    )
+    assert combined.dispute.name == "MANUAL"
+    assert combined.audit_event_ids == tuple(
+        event.audit_event_id for event in (reset, flagged, unflagged, normal)
+    )

@@ -376,6 +376,33 @@ class JsonRpcResolutionProvider:
             terminal_event=terminal,
         )
 
+    def _normalize_v2_plus(self, question_id, events):
+        decode_fixed_bytes(question_id, 32)
+        relevant = self._validate_adapter_events(events, question_id)
+        terminal_events = tuple(
+            event for event in relevant
+            if event.kind in (
+                "QUESTION_RESOLVED", "QUESTION_EMERGENCY_RESOLVED"
+            )
+        )
+        if len(terminal_events) > 1:
+            raise ResolutionUnavailable("v2+ adapter terminal events conflict")
+        terminal = terminal_events[0] if terminal_events else None
+        states = [
+            DisputeState.CLEAR if terminal is not None else DisputeState.UNKNOWN
+        ]
+        if any(event.kind == "QUESTION_RESET" for event in relevant):
+            states.append(DisputeState.DISPUTED)
+        if (any(event.kind == "QUESTION_FLAGGED" for event in relevant)
+                or (terminal is not None
+                    and terminal.kind == "QUESTION_EMERGENCY_RESOLVED")):
+            states.append(DisputeState.MANUAL)
+        return PathProof(
+            dispute=fold_dispute(tuple(states)),
+            audit_event_ids=tuple(event.audit_event_id for event in relevant),
+            terminal_event=terminal,
+        )
+
     @staticmethod
     def _validate_adapter_events(events, question_id):
         if not isinstance(events, tuple):
