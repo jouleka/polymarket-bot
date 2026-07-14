@@ -944,6 +944,16 @@ def test_log_normalization_orders_exact_duplicates_and_rejects_coordinate_confli
     with pytest.raises(ResolutionUnavailable, match="log"):
         provider._normalize_log_records((malformed,))
 
+    for removed in (True, 0, None, "false"):
+        malformed = dict(first)
+        malformed["removed"] = removed
+        with pytest.raises(ResolutionUnavailable, match="log"):
+            provider._normalize_log_records((malformed,))
+    missing_removed = dict(first)
+    missing_removed.pop("removed")
+    with pytest.raises(ResolutionUnavailable, match="log"):
+        provider._normalize_log_records((missing_removed,))
+
 
 def test_failed_filtered_history_is_unavailable_never_unknown_or_clear():
     policy = ADAPTER_POLICIES[-1]
