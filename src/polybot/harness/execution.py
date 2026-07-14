@@ -71,3 +71,25 @@ def make_shadow_execution_planner(*, book_for, subject_for, maker_config):
         )
 
     return _plan
+
+
+class ShadowExecutionDispatcher:
+    """Idempotently fan the atomic ACCEPT outbox into Maker then Shadow."""
+
+    def __init__(self, store, maker_ledger, shadow_ledger):
+        self._store = store
+        self._targets = {"MAKER": maker_ledger, "SHADOW": shadow_ledger}
+
+    def drain(self, limit):
+        acknowledged = 0
+        for record in self._store.pending_shadow_executions(limit):
+            changed = self._targets[record.role].apply_shadow_execution(record.execution)
+            self._after_apply(record, changed)
+            self._store.acknowledge_shadow_execution(
+                record.sequence, record.execution.execution_id, record.role
+            )
+            acknowledged += 1
+        return acknowledged
+
+    def _after_apply(self, record, changed):
+        """Failure-injection seam after the target transaction commits."""
