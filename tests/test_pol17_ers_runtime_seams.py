@@ -8,7 +8,7 @@ from polybot.ers.controller import ERSController
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.safety import RUNNING, SafetyController
 from polybot.ers.service import PaperSigner, process_pending
-from polybot.ers.validator import Portfolio
+from polybot.ers.validator import OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
 
 
@@ -96,3 +96,46 @@ def test_controller_threads_an_empty_confirmed_eligibility_set(tmp_path):
         assert store.get("deferred").status == "PROPOSED"
         assert book_calls == []
         assert store.audit_log() == []
+
+
+def test_controller_resolution_state_only_retires_or_freezes_risk(tmp_path):
+    initial = Portfolio(
+        nav=Decimal("300"),
+        positions=(
+            OpenPosition("terminal", "e1", "s1", "k1", Decimal("12"),
+                         token_id="t1", entry_price=Decimal("0.5")),
+            OpenPosition("unknown", "e2", "s2", "k2", Decimal("8"),
+                         token_id="t2", entry_price=Decimal("0.4")),
+            OpenPosition("open", "e3", "s3", "k3", Decimal("4"),
+                         token_id="t3", entry_price=Decimal("0.3")),
+        ),
+    )
+
+    class Reconciler:
+        def reconcile_on_boot(self):
+            return initial
+
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        caps = RiskCaps()
+        controller = ERSController(
+            store=store,
+            book_for=lambda _token_id: None,
+            caps=caps,
+            signer=PaperSigner(),
+            controller=SafetyController(caps=caps, store=store, clock=lambda: 1),
+            reconciler=Reconciler(),
+            clock=lambda: 1,
+        )
+        controller.boot()
+
+        resolved = controller.apply_resolution_state(
+            terminal_condition_ids=("terminal",),
+            frozen_condition_ids=("terminal", "unknown"),
+        )
+
+        assert resolved.nav == Decimal("300")
+        assert [(position.condition_id, position.frozen) for position in resolved.positions] == [
+            ("unknown", True),
+            ("open", False),
+        ]
+        assert resolved.total_open_risk() == Decimal("12")
