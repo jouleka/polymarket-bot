@@ -1,0 +1,94 @@
+"""POL-17 atomic paper-ACCEPT durability."""
+
+from decimal import Decimal
+
+from polybot.core.clock import MonotonicStamper
+from polybot.ers.intent_store import (
+    AcceptJournalRecord,
+    IntentStore,
+    ShadowExecutionRecord,
+)
+from polybot.ers.validator import Decision
+
+
+def test_accept_atomically_persists_restart_flow_and_execution_authority(tmp_path):
+    path = str(tmp_path / "intents.db")
+    condition_id = "0x" + "11" * 32
+    execution = ShadowExecutionRecord(
+        execution_id="intent-1",
+        token_id="101",
+        condition_id=condition_id,
+        event_id="event-1",
+        category="politics",
+        outcome_slot=0,
+        sibling_token_ids=("101", "202"),
+        side="BUY",
+        shares=Decimal("24"),
+        price_exec=Decimal("0.50"),
+        fill_mid=Decimal("0.51"),
+        reward_accrued=Decimal("1.25"),
+    )
+    journal = AcceptJournalRecord(
+        token_id="101",
+        condition_id=condition_id,
+        event_id="event-1",
+        shares=Decimal("23.07692307692307692307692308"),
+        price_exec=Decimal("0.52"),
+        worst_case_risk=Decimal("12"),
+        wall_at=1_750_000_000.25,
+    )
+
+    with IntentStore(path, MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1",
+            token_id="101",
+            condition_id=condition_id,
+            event_id="event-1",
+            side="BUY",
+            target_price="0.49",
+            max_price="0.60",
+            size_usd_suggestion="12",
+            p="0.80",
+            p_confidence="0.75",
+        )
+
+        store.record_decision(
+            "intent-1",
+            Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+            shadow_execution=execution,
+            accept_journal=journal,
+        )
+
+        assert store.get("intent-1").status == "ACCEPTED"
+        assert store.audit_log()[-1]["verdict"] == "ACCEPT"
+        assert store.fills_log() == [{
+            "at": store.fills_log()[0]["at"],
+            "intent_id": "intent-1",
+            "token_id": "101",
+            "condition_id": condition_id,
+            "event_id": "event-1",
+            "side": "BUY",
+            "shares": journal.shares,
+            "price_exec": journal.price_exec,
+            "worst_case_risk": journal.worst_case_risk,
+        }]
+        assert store.flow_log() == [{
+            "at": store.flow_log()[0]["at"],
+            "wall_at": journal.wall_at,
+            "kind": "accept",
+            "token_id": "101",
+            "amount": Decimal("12"),
+        }]
+        assert [record.role for record in store.pending_shadow_executions(10)] == [
+            "MAKER",
+            "SHADOW",
+        ]
+
+    with IntentStore(path, MonotonicStamper()) as reopened:
+        assert reopened.get("intent-1").status == "ACCEPTED"
+        assert reopened.fills_log()[0]["shares"] == journal.shares
+        assert reopened.flow_log()[0]["wall_at"] == journal.wall_at
+        assert all(
+            record.execution == execution
+            for record in reopened.pending_shadow_executions(10)
+        )
