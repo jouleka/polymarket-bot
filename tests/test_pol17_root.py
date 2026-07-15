@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -115,6 +116,43 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert status["pending_intents"] == 0
         assert status["resolution_outbox"] == 0
         assert status["execution_outbox"] == 0
+    finally:
+        runtime.close_unstarted()
+
+
+def test_root_composes_propose_only_server_without_a_second_store_or_collector(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        proposal_socket_path=str(tmp_path / "proposal.sock"),
+        proposal_socket_group="polybot-proposal",
+    )
+
+    runtime = build_shadow_runtime(
+        config,
+        gamma_snapshot_fetch=_snapshot,
+        resolution_providers=(
+            SimpleNamespace(provider_id="a"),
+            SimpleNamespace(provider_id="b"),
+        ),
+        ws_connect=object(),
+        data_fetch=object(),
+        history_stamper=MonotonicStamper(clock=lambda: time.time_ns()),
+        health_stamper=MonotonicStamper(clock=lambda: time.monotonic_ns()),
+        news_fetch=lambda _url: None,
+        lock=SimpleNamespace(acquire=lambda: None, release=lambda: None),
+        readiness=SimpleNamespace(ready=lambda: None, stopping=lambda: None),
+        proposal_socket_group_gid=1234,
+    )
+    try:
+        assert runtime._proposal_server._socket_group == 1234
+        assert runtime._proposal_facade._ProposeOnlyFacade__store is (
+            runtime._components.intent_store
+        )
+        assert runtime._collector is runtime._ingestion.collector
+        flags = runtime._proposal_facade.get_flags()
+        assert flags["runtime_ready"] is False
+        assert flags["trading_permission"] is False
+        assert runtime._proposal_facade.get_market(limit=1)["total"] == 1
     finally:
         runtime.close_unstarted()
 

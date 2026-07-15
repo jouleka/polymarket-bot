@@ -24,12 +24,16 @@ class ShadowRuntime:
                  apply_initial_resolution_state, controller, readiness,
                  run_cycle, cycle_interval_seconds, readiness_timeout_seconds,
                  closers=(), before_writer_closers=(), lock_acquired=False,
-                 stop_requested=None):
+                 stop_requested=None, set_proposal_admission=None):
         self._services = tuple(services)
         self._writer = writer
         self._lock = lock
         self._lock_acquired = lock_acquired
         self._stop_requested = stop_requested
+        if set_proposal_admission is not None and not callable(set_proposal_admission):
+            raise TypeError("set_proposal_admission must be callable")
+        self._set_proposal_admission = set_proposal_admission
+        self._proposal_admitting = False
         self._recover_resolution = recover_resolution
         self._drain_resolution = drain_resolution
         self._drain_execution = drain_execution
@@ -48,6 +52,7 @@ class ShadowRuntime:
 
     def request_stop(self):
         try:
+            self._change_proposal_admission(False)
             if self._stop_requested is not None:
                 self._stop_requested()
         finally:
@@ -91,6 +96,10 @@ class ShadowRuntime:
             return
         self._closed = True
         errors = []
+        try:
+            self._change_proposal_admission(False)
+        except Exception as exc:
+            errors.append(exc)
         if self._ready:
             try:
                 self._readiness.stopping()
@@ -116,6 +125,7 @@ class ShadowRuntime:
         await self._wait_for_live_frame()
         self._controller.boot()
         self._apply_initial_resolution_state()
+        self._change_proposal_admission(True)
         self._readiness.ready()
         self._ready = True
         while True:
@@ -136,6 +146,13 @@ class ShadowRuntime:
             if remaining <= 0:
                 raise TimeoutError("live-book readiness timed out")
             await asyncio.sleep(min(0.05, remaining))
+
+    def _change_proposal_admission(self, enabled):
+        if self._proposal_admitting == enabled:
+            return
+        if self._set_proposal_admission is not None:
+            self._set_proposal_admission(enabled)
+        self._proposal_admitting = enabled
 
     async def _stopper(self):
         await self._stop.wait()
