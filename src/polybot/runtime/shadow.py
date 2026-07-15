@@ -51,7 +51,7 @@ def build_production_runtime(
             config,
             gamma_snapshot_fetch=gamma,
             resolution_providers=providers,
-            history_stamper=history_stamper_factory(config.ingestion.db_path),
+            history_stamper=history_stamper_factory(config.database_paths),
             health_stamper=health_stamper_factory(),
             news_fetch=news_fetch_factory(timeout=config.rpc_timeout_seconds),
             lock=lock,
