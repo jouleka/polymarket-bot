@@ -518,15 +518,24 @@ disconnects, and repeated bridge/server restarts fail closed.
 
 Both independent reviewers pass exact clean head `5e57449`; the canonical suite is 2,273 passing.
 The isolated mutation battery killed 46/46 with zero survivors. Evidence is in
-[`VERIFICATION-POL18-HERMES-BRAIN.md`](VERIFICATION-POL18-HERMES-BRAIN.md). No stopped installer,
-Linux identity/group, service checkout/unit, Hermes profile, model/provider, cron, start/enable, or
-deployment action was performed. Those remain separate owner gates.
+[`VERIFICATION-POL18-HERMES-BRAIN.md`](VERIFICATION-POL18-HERMES-BRAIN.md).
 
 The PR merged as `09a3a6b`. YouTrack POL-18 is Done with the exact evidence and no-deployment
 boundary recorded.
 
-**Next work:** return to POL-13 for the explicitly gated stopped installation/profile/activation
-sequence and the ≤2-week paper/shadow run. The shadow
+**UPDATE 2026-07-15 — POL-13 stopped code/identity/unit installation complete.** After explicit
+approval, `/opt/polymarket-bot` was fast-forwarded from `65a6d7e` to reconciled GitHub `main` at
+`28c3dab` and the reviewed installer ran once. It created the dedicated `polybot-hermes` nologin
+user and socket-only `polybot-proposal` group, installed MCP 1.26.0, and installed byte-matching
+POL-17/POL-18 units. Both units are loaded, inactive, dead, and disabled. The production config
+content hash is unchanged; raw-firehose checksums still pass; no DB, profile, socket, status file,
+cron, start, enable, or activation occurred. Evidence is in
+[`VERIFICATION-POL13-STOPPED-INSTALL.md`](VERIFICATION-POL13-STOPPED-INSTALL.md).
+
+**Next work:** the old D4a config still needs a separately approved stopped reconciliation with
+seven distinct database paths, proposal socket settings, and two real independently operated
+read-only Polygon providers. Placeholders are forbidden. After that come the separate profile,
+model/provider, cron, first-start, and enablement gates, followed by the ≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
