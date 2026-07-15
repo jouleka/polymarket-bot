@@ -1,6 +1,9 @@
 """POL-17 supervised startup, readiness, and shutdown."""
 
 import asyncio
+from types import SimpleNamespace
+
+import pytest
 
 from polybot.runtime.shadow_runtime import ShadowRuntime
 
@@ -81,8 +84,8 @@ def test_shadow_runtime_enforces_recovery_readiness_and_reverse_shutdown_order()
         "resolution_drain",
         "execution_drain",
         "book_ready",
-        "resolution_state",
         "controller_boot",
+        "resolution_state",
         "ready",
         "cycle",
         "stopping",
@@ -90,4 +93,55 @@ def test_shadow_runtime_enforces_recovery_readiness_and_reverse_shutdown_order()
         "close_second",
         "close_first",
         "unlock",
+    ]
+
+
+def test_shutdown_attempts_every_close_and_releases_lock_after_close_failures():
+    trace = []
+    runtime = None
+
+    class Writer:
+        def close(self):
+            trace.append("writer")
+            raise RuntimeError("writer close failed")
+
+    async def service():
+        await asyncio.Event().wait()
+
+    async def cycle():
+        runtime.request_stop()
+
+    runtime = ShadowRuntime(
+        services=(service,),
+        writer=Writer(),
+        lock=SimpleNamespace(
+            acquire=lambda: trace.append("lock"),
+            release=lambda: trace.append("unlock"),
+        ),
+        recover_resolution=lambda: asyncio.sleep(0),
+        drain_resolution=lambda: None,
+        drain_execution=lambda: None,
+        collector=SimpleNamespace(last_frame_at=lambda: 1),
+        apply_initial_resolution_state=lambda: None,
+        controller=SimpleNamespace(boot=lambda: None),
+        readiness=SimpleNamespace(
+            ready=lambda: None, stopping=lambda: trace.append("stopping")
+        ),
+        run_cycle=cycle,
+        cycle_interval_seconds=1,
+        readiness_timeout_seconds=1,
+        closers=(
+            lambda: trace.append("close_first"),
+            lambda: (_ for _ in ()).throw(RuntimeError("close second failed")),
+        ),
+    )
+
+    with pytest.raises(ExceptionGroup) as caught:
+        asyncio.run(runtime.run())
+
+    assert {str(error) for error in caught.value.exceptions} == {
+        "writer close failed", "close second failed",
+    }
+    assert trace == [
+        "lock", "stopping", "writer", "close_first", "unlock",
     ]

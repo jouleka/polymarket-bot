@@ -61,9 +61,11 @@ class ShadowRuntime:
             except* _StopRequested:
                 pass
         finally:
-            self._close_resources()
-            if acquired:
-                self._lock.release()
+            try:
+                self._close_resources()
+            finally:
+                if acquired:
+                    self._lock.release()
 
     def close_unstarted(self):
         """Release a constructed-but-never-run assembly (tests/failed activation)."""
@@ -73,19 +75,28 @@ class ShadowRuntime:
         if self._closed:
             return
         self._closed = True
+        errors = []
         if self._ready:
-            self._readiness.stopping()
-        self._writer.close()
-        for close in reversed(self._closers):
-            close()
+            try:
+                self._readiness.stopping()
+            except Exception as exc:
+                errors.append(exc)
+        actions = (self._writer.close,) + tuple(reversed(self._closers))
+        for close in actions:
+            try:
+                close()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("shadow runtime resource shutdown failed", errors)
 
     async def _main_loop(self):
         await self._recover_resolution()
         self._drain_resolution()
         self._drain_execution()
         await self._wait_for_live_frame()
-        self._apply_initial_resolution_state()
         self._controller.boot()
+        self._apply_initial_resolution_state()
         self._readiness.ready()
         self._ready = True
         while True:

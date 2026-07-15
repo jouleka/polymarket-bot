@@ -3,7 +3,10 @@
 import inspect
 import json
 import time
+from dataclasses import fields
 from types import SimpleNamespace
+
+import pytest
 
 from polybot.calibration.ledger import ForecastLedger
 from polybot.core.clock import MonotonicStamper
@@ -19,7 +22,7 @@ from polybot.resolution.dispatcher import ResolutionDispatcher
 from polybot.resolution.feed import ResolutionFeed
 from polybot.resolution.store import ResolutionStore
 from polybot.runtime.config import IngestionConfig
-from polybot.runtime.shadow_build import build_shadow_components
+from polybot.runtime.shadow_build import ShadowComponents, build_shadow_components
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
     ShadowRuntimeConfig,
@@ -120,3 +123,23 @@ def test_component_factory_wires_real_paper_safety_and_authority_types(tmp_path)
         assert "private_key" not in inspect.signature(build_shadow_components).parameters
     finally:
         components.close()
+
+
+def test_component_shutdown_attempts_every_owned_store_close():
+    trace = []
+    values = {
+        field.name: None for field in fields(ShadowComponents)
+        if field.init and field.name != "_closers"
+    }
+    components = ShadowComponents(
+        **values,
+        _closers=(
+            lambda: trace.append("first"),
+            lambda: (_ for _ in ()).throw(RuntimeError("second failed")),
+        ),
+    )
+
+    with pytest.raises(ExceptionGroup, match="component shutdown"):
+        components.close()
+
+    assert trace == ["first"]
