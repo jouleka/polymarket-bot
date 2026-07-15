@@ -1,13 +1,18 @@
 # POL-16 shadow-execution verification evidence
 
-Status: reviewed landing candidate; independent specification/security and mutation gates pass;
-owner approved push and merge on 2026-07-15
+Status: landed on `main`; independent specification/security and mutation gates pass; runtime,
+deployment, service activation, and live money remain outside this slice
 
 Base: `65a6d7e392a9e5885a5d198a1eb5a1d9f8c4a270`
 
 Branch: `pol-16-shadow-execution-wiring`
 
 Code/test candidate: `1ebb0269bc56a028b03c1c5f4e4547abdfcb7008`
+
+Exact reviewed branch head: `89e1b6aa7ebf905a6c181c46590a56bae10b3a75`
+
+GitHub landing: [PR #5](https://github.com/jouleka/polymarket-bot/pull/5), merge
+`4d1090c9b01cc2bc4ded751f257ee6c90e220b5b`
 
 POL-16 connects an ERS paper ACCEPT to the existing maker simulator, commits the ACCEPT and a
 two-target execution outbox atomically, projects exact canonical economics into Maker and Shadow,
@@ -135,8 +140,10 @@ MakerLedger, ShadowLedger, ResolutionStore, and ResolutionDispatcher. It proves:
 ## Landing authorization
 
 The owner explicitly approved completing the independent gate and merging to `main` on 2026-07-15.
-Push, PR, and merge are authorized after this evidence commit and final clean-tree check. Deployment
-and service activation remain outside POL-16 and are not authorized by this approval.
+Exact reviewed head `89e1b6aa7ebf905a6c181c46590a56bae10b3a75` landed through true two-parent merge
+`4d1090c9b01cc2bc4ded751f257ee6c90e220b5b` in
+[PR #5](https://github.com/jouleka/polymarket-bot/pull/5). Deployment and service activation remain
+outside POL-16 and are not authorized by this approval.
 
 POL-17 remains responsible for continuous runtime composition. This evidence does not authorize
 service activation or live execution.

@@ -453,7 +453,8 @@ storage gate passed at 0.236382 GiB/day. The old raw database is checksummed and
 `/opt/polymarket-bot/data/raw-firehose-20260714T155112Z`. The service remains stopped and disabled,
 and POL-17 still owns continuous runtime composition. No chain write/signing path was added.
 
-**UPDATE 2026-07-15 — POL-16 is independently reviewed and owner-approved for landing.**
+**UPDATE 2026-07-15 — POL-16 landed on `main` via
+[PR #5](https://github.com/jouleka/polymarket-bot/pull/5).**
 Exact code/test candidate `1ebb026` atomically couples an ERS ACCEPT to a canonical two-target execution
 outbox, re-fetches fresh best bid for a forced-BUY maker simulation sized only from approved stake,
 and projects idempotently into Maker and Shadow. Target-commit crashes replay safely; a terminal that
@@ -466,10 +467,12 @@ Explicit round-down and restart fences are regression-pinned and passed closing 
 local mutations plus a separate isolated 8/8 cross-cutting battery were killed with zero survivors.
 The sacred validator/facade/caps/signer surfaces are untouched, and no runtime, signing, deployment,
 or live-money path was added. Evidence is in
-[`VERIFICATION-POL16-SHADOW-EXECUTION.md`](VERIFICATION-POL16-SHADOW-EXECUTION.md).
+[`VERIFICATION-POL16-SHADOW-EXECUTION.md`](VERIFICATION-POL16-SHADOW-EXECUTION.md). Exact reviewed
+head `89e1b6a` merged as `4d1090c`. POL-16 is not separately deployed; POL-17 owns continuous
+runtime composition, installation, and activation decisions.
 
-**Next work:** land POL-16, then begin POL-17 the continuous
-ERS/harness runtime, and POL-18 the isolated propose-only Hermes brain. Only after those land and are deployed does the ≤2-week
+**Next work:** begin POL-17 the continuous ERS/harness runtime, then POL-18 the isolated propose-only
+Hermes brain. Only after those land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
 

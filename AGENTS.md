@@ -130,14 +130,14 @@ This exact process has caught a real defect on **every** slice of this project. 
 - **Repo (dev checkout on the VPS):** `/root/projects/polymarket-bot`. Canonical: GitHub
   `jouleka/polymarket-bot`, `origin/main`.
 - **Deploy:** `/opt/polymarket-bot` (`polymarket-ingestion.service`, user `polybot`) — currently
-  **STOPPED + DISABLED**. The existing service checkout still points to a deleted local bare remote and
-  must be repaired before any install. The approved layout uses GitHub-linked dev and service
-  checkouts; **do not recreate `/root/git/polymarket-bot.git`**. Deployment, database migration, and
-  service start are separate owner-approved actions. See `deploy/README.md`.
+  **STOPPED + DISABLED**. The GitHub-linked service checkout is installed through POL-15; POL-16 is
+  not separately installed because POL-17 owns runtime composition. **Do not recreate
+  `/root/git/polymarket-bot.git`**. Deployment, database migration, and service start are separate
+  owner-approved actions. See `deploy/README.md`.
 - **Venv (gitignored):** `uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python
   pytest "httpx>=0.28" "websockets>=16"`.
-- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **1,482 passing, exit 0** on the POL-14 landing
-  candidate (2026-07-11). Run BARE
+- **Tests:** `./.venv/bin/pytest -o addopts="" -q` → **2,121 passing, exit 0** on the POL-16 landing
+  candidate (2026-07-15). Run BARE
   (`-o addopts=""` restores the summary the pyproject `-q` hides). Trust the "NNN passed" line + exit
   0; do NOT pipe through tail/head to judge pass/fail.
 
@@ -146,7 +146,7 @@ This exact process has caught a real defect on **every** slice of this project. 
 `docs/HANDOFF.md` (authoritative current state) → `docs/CONTEXT.md` (onboarding, verified
 Polymarket/Hermes facts, landmines) → `docs/DECISIONS-S0.md` (the risk-envelope numbers) →
 `docs/specs/2026-06-24-autonomous-polymarket-bot-design.md` (master design) →
-`docs/DESIGN-POL14-MARKET-REGISTRY.md` + `docs/PLAN-POL14-MARKET-REGISTRY.md` (the freshest worked
+`docs/DESIGN-POL16-SHADOW-EXECUTION.md` + `docs/PLAN-POL16-SHADOW-EXECUTION.md` (the freshest worked
 example — mirror its shape) → `deploy/README.md` (deploy runbook).
 
 ### Current state
@@ -155,24 +155,21 @@ The deterministic engine **S1–S9 is DONE** (strict-TDD + reviewed): S1 ingesti
 chokepoint, S4 the full L0–L8 safety envelope, S5 calibration, S6 Hermes fusion + truth-gate, S7
 detectors, S8 maker net-of-cost economics, and S9 shadow harness + ramp controller. The corrected
 **D4a downsample** implementation is on `main` after a 41/41 mutation battery and a passing
-1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. **POL-14 D1 MarketRegistry** is
-landed on `main` via PR #1 with 1,482 tests passing, a 64/64 required mutation ledger, and a 19/19
-bounded equivalent sweep with zero survivors. Nothing is installed; the ingestion service remains
-stopped and disabled.
+1,800-second/200-market gate at 0.249755 GiB/day with zero raw rows. **POL-14 D1 MarketRegistry**,
+**POL-15 D2 resolution/settlement**, and **POL-16 D3 shadow execution** are landed on `main`. POL-16
+passes 2,121 tests after independent specification/security review and an isolated zero-survivor
+mutation gate. The GitHub-linked service checkout is installed through POL-15; POL-16 runtime wiring
+is intentionally deferred to POL-17. The ingestion service remains stopped and disabled.
 
 ### Build order (owner decision: finish the ENTIRE build, then a ≤2-week light shadow, then live)
 
-1. **POL-15 · D2 resolution/settlement feed** — THE keystone: detect resolutions
-   (WON/LOST/DISPUTED/VOID + value) → settle the ForecastLedger (warms k) + ShadowLedger/MakerLedger.
-   Without it the shadow scores ZERO results. Read-only sources (Gamma status + on-chain UMA).
-2. **POL-16 · D3 shadow-execution wiring** — accepted paper intents → S9 `fill_sim` → ShadowLedger;
-   `mark_for` = `LocalBook.midpoint()` live / resolution value at settle; feed the MakerLedger.
-3. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
+1. **POL-17 · D4b ERS + harness runtime** — the composition root + systemd service that runs the
    propose→validate→shadow-execute loop continuously.
-4. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
+2. **POL-18 · brain** — a deployed Hermes `polymarket` PROFILE (separate from the coder) carrying
    EXACTLY the 5-tool grant from `deploy/hermes/config.yaml`, with the ProposeOnlyFacade as its MCP
    server.
-5. Then the **≤2-week light shadow**, then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
+3. Run the **≤2-week light shadow** and require honest calibrated, net-positive OOS evidence.
+4. Then the **go-live gate POL-4 (S2 signing)** — BLOCKED on the
    owner funding a wallet on a CLEAN box; keys never touch a compromised machine.
 
 ### Git & tickets
