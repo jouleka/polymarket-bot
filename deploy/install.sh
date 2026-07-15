@@ -13,14 +13,22 @@ BRIDGE_GROUP=polybot-proposal
 UV=/root/.local/bin/uv
 
 verify_services_not_active() {
-    local unit active_state
+    local unit active_state load_state
     for unit in polymarket-ingestion.service polymarket-hermes.service; do
         active_state=
         if active_state=$(systemctl is-active "$unit" 2>&1); then :; fi
-        if [ "$active_state" != "inactive" ]; then
-            echo "ERROR: refusing install unless $unit is exactly inactive; got: $active_state" >&2
-            return 1
+        if [ "$active_state" = "inactive" ]; then
+            continue
         fi
+        if [ "$unit" = "polymarket-hermes.service" ] && [ "$active_state" = "unknown" ]; then
+            load_state=
+            if load_state=$(systemctl show --property=LoadState --value "$unit" 2>&1); then :; fi
+            if [ "$load_state" = "not-found" ]; then
+                continue
+            fi
+        fi
+        echo "ERROR: refusing install unless $unit is exactly inactive or the new Hermes unit is absent; got: $active_state" >&2
+        return 1
     done
 }
 
