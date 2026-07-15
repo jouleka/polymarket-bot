@@ -117,6 +117,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     )
 
     async def recover_resolution():
+        await run_blocking(components.resolution_feed.validate_providers)
         await run_blocking(components.resolution_feed.recover_pending)
 
     def apply_initial_resolution_state():
