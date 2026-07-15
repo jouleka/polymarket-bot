@@ -4,13 +4,71 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.resolution.feed import PollDisposition
+from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.errors import SettlementConflict
 
 
 @dataclass(frozen=True)
 class ResolutionBatch:
     subjects: tuple
     intent_ids_by_condition: dict
+
+
+def make_resolution_batch(forecast_ledger, intent_store, registry):
+    """Union canonical unresolved forecasts and current proposals by condition."""
+    by_condition = {}
+    order = []
+    intent_ids = {}
+
+    def add(subject):
+        previous = by_condition.get(subject.condition_id)
+        if previous is not None and previous != subject:
+            raise SettlementConflict("resolution subject identity contradicts fixed registry")
+        if previous is None:
+            by_condition[subject.condition_id] = subject
+            order.append(subject.condition_id)
+
+    for forecast in forecast_ledger.all():
+        if forecast.resolution_status is not None:
+            continue
+        identity = (
+            forecast.event_id,
+            forecast.condition_id,
+            forecast.category,
+            forecast.sibling_token_ids,
+        )
+        if any(value is None for value in identity):
+            continue
+        add(ResolutionSubject(
+            event_id=forecast.event_id,
+            condition_id=forecast.condition_id,
+            token_ids=forecast.sibling_token_ids,
+            category=forecast.category,
+        ))
+
+    for intent in intent_store.pending():
+        try:
+            metadata = registry.resolution_subject_for(intent)
+            subject = ResolutionSubject(
+                event_id=metadata.event_id,
+                condition_id=metadata.condition_id,
+                token_ids=metadata.sibling_token_ids,
+                category=metadata.category,
+            )
+        except MarketMetadataUnavailable:
+            continue
+        add(subject)
+        intent_ids.setdefault(subject.condition_id, set()).add(intent.intent_id)
+
+    return ResolutionBatch(
+        subjects=tuple(by_condition[condition_id] for condition_id in order),
+        intent_ids_by_condition={
+            condition_id: frozenset(ids)
+            for condition_id, ids in intent_ids.items()
+        },
+    )
 
 
 class ShadowCycleCoordinator:
