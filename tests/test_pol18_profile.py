@@ -67,3 +67,13 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             platform_toolsets=platform_toolsets | {"cron": {"polymarket", "terminal"}},
             discovered_mcp_tools=discovered,
         )
+
+    config["agent"]["disabled_toolsets"] = []
+    with pytest.raises(RuntimeError, match="disabled toolsets"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools=discovered,
+        )

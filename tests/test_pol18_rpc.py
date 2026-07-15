@@ -94,6 +94,36 @@ def test_rpc_rejects_json_float_before_the_proposal_facade():
     assert facade.calls == []
 
 
+def test_rpc_rejects_noncanonical_decimal_strings_before_the_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    for value in (" 0.42", "+0.42", "4.2e-1", "00.42", ".42", "0."):
+        facade = _Facade()
+        dispatcher = ProposalRpcDispatcher(facade)
+        payload = json.loads(_proposal())
+        payload["params"]["target_price"] = value
+
+        with pytest.raises(RpcProtocolError, match="exact decimal string"):
+            dispatcher.handle(_wire(payload))
+        assert facade.calls == []
+
+
+def test_rpc_rejects_non_utf8_scalar_text_before_the_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    facade = _Facade()
+    payload = json.loads(_proposal())
+    payload["params"]["thesis"] = "escaped-surrogate-\ud800"
+
+    with pytest.raises(RpcProtocolError, match="bounded exact string"):
+        ProposalRpcDispatcher(facade).handle(_wire(payload))
+    assert facade.calls == []
+
+
 def test_rpc_rate_gate_runs_immediately_before_insert_only_proposal():
     import pytest
 
@@ -179,6 +209,41 @@ def test_unix_server_recovers_only_a_proven_stale_socket(tmp_path):
 
     asyncio.run(scenario())
     assert not path.exists()
+
+
+def test_unix_server_rejects_a_symlinked_socket_directory(tmp_path):
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "redirected"
+    link.symlink_to(target, target_is_directory=True)
+    server = ProposalRpcServer(
+        link / "proposal.sock", ProposalRpcDispatcher(_Facade()),
+        runtime_ready=lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="socket directory"):
+        asyncio.run(server.run())
+    assert not (target / "proposal.sock").exists()
+
+
+def test_unix_rpc_rejects_an_overlong_socket_path_before_startup(tmp_path):
+    import pytest
+
+    from polybot.hermes.rpc import (
+        ProposalRpcClient, ProposalRpcDispatcher, ProposalRpcServer,
+    )
+
+    path = tmp_path / ("x" * 128)
+    with pytest.raises(ValueError, match="socket path"):
+        ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        )
+    with pytest.raises(ValueError, match="socket path"):
+        ProposalRpcClient(path)
 
 
 def test_unix_client_round_trips_without_any_database_capability(tmp_path):

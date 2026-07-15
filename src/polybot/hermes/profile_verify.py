@@ -24,6 +24,7 @@ _BRIDGE_ARGS = [
     "-m", "polybot.hermes.mcp_bridge", "--socket",
     "/run/polybot-proposal/proposal.sock",
 ]
+_DISABLED_BUILTIN_TOOLSETS = ["feishu_doc", "feishu_drive", "kanban"]
 
 
 def verify_effective_contract(config, *, hermes_version, mcp_version,
@@ -68,6 +69,10 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
             or set(authored_platforms) != PROFILE_PLATFORMS
             or any(value != [MCP_SERVER_NAME] for value in authored_platforms.values())):
         raise RuntimeError("authored platform toolsets are not MCP-only")
+    agent = config.get("agent")
+    if (not isinstance(agent, dict)
+            or agent.get("disabled_toolsets") != _DISABLED_BUILTIN_TOOLSETS):
+        raise RuntimeError("authored disabled toolsets violate the reviewed contract")
     if (not isinstance(platform_toolsets, dict)
             or set(platform_toolsets) != PROFILE_PLATFORMS
             or any(set(value) != {MCP_SERVER_NAME}
