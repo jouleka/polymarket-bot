@@ -1,8 +1,10 @@
-# Deploy — polymarket-bot ingestion runtime (Phase-0 shadow)
+# Deploy — polymarket-bot composite paper-shadow runtime
 
-Read-only, no keys, intents, orders, or listening port. The corrected runtime maintains CLOB books in memory,
-persists one versioned `clob-midpoint` batch every 60 seconds, and retains the full deduplicated Data API trade tape.
-It does **not** persist raw `clob-ws` frames.
+Paper-only, with no keys, wallet, live order client, chain writes, or listening port. One supervised
+process maintains CLOB books in memory, runs the ERS and harness against those same live books,
+polls two read-only Polygon providers for resolution, persists one versioned `clob-midpoint` batch
+every 60 seconds, and retains the full deduplicated Data API trade tape. It does **not** persist raw
+`clob-ws` frames. Before POL-18 is separately built and attached, it idles with zero proposals.
 
 ## Current gate state
 
@@ -10,11 +12,17 @@ The code release gate passed on 2026-07-10: 1,800.006 seconds, 5,586,944 total D
 `{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes, zero raw rows, all batches decoded, no HALT,
 graceful close, 0.249755 GiB/day, exit 0. Independent spec review passed and the mutation battery killed 41/41.
 
-The VPS service remains **STOPPED + DISABLED**. Do not install, start, enable, or restart the corrected build until:
+The VPS service remains **STOPPED + DISABLED**. POL-17 is a reviewed-build candidate only. Do not
+install, start, enable, or restart it until:
 
 1. the feature branch is approved and merged;
 2. push and deployment are separately approved; and
-3. the old raw database is preserved and verified as described below.
+3. installation is separately approved; and
+4. activation is separately approved after the stopped configuration gate below passes.
+
+The old raw-firehose evidence is already preserved. Never move, overwrite, rechown recursively, or
+delete it. The current compact production `market_memory.db` must also remain byte-preserved until
+an explicitly approved activation opens it through the compatible EventStore schema.
 
 Short captures are diagnostic only. The 1,800-second result above is the release evidence; the 0.5 GiB/day ceiling
 must not be loosened on future regressions.
@@ -29,6 +37,22 @@ Production `EventStore` sources must include:
 
 Synthetic events are not reconstructable from this compact history. They remain deferred pending a separately
 designed and tuned live contract.
+
+The composite owns seven distinct SQLite paths. No pair may resolve to the same path, symlink
+target, or existing inode:
+
+| Path | Logical owner |
+|---|---|
+| `data/market_memory.db` | queued midpoint/trade/news EventStore writer |
+| `data/intents.db` | event-loop ERS IntentStore |
+| `data/forecasts.db` | pipeline plus resolution dispatcher |
+| `data/components.db` | pipeline component evidence |
+| `data/maker.db` | event-loop shadow/resolution dispatchers |
+| `data/shadow.db` | event-loop shadow/resolution dispatchers |
+| `data/resolution.db` | one serialized resolution worker plus event-loop dispatcher |
+
+Schema creation is forward-only and happens only when the runtime is activated. A stopped install
+must not create or migrate any production database. The runtime singleton prevents a second writer.
 
 ## GitHub-authoritative VPS layout
 
@@ -71,10 +95,11 @@ Run from the reviewed checkout, without systemd:
 Required: exit 0, midpoint and trade rows, usable quotes, zero raw rows, all midpoint batches decodable, no HALT,
 graceful close, and projected total footprint at or below the ceiling.
 
-## Preserve the old raw database
+## Historical raw-firehose preservation (already completed)
 
-Only after explicit deployment approval, stop and disable first. A graceful stop checkpoints and closes SQLite.
-Preserve the DB and any sidecars; record byte sizes and SHA-256 checksums without printing secrets:
+The following is the historical preservation procedure, retained for audit and disaster recovery.
+Do not run it against the current compact production database. The raw-firehose evidence created
+on 2026-07-14 must remain exactly where recorded in HANDOFF and its checksums must continue to pass:
 
 ```sh
 systemctl disable --now polymarket-ingestion.service
@@ -97,10 +122,12 @@ sha256sum -c "$evidence/SHA256SUMS"
 test ! -e /opt/polymarket-bot/data/market_memory.db
 ```
 
-Do not delete or overwrite this evidence. The corrected service must start with a fresh
-`data/market_memory.db`.
+Do not delete or overwrite that evidence. POL-17 does not require moving the current compact
+`data/market_memory.db` or creating a fresh one.
 
 ## Install/update while remaining stopped
+
+This section requires explicit **installation** approval. It does not authorize activation.
 
 ```sh
 systemctl disable --now polymarket-ingestion.service
@@ -115,13 +142,65 @@ systemctl is-enabled polymarket-ingestion.service   # required: disabled
 systemctl is-active polymarket-ingestion.service    # required: inactive
 ```
 
-Confirm `/opt/polymarket-bot/config.toml` explicitly contains:
+`install.sh` preserves an existing config, so the old ingestion-only file will not acquire the
+required `[shadow]` section automatically. While the unit remains stopped, back it up, reconcile it
+manually with `deploy/config.example.toml`, and preserve the existing ingestion values:
+
+```sh
+cp -a /opt/polymarket-bot/config.toml /opt/polymarket-bot/config.toml.pre-pol17
+# Edit /opt/polymarket-bot/config.toml as root. Do not put secrets in shell history.
+chmod 0640 /opt/polymarket-bot/config.toml
+chown root:polybot /opt/polymarket-bot/config.toml
+```
+
+The file must explicitly keep the 60-second downsample and define all six additional distinct
+database paths, the runtime status path, and exactly two independently operated read-only Polygon
+HTTPS providers:
 
 ```toml
 snapshot_interval_seconds = 60.0
+
+[shadow]
+intents_db_path = "/opt/polymarket-bot/data/intents.db"
+forecasts_db_path = "/opt/polymarket-bot/data/forecasts.db"
+components_db_path = "/opt/polymarket-bot/data/components.db"
+maker_db_path = "/opt/polymarket-bot/data/maker.db"
+shadow_db_path = "/opt/polymarket-bot/data/shadow.db"
+resolution_db_path = "/opt/polymarket-bot/data/resolution.db"
+status_path = "/run/polybot/shadow-status.json"
+
+[[shadow.polygon_providers]]
+provider_id = "provider-a"
+url = "https://polygon-provider-a.example"
+
+[[shadow.polygon_providers]]
+provider_id = "provider-b"
+url = "https://polygon-provider-b.example"
 ```
 
-`install.sh` is idempotent, preserves an existing config, and must not start or enable the unit.
+Use real approved endpoints, not the placeholders. Then validate the stopped configuration without
+constructing the runtime or opening any database:
+
+```sh
+cd /opt/polymarket-bot
+sudo -u polybot env PYTHONPATH=/opt/polymarket-bot/src \
+  /opt/polymarket-bot/.venv/bin/python - <<'PY'
+from polybot.runtime.shadow_config import load_shadow_config
+
+c = load_shadow_config("/opt/polymarket-bot/config.toml")
+assert c.ingestion.snapshot_interval_seconds == 60.0
+assert len(c.database_paths) == 7
+assert len(set(c.database_paths)) == 7
+assert len(c.polygon_providers) == 2
+print("POL-17 stopped config valid; provider IDs:",
+      [p.provider_id for p in c.polygon_providers])
+PY
+systemctl is-enabled polymarket-ingestion.service   # disabled
+systemctl is-active polymarket-ingestion.service    # inactive
+```
+
+Confirm the six new DB files still do not exist after this validation. `install.sh` is idempotent
+and must not start or enable the unit.
 
 ## Start/enable — separate explicit approval required
 
@@ -137,6 +216,7 @@ journalctl -u polymarket-ingestion.service -f
 ```sh
 systemctl status polymarket-ingestion.service
 cat /opt/polymarket-bot/data/heartbeat
+cat /run/polybot/shadow-status.json
 sudo -u polybot /opt/polymarket-bot/.venv/bin/python - <<'PY'
 import sqlite3
 
@@ -152,6 +232,11 @@ assert counts.get("clob-ws", 0) == 0
 PY
 ```
 
+The status JSON must parse, show controller state and both outbox depths, and advance atomically.
+Before POL-18, `pending_intents` and `execution_outbox` must remain zero; do not inject synthetic
+production proposals to make them move. Confirm the journal contains one `READY=1` transition and
+no wrong-chain, registry-stale, database-integrity, or supervised-service halt.
+
 Also record DB+WAL+SHM size at two timestamps to confirm observed growth remains bounded. A stale heartbeat, any raw
 row, malformed midpoint batch, missing source, collector/writer HALT, or rate above the ceiling is a failure: stop
 and disable the unit; do not relax the gate.
@@ -162,10 +247,17 @@ and disable the unit; do not relax the gate.
 systemctl disable --now polymarket-ingestion.service
 ```
 
-This is graceful and drains the writer queue. Preserve both the corrected DB and the old raw evidence. Roll code
-back only through the GitHub-linked service checkout; never recreate a local bare deployment remote.
+This is graceful and drains the writer queue, joins the resolution worker, closes all seven stores,
+and releases the singleton. Preserve every composite DB, the compact EventStore, and the old raw
+evidence. Never delete a new DB to make a rollback appear clean. Restore the backed-up config and
+roll code back only through the GitHub-linked service checkout; never recreate a local bare remote.
 
-## Deferred hardening (POL-4 / live, not Phase-0)
+If activation fails, leave the unit stopped and disabled, capture `systemctl status`, the bounded
+journal excerpt, safe file sizes/checksums, and the status JSON if present. Do not retry by relaxing
+freshness, provider agreement, path separation, caps, or readiness gates.
 
-Egress allowlisting, `ProtectSystem=strict`, periodic backups of the compact midpoint+trade store, and moving shared
-Hermes off root remain deferred. No live-money key belongs in this read-only ingestion service.
+## Deferred hardening (POL-4 / live, not paper shadow)
+
+Egress allowlisting, `ProtectSystem=strict`, periodic backups of all compact paper stores, durable
+restoration of sticky HALTED/PAUSED op-state, and moving shared Hermes off root remain deferred. No
+live-money key belongs in this paper-shadow service.

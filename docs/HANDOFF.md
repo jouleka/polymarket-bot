@@ -471,8 +471,33 @@ or live-money path was added. Evidence is in
 head `89e1b6a` merged as `4d1090c`. POL-16 is not separately deployed; POL-17 owns continuous
 runtime composition, installation, and activation decisions.
 
-**Next work:** begin POL-17 the continuous ERS/harness runtime, then POL-18 the isolated propose-only
-Hermes brain. Only after those land and are deployed does the ≤2-week
+**UPDATE 2026-07-15 — POL-17 local reviewed-build candidate complete; closing review in progress.**
+The continuous paper loop is now composed as one supervised process so D4a ingestion and ERS share
+the same in-memory `LocalBook` and exactly one websocket collector. The real POL-14 registry,
+POL-15 resolution authority, POL-16 apply-before-ack execution fanout, S4 controller/restart/anomaly/
+loss/breaker/GTD/self-test seams, real Hermes pipeline, PaperSigner, terminal-first marks, and S9
+evidence are wired. Startup replays both outboxes before readiness; each cycle polls resolution and
+fans terminal state out before ERS, then projects execution and evidence. Before POL-18, the runtime
+idles with zero proposals and never synthesizes production input.
+
+Checkpoint `8a37f34` passes 2,205 tests. The real whole-slice proof covers live book → proposal →
+validation → atomic ACCEPT/fill/flow/execution/outbox → crash after Maker apply before ack → reopen/
+replay → Shadow → POL-15 terminal fanout → retired risk and terminal evidence. Independent review
+findings around lock/store order, terminal restart order, alias/provider independence, worker
+shutdown, Polygon 137 preflight, stale second-book phantom risk, all-store history clocks, status,
+and partial construction were fixed and pinned. A detached 13-mutation battery killed 13/13 with
+zero survivors; the restored 17-case selector set passed and the worktree was byte-clean.
+
+Evidence is in
+[`VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md`](VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md).
+The deployment runbook now describes the stopped composite config migration, seven distinct DBs,
+two read-only providers, and rollback. No push, merge, install, migration, service start/enable, or
+deployment has occurred. `/opt/polymarket-bot`, systemd state, the compact production DB, and the
+raw-firehose evidence remain untouched; the service remains stopped and disabled. Sticky paper
+HALTED/PAUSED state is not replayed across DORMANT restart and must be designed before POL-4.
+
+**Next work:** finish POL-17 closing re-review and separately authorized landing, then POL-18 the
+isolated propose-only Hermes brain. Only after those land and are separately deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
 

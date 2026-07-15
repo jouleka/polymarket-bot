@@ -261,7 +261,16 @@ request timeout 15 seconds; readiness timeout 60 seconds.
 10. Exact `Decimal` storage and conservative failure behavior are preserved.
 11. Existing `evaluate_intent`, `ProposeOnlyFacade`, caps, signer protocol, and terminal models are unchanged.
 12. Production stores zero raw CLOB websocket rows and retains the deduplicated trade tape.
-12. No POL-17 code signs, submits, cancels, redeems, uses a wallet, or writes to Polygon.
+13. No POL-17 code signs, submits, cancels, redeems, uses a wallet, or writes to Polygon.
+
+### Paper-only restart limitation
+
+The inherited DORMANT `wallet=None` reconciliation rebuilds paper positions and returns a new
+process to `RUNNING`; it does not replay the prior process's sticky HALTED/PAUSED op-state from
+`op_audit`. POL-17 retains that existing seam because this runtime has `PaperSigner` only and no
+external venue authority. The audit remains durable and visible, but restoring operator/anomaly
+state across automatic restart is a mandatory design gate before POL-4 may compose a live wallet
+or signer. This limitation does not authorize weakening any in-process S4 sticky behavior.
 
 ## 9. Acceptance criteria
 
