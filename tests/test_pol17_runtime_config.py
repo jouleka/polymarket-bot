@@ -1,5 +1,9 @@
 """POL-17 composite runtime configuration."""
 
+import math
+
+import pytest
+
 from polybot.runtime.config import IngestionConfig
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
@@ -7,8 +11,8 @@ from polybot.runtime.shadow_config import (
 )
 
 
-def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_providers():
-    config = ShadowRuntimeConfig(
+def _config(**overrides):
+    values = dict(
         ingestion=IngestionConfig(db_path="/data/market_memory.db"),
         intents_db_path="/data/intents.db",
         forecasts_db_path="/data/forecasts.db",
@@ -21,6 +25,12 @@ def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_provider
             ReadOnlyPolygonProviderConfig("polygon-b", "https://polygon-b.example"),
         ),
     )
+    values.update(overrides)
+    return ShadowRuntimeConfig(**values)
+
+
+def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_providers():
+    config = _config()
 
     assert config.paper_only is True
     assert config.database_paths == (
@@ -43,3 +53,36 @@ def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_provider
     assert config.rpc_timeout_seconds == 15.0
     assert config.readiness_timeout_seconds == 60.0
     assert config.outbox_batch_limit > 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"shadow_db_path": "/data/maker.db"},
+        {"intents_db_path": ""},
+        {"polygon_providers": ()},
+        {"polygon_providers": (
+            ReadOnlyPolygonProviderConfig("same", "https://polygon-a.example"),
+            ReadOnlyPolygonProviderConfig("same", "https://polygon-b.example"),
+        )},
+        {"polygon_providers": (
+            ReadOnlyPolygonProviderConfig("a", "https://same.example"),
+            ReadOnlyPolygonProviderConfig("b", "https://same.example"),
+        )},
+        {"polygon_providers": lambda: (
+            ReadOnlyPolygonProviderConfig("a", "http://polygon-a.example"),
+            ReadOnlyPolygonProviderConfig("b", "https://polygon-b.example"),
+        )},
+        {"cycle_interval_seconds": 0},
+        {"resolution_poll_seconds": math.inf},
+        {"registry_refresh_seconds": 901, "registry_max_age_seconds": 900},
+        {"outbox_batch_limit": True},
+        {"outbox_batch_limit": 0},
+    ],
+)
+def test_shadow_runtime_config_rejects_unsafe_or_ambiguous_values(overrides):
+    with pytest.raises((TypeError, ValueError)):
+        _config(**{
+            name: value() if callable(value) else value
+            for name, value in overrides.items()
+        })
