@@ -8,6 +8,7 @@ from polybot.runtime.config import IngestionConfig
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
     ShadowRuntimeConfig,
+    load_shadow_config,
 )
 
 
@@ -86,3 +87,46 @@ def test_shadow_runtime_config_rejects_unsafe_or_ambiguous_values(overrides):
             name: value() if callable(value) else value
             for name, value in overrides.items()
         })
+
+
+def test_load_shadow_config_composes_flat_ingestion_and_strict_shadow_table(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+db_path = "/data/market_memory.db"
+universe_max_markets = 200
+snapshot_interval_seconds = 60.0
+data_api_enabled = true
+
+[shadow]
+intents_db_path = "/data/intents.db"
+forecasts_db_path = "/data/forecasts.db"
+components_db_path = "/data/components.db"
+maker_db_path = "/data/maker.db"
+shadow_db_path = "/data/shadow.db"
+resolution_db_path = "/data/resolution.db"
+cycle_interval_seconds = 1.0
+registry_refresh_seconds = 300.0
+registry_max_age_seconds = 900.0
+resolution_poll_seconds = 60.0
+rpc_timeout_seconds = 15.0
+readiness_timeout_seconds = 60.0
+outbox_batch_limit = 100
+
+[[shadow.polygon_providers]]
+provider_id = "polygon-a"
+url = "https://polygon-a.example"
+
+[[shadow.polygon_providers]]
+provider_id = "polygon-b"
+url = "https://polygon-b.example"
+""".strip()
+    )
+
+    config = load_shadow_config(str(path), env={})
+
+    assert config.ingestion.db_path == "/data/market_memory.db"
+    assert config.ingestion.universe_max_markets == 200
+    assert config.ingestion.snapshot_interval_seconds == 60.0
+    assert config.intents_db_path == "/data/intents.db"
+    assert config.polygon_providers[1].provider_id == "polygon-b"

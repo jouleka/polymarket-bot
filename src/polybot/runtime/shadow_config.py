@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import math
+import os
+import tomllib
 from urllib.parse import urlsplit
 
 from polybot.runtime.config import IngestionConfig
@@ -92,3 +96,90 @@ class ShadowRuntimeConfig:
             self.shadow_db_path,
             self.resolution_db_path,
         )
+
+
+def load_shadow_config(toml_path, *, env: Mapping[str, str] = os.environ):
+    """Load flat D4a keys plus one strict ``[shadow]`` composition table."""
+    with open(toml_path, "rb") as handle:
+        loaded = tomllib.load(handle)
+    ingestion_names = {item.name for item in dataclasses.fields(IngestionConfig)}
+    unknown_top = set(loaded) - ingestion_names - {"shadow"}
+    if unknown_top:
+        raise ValueError(f"unknown runtime config keys: {sorted(unknown_top)!r}")
+    shadow = loaded.get("shadow")
+    if not isinstance(shadow, dict):
+        raise ValueError("runtime config requires a [shadow] table")
+
+    ingestion_values = {name: loaded[name] for name in ingestion_names if name in loaded}
+    for name in ingestion_names:
+        key = "POLYBOT_INGEST_" + name.upper()
+        if key in env:
+            ingestion_values[name] = _coerce_ingestion(name, env[key])
+    ingestion = IngestionConfig(**ingestion_values)
+
+    shadow_names = {
+        item.name for item in dataclasses.fields(ShadowRuntimeConfig)
+        if item.init
+    } - {"ingestion", "polygon_providers"}
+    unknown_shadow = set(shadow) - shadow_names - {"polygon_providers"}
+    if unknown_shadow:
+        raise ValueError(f"unknown shadow config keys: {sorted(unknown_shadow)!r}")
+    provider_rows = shadow.get("polygon_providers")
+    if not isinstance(provider_rows, list):
+        raise ValueError("shadow.polygon_providers must be an array of tables")
+    providers = []
+    for row in provider_rows:
+        if not isinstance(row, dict) or set(row) != {"provider_id", "url"}:
+            raise ValueError("each Polygon provider requires only provider_id and url")
+        providers.append(ReadOnlyPolygonProviderConfig(**row))
+
+    values = {name: shadow[name] for name in shadow_names if name in shadow}
+    for name in shadow_names:
+        key = "POLYBOT_SHADOW_" + name.upper()
+        if key in env:
+            values[name] = _coerce_shadow(name, env[key])
+    for index, label in enumerate(("A", "B")):
+        id_key = f"POLYBOT_SHADOW_PROVIDER_{label}_ID"
+        url_key = f"POLYBOT_SHADOW_PROVIDER_{label}_URL"
+        if id_key in env or url_key in env:
+            if len(providers) != 2:
+                raise ValueError("provider env overrides require two configured providers")
+            providers[index] = ReadOnlyPolygonProviderConfig(
+                env.get(id_key, providers[index].provider_id),
+                env.get(url_key, providers[index].url),
+            )
+    return ShadowRuntimeConfig(
+        ingestion=ingestion,
+        polygon_providers=tuple(providers),
+        **values,
+    )
+
+
+_INGEST_INT = {"universe_max_markets", "max_assets_per_shard", "data_api_limit"}
+_INGEST_FLOAT = {
+    "data_api_interval_seconds", "snapshot_interval_seconds",
+    "heartbeat_interval_seconds",
+}
+_SHADOW_FLOAT = {
+    "cycle_interval_seconds", "registry_refresh_seconds",
+    "registry_max_age_seconds", "resolution_poll_seconds",
+    "rpc_timeout_seconds", "readiness_timeout_seconds",
+}
+
+
+def _coerce_ingestion(name, raw):
+    if name in _INGEST_INT:
+        return int(raw)
+    if name in _INGEST_FLOAT:
+        return float(raw)
+    if name == "data_api_enabled":
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return raw
+
+
+def _coerce_shadow(name, raw):
+    if name == "outbox_batch_limit":
+        return int(raw)
+    if name in _SHADOW_FLOAT:
+        return float(raw)
+    return raw
