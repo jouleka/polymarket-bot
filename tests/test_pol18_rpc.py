@@ -319,7 +319,7 @@ def test_unix_server_fences_preconnected_clients_before_shutdown(tmp_path):
             self.handler_entered = asyncio.Event()
             self.handler_finished = asyncio.Event()
 
-        async def _serve_one(self, reader, writer):
+        async def _accept(self, reader, writer):
             self.handler_entered.set()
             try:
                 await asyncio.Event().wait()
