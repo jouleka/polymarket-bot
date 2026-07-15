@@ -1,6 +1,6 @@
 # POL-18 isolated propose-only Hermes brain verification evidence
 
-Status: reviewed build complete; independent specification/security review passed; no installation,
+Status: landed on `main`; independent specification/security review passed; no installation,
 profile creation, model/provider selection, cron creation, service start/enable, or deployment
 authorized or performed
 
@@ -10,7 +10,8 @@ Branch: `pol-18-hermes-brain`
 
 Exact independently reviewed code head: `5e57449aabe43ac861e3570c373feb67937e3c92`
 
-GitHub publication: [PR #9](https://github.com/jouleka/polymarket-bot/pull/9)
+GitHub landing: [PR #9](https://github.com/jouleka/polymarket-bot/pull/9), merge
+`09a3a6b18d9e393ce535c7612789586399d37feb`
 
 Canonical suite at reviewed head: **2,273 passed**
 
