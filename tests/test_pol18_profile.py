@@ -133,6 +133,11 @@ def test_cron_contract_requires_one_exact_job_and_exact_model_visible_tools():
         verify_cron_contract([job, job], prompt, sorted(MODEL_VISIBLE))
     with pytest.raises(RuntimeError, match="model-visible"):
         verify_cron_contract([job], prompt, sorted(MODEL_VISIBLE | {"terminal"}))
+    with pytest.raises(RuntimeError, match="model-visible"):
+        verify_cron_contract(
+            [job], prompt,
+            sorted(MODEL_VISIBLE - {"mcp__polymarket__get_flags"}),
+        )
 
 
 def test_activation_requires_nonempty_owner_selected_model_and_provider():
