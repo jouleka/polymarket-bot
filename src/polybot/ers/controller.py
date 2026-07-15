@@ -25,7 +25,8 @@ from polybot.ers.service import process_pending
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
                  heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
-                 telegram=None, reconciler=None, shadow_planner=None, clock):
+                 telegram=None, reconciler=None, shadow_planner=None,
+                 accept_wall_clock=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -60,6 +61,9 @@ class ERSController:
         # POL-16 opt-in ACCEPT adapter. None preserves the pre-POL-16 loop exactly;
         # a wired planner returns a canonical filled paper execution or None.
         self._shadow_planner = shadow_planner
+        # POL-17 opt-in atomic fill+flow journal clock. None preserves every
+        # pre-runtime controller call site and its existing fill_sink behavior.
+        self._accept_wall_clock = accept_wall_clock
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -171,5 +175,6 @@ class ERSController:
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
             controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink,
             shadow_planner=self._shadow_planner,
+            accept_wall_clock=self._accept_wall_clock,
             eligible_intent_ids=eligible_intent_ids)
         return self._portfolio

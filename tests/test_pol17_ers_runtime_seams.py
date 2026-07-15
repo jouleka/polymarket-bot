@@ -139,3 +139,28 @@ def test_controller_resolution_state_only_retires_or_freezes_risk(tmp_path):
             ("open", False),
         ]
         assert resolved.total_open_risk() == Decimal("12")
+
+
+def test_controller_threads_atomic_accept_wall_clock(tmp_path):
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1",
+            **_proposal("token-1", "condition-1", "event-1"),
+        )
+        caps = RiskCaps()
+        safety = SafetyController(caps=caps, store=store, clock=lambda: 1)
+        safety.set_state(RUNNING, reason="test_reconcile")
+        controller = ERSController(
+            store=store,
+            book_for={"token-1": _book()}.get,
+            caps=caps,
+            signer=PaperSigner(),
+            controller=safety,
+            accept_wall_clock=lambda: 1_750_000_000.25,
+            clock=lambda: 1,
+        )
+
+        controller.run_cycle()
+
+        assert len(store.fills_log()) == 1
+        assert store.flow_log()[0]["wall_at"] == 1_750_000_000.25
