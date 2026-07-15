@@ -3,6 +3,7 @@
 import inspect
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
 from types import SimpleNamespace
 
@@ -143,3 +144,34 @@ def test_component_shutdown_attempts_every_owned_store_close():
         components.close()
 
     assert trace == ["first"]
+
+
+def test_resolution_store_is_owned_by_the_serial_blocking_worker(tmp_path):
+    config = _config(tmp_path)
+    with EventStore(config.ingestion.db_path):
+        pass
+    registry = _registry()
+    health_ns = time.monotonic_ns()
+    components = build_shadow_components(
+        config,
+        ingestion=SimpleNamespace(
+            stamper=MonotonicStamper(),
+            collector=SimpleNamespace(last_frame_at=lambda: health_ns),
+            book_for=lambda _token_id: None,
+        ),
+        registry_provider=SimpleNamespace(require_fresh=lambda: registry),
+        resolution_providers=(
+            SimpleNamespace(provider_id="a"),
+            SimpleNamespace(provider_id="b"),
+        ),
+        wall_clock=time.time,
+        health_clock_seconds=time.monotonic,
+        health_clock_ns=time.monotonic_ns,
+    )
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert executor.submit(
+                components.resolution_feed.recover_pending
+            ).result() == 0
+    finally:
+        components.close()

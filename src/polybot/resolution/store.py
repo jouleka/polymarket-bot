@@ -76,9 +76,9 @@ class ResolutionRuntimeState:
 
 
 class ResolutionStore:
-    def __init__(self, path, stamper):
+    def __init__(self, path, stamper, *, check_same_thread=True):
         self._stamper = stamper
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, check_same_thread=check_same_thread)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")

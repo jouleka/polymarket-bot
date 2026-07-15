@@ -110,7 +110,12 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     component_log = ComponentLog(config.components_db_path, stamper=stamper)
     maker_ledger = MakerLedger(config.maker_db_path, stamper)
     shadow_ledger = ShadowLedger(config.shadow_db_path, stamper)
-    resolution_store = ResolutionStore(config.resolution_db_path, stamper)
+    # ResolutionFeed is the only off-loop store user. The root serializes its
+    # worker with every event-loop dispatcher/state access and joins that worker
+    # before closing this connection.
+    resolution_store = ResolutionStore(
+        config.resolution_db_path, stamper, check_same_thread=False
+    )
     closers = (
         event_reader.close,
         intent_store.close,
