@@ -12,7 +12,8 @@ Baseline: `22c0a21af5d8965311745237c3abf6175fd291b8`, 2,121 tests passing. Branc
 
 Execution status (2026-07-15): Tasks 1–10 complete. Mutation checkpoint `8a37f34` and closing
 lifecycle fix `f016621` pass the final independent specification/security re-review; canonical
-suite 2,208 passing. Nothing is installed, activated, pushed, or merged.
+suite 2,208 passing. Reviewed head `c165971` landed through PR #7 as merge `b6ae7e1`.
+Nothing is installed, activated, or deployed.
 
 ## Task 1 — Atomic ACCEPT journal
 

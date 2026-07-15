@@ -471,7 +471,8 @@ or live-money path was added. Evidence is in
 head `89e1b6a` merged as `4d1090c`. POL-16 is not separately deployed; POL-17 owns continuous
 runtime composition, installation, and activation decisions.
 
-**UPDATE 2026-07-15 — POL-17 local reviewed build complete.**
+**UPDATE 2026-07-15 — POL-17 landed on `main` via
+[PR #7](https://github.com/jouleka/polymarket-bot/pull/7).**
 The continuous paper loop is now composed as one supervised process so D4a ingestion and ERS share
 the same in-memory `LocalBook` and exactly one websocket collector. The real POL-14 registry,
 POL-15 resolution authority, POL-16 apply-before-ack execution fanout, S4 controller/restart/anomaly/
@@ -489,6 +490,7 @@ and partial construction were fixed and pinned. Closing re-review additionally f
 per-provider-method rather than per-HTTP-request shutdown fencing, non-all-attempt production
 cleanup, and writer-before-worker shutdown ordering. Both independent reviewers returned PASS.
 Detached mutation batteries killed 16/16 with zero survivors; both restored worktrees were clean.
+The reviewed branch head `c165971` landed as true merge commit `b6ae7e1`.
 
 Evidence is in
 [`VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md`](VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md).
@@ -498,8 +500,8 @@ deployment has occurred. `/opt/polymarket-bot`, systemd state, the compact produ
 raw-firehose evidence remain untouched; the service remains stopped and disabled. Sticky paper
 HALTED/PAUSED state is not replayed across DORMANT restart and must be designed before POL-4.
 
-**Next work:** obtain separate authorization for POL-17 publication/landing, then POL-18 the
-isolated propose-only Hermes brain. Only after those land and are separately deployed does the ≤2-week
+**Next work:** begin POL-18, the isolated propose-only Hermes brain. Only after it lands and POL-17/POL-18
+are separately deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
 
