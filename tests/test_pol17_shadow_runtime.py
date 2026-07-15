@@ -102,6 +102,46 @@ def test_shadow_runtime_enforces_recovery_readiness_and_reverse_shutdown_order()
     ]
 
 
+def test_shadow_runtime_opens_proposal_admission_only_after_restart_barriers():
+    trace = []
+    runtime = None
+
+    async def service():
+        await asyncio.Event().wait()
+
+    async def cycle():
+        trace.append("cycle")
+        runtime.request_stop()
+
+    runtime = ShadowRuntime(
+        services=(service,),
+        writer=SimpleNamespace(close=lambda: None),
+        lock=SimpleNamespace(acquire=lambda: None, release=lambda: None),
+        recover_resolution=lambda: asyncio.sleep(0),
+        drain_resolution=lambda: trace.append("resolution_drain"),
+        drain_execution=lambda: trace.append("execution_drain"),
+        collector=SimpleNamespace(last_frame_at=lambda: 1),
+        apply_initial_resolution_state=lambda: trace.append("resolution_state"),
+        controller=SimpleNamespace(boot=lambda: trace.append("boot")),
+        readiness=SimpleNamespace(
+            ready=lambda: trace.append("systemd_ready"),
+            stopping=lambda: trace.append("systemd_stopping"),
+        ),
+        run_cycle=cycle,
+        cycle_interval_seconds=1,
+        readiness_timeout_seconds=1,
+        set_proposal_admission=lambda value: trace.append(f"admission:{value}"),
+    )
+
+    asyncio.run(runtime.run())
+
+    assert trace == [
+        "resolution_drain", "execution_drain", "boot", "resolution_state",
+        "admission:True", "systemd_ready", "cycle", "admission:False",
+        "systemd_stopping",
+    ]
+
+
 def test_shutdown_attempts_every_close_and_releases_lock_after_close_failures():
     trace = []
     runtime = None
