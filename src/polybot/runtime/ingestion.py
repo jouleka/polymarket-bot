@@ -89,6 +89,7 @@ class IngestionAssembly:
     collector: object
     token_ids: tuple[str, ...]
     stamper: object
+    health_stamper: object
     heartbeat: object | None
 
     def book_for(self, token_id):
@@ -96,9 +97,12 @@ class IngestionAssembly:
 
 
 def build_ingestion_assembly(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
-                             data_fetch=None, stamper=None) -> IngestionAssembly:
+                             data_fetch=None, stamper=None,
+                             health_stamper=None) -> IngestionAssembly:
     """Construct D4a once while exposing its live collector to the POL-17 root."""
     stamper = stamper or MonotonicStamper()
+    if health_stamper is None:
+        health_stamper = stamper
     gamma_fetch = gamma_fetch or make_gamma_fetch(config.gamma_url)
     ws_connect = ws_connect or open_market_ws
     data_fetch = data_fetch or make_httpx_fetch(DATA_API_URL)
@@ -106,7 +110,7 @@ def build_ingestion_assembly(config: IngestionConfig, *, gamma_fetch=None, ws_co
     token_ids = discover_universe(gamma_fetch, config)
     writer = QueuedEventWriter(EventStore(config.db_path, check_same_thread=False))
 
-    ws = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=None,
+    ws = ShardedMarketCollector(ws_connect, health_stamper, token_ids, sink=None,
                                 max_assets_per_shard=config.max_assets_per_shard,
                                 reconnect_on=WS_RECONNECT_ON)
     snapshotter = MidpointSnapshotter(
@@ -129,7 +133,8 @@ def build_ingestion_assembly(config: IngestionConfig, *, gamma_fetch=None, ws_co
     heartbeat = Heartbeat(config.heartbeat_path) if config.heartbeat_path else None
     return IngestionAssembly(
         services=tuple(services), writer=writer, collector=ws,
-        token_ids=tuple(token_ids), stamper=stamper, heartbeat=heartbeat,
+        token_ids=tuple(token_ids), stamper=stamper,
+        health_stamper=health_stamper, heartbeat=heartbeat,
     )
 
 
