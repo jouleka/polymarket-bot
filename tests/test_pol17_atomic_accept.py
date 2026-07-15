@@ -6,12 +6,16 @@ import math
 import pytest
 
 from polybot.core.clock import MonotonicStamper
+from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import (
     AcceptJournalRecord,
     IntentStore,
     ShadowExecutionRecord,
 )
 from polybot.ers.validator import Decision
+from polybot.ers.service import PaperSigner, process_pending
+from polybot.ers.validator import Portfolio
+from polybot.ingestion.orderbook import LocalBook
 
 
 def _journal(**overrides):
@@ -122,3 +126,47 @@ def test_accept_atomically_persists_restart_flow_and_execution_authority(tmp_pat
 def test_accept_journal_rejects_noncanonical_or_inconsistent_values(overrides):
     with pytest.raises((TypeError, ValueError)):
         _journal(**overrides)
+
+
+def test_process_pending_can_commit_restart_and_flow_authority_atomically(tmp_path):
+    condition_id = "0x" + "11" * 32
+    book = LocalBook()
+    book.apply_book({
+        "bids": [{"price": "0.49", "size": "1000"}],
+        "asks": [{"price": "0.52", "size": "1000"}],
+    })
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1",
+            token_id="101",
+            condition_id=condition_id,
+            event_id="event-1",
+            side="BUY",
+            target_price="0.49",
+            max_price="0.60",
+            size_usd_suggestion="12",
+            p="0.90",
+            p_confidence="0.75",
+        )
+
+        process_pending(
+            store,
+            book_for={"101": book}.get,
+            portfolio=Portfolio(nav=Decimal("300")),
+            caps=RiskCaps(),
+            signer=PaperSigner(),
+            accept_wall_clock=lambda: 1_750_000_000.25,
+        )
+
+        decision = store.get("intent-1")
+        assert decision.status == "ACCEPTED"
+        assert store.fills_log()[0]["shares"] == (
+            decision.decision_stake_usd / decision.decision_price_exec
+        )
+        assert store.flow_log()[0] == {
+            "at": store.flow_log()[0]["at"],
+            "wall_at": 1_750_000_000.25,
+            "kind": "accept",
+            "token_id": "101",
+            "amount": decision.decision_stake_usd,
+        }
