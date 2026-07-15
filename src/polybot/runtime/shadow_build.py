@@ -194,11 +194,22 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     maker_gate = MakerGate(maker_ledger, maker_config)
     ramp_config = RampConfig()
     ramp_controller = RampController(ramp_config=ramp_config, caps=caps)
-    planner = make_shadow_execution_planner(
+    paper_planner = make_shadow_execution_planner(
         book_for=ingestion.book_for,
         subject_for=market_registry.resolution_subject_for,
         maker_config=maker_config,
     )
+
+    def planner(intent, decision):
+        execution = paper_planner(intent, decision)
+        if execution is None:
+            # POL-16 keeps None backward-compatible for advisory callers. In the
+            # real POL-17 composition an ACCEPT without its canonical economic
+            # projection would create phantom restart risk, so veto it before the
+            # decision/journal/signer transaction.
+            raise RuntimeError("shadow execution unavailable on second live-book fetch")
+        return execution
+
     signer = PaperSigner()
 
     def gtd_for(decision, position, *, caps, standing_exit_total):
