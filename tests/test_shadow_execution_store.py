@@ -226,3 +226,23 @@ def test_reopen_rejects_missing_target_role_and_noncanonical_sibling_json(tmp_pa
         corrupt.commit()
     with pytest.raises(SettlementConflict, match="canonical sibling JSON"):
         IntentStore(json_path, MonotonicStamper())
+
+
+def test_reopen_rejects_invalid_outbox_state(tmp_path):
+    path = str(tmp_path / "invalid-state.db")
+    with IntentStore(path, MonotonicStamper()) as store:
+        store.propose_trade("intent-1", **_PROPOSAL)
+        store.record_decision(
+            "intent-1",
+            Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+            shadow_execution=_execution(),
+        )
+    with sqlite3.connect(path) as corrupt:
+        corrupt.execute("PRAGMA ignore_check_constraints=ON")
+        corrupt.execute(
+            "UPDATE shadow_execution_outbox SET state='BROKEN' WHERE role='MAKER'"
+        )
+        corrupt.commit()
+
+    with pytest.raises(SettlementConflict, match="outbox state"):
+        IntentStore(path, MonotonicStamper())
