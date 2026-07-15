@@ -120,6 +120,23 @@ def test_book_reader_rejects_a_stale_shared_local_book():
         BookReadView(lambda _token_id: book, token_ids=("11",))(token_id="11")
 
 
+@pytest.mark.parametrize("bids,asks", [
+    ([], [{"price": "0.44", "size": "7"}]),
+    ([{"price": "0.44", "size": "7"}], []),
+    ([{"price": "0.44", "size": "7"}], [{"price": "0.44", "size": "7"}]),
+    ([{"price": "0.45", "size": "7"}], [{"price": "0.44", "size": "7"}]),
+])
+def test_book_reader_rejects_empty_locked_and_crossed_books(bids, asks):
+    from polybot.hermes.read_views import BookReadView, ReadViewUnavailable
+    from polybot.ingestion.orderbook import LocalBook
+
+    book = LocalBook()
+    book.apply_book({"bids": bids, "asks": asks})
+
+    with pytest.raises(ReadViewUnavailable, match="usable"):
+        BookReadView(lambda _token_id: book, token_ids=("11",))(token_id="11")
+
+
 def test_ledger_reader_returns_only_bounded_resolved_history_newest_first():
     from polybot.hermes.read_views import LedgerReadView
 
