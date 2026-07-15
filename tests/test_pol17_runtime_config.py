@@ -1,6 +1,7 @@
 """POL-17 composite runtime configuration."""
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -130,3 +131,13 @@ url = "https://polygon-b.example"
     assert config.ingestion.snapshot_interval_seconds == 60.0
     assert config.intents_db_path == "/data/intents.db"
     assert config.polygon_providers[1].provider_id == "polygon-b"
+
+
+def test_deploy_example_is_a_complete_paper_shadow_configuration():
+    path = Path(__file__).parents[1] / "deploy" / "config.example.toml"
+
+    config = load_shadow_config(str(path), env={})
+
+    assert config.paper_only is True
+    assert len(set(config.database_paths)) == 7
+    assert len(config.polygon_providers) == 2
