@@ -3,8 +3,13 @@
 import asyncio
 from types import SimpleNamespace
 
+from polybot.ers.market_meta import ResolutionSubjectMetadata
 from polybot.resolution.feed import PollDisposition
-from polybot.runtime.shadow_cycle import ResolutionBatch, ShadowCycleCoordinator
+from polybot.runtime.shadow_cycle import (
+    ResolutionBatch,
+    ShadowCycleCoordinator,
+    make_resolution_batch,
+)
 
 
 def test_cycle_orders_terminal_authority_before_ers_and_execution_projection():
@@ -88,3 +93,42 @@ def test_cycle_orders_terminal_authority_before_ers_and_execution_projection():
         "evidence",
         "status",
     ]
+
+
+def test_resolution_batch_unions_unresolved_forecasts_and_pending_intents_by_condition():
+    condition_id = "0x" + "11" * 32
+    subject = ResolutionSubjectMetadata(
+        event_id="event-1",
+        condition_id=condition_id,
+        category="politics",
+        token_id="101",
+        outcome_slot=0,
+        sibling_token_ids=("101", "202"),
+    )
+    unresolved = SimpleNamespace(
+        resolution_status=None,
+        event_id="event-1",
+        condition_id=condition_id,
+        category="politics",
+        sibling_token_ids=("101", "202"),
+    )
+    resolved = SimpleNamespace(
+        resolution_status="WON",
+        event_id="event-2",
+        condition_id="0x" + "22" * 32,
+        category="crypto",
+        sibling_token_ids=("303", "404"),
+    )
+    intent = SimpleNamespace(intent_id="intent-1")
+    forecast_ledger = SimpleNamespace(all=lambda: [unresolved, resolved])
+    intent_store = SimpleNamespace(pending=lambda: [intent])
+    registry = SimpleNamespace(resolution_subject_for=lambda candidate: subject)
+
+    batch = make_resolution_batch(forecast_ledger, intent_store, registry)
+
+    assert len(batch.subjects) == 1
+    assert batch.subjects[0].condition_id == condition_id
+    assert batch.subjects[0].token_ids == ("101", "202")
+    assert batch.intent_ids_by_condition == {
+        condition_id: frozenset({"intent-1"}),
+    }
