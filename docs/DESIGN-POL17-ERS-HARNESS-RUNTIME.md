@@ -97,10 +97,11 @@ clock for in-memory frame stamps cannot break durable replay ordering.
 10. Wait until every websocket shard has observed a real bookable frame
     (`collector.last_frame_at() is not None`). Individual books may still be absent/stale and
     will fail closed per market. Startup readiness has a finite timeout.
-11. Apply delivered resolution state to the rebuilt portfolio: retire terminal conditions;
-    freeze finalized-unknown conditions.
-12. Call `ERSController.boot()` exactly once with `RestartReconciler(wallet=None)`. Only its clean
-    DORMANT reconciliation may transition HALTED → RUNNING.
+11. Call `ERSController.boot()` exactly once with `RestartReconciler(wallet=None)` to rebuild the
+    durable portfolio. Only its clean DORMANT reconciliation may transition HALTED → RUNNING.
+12. Apply delivered resolution state to that rebuilt portfolio: retire terminal conditions;
+    freeze finalized-unknown conditions. Applying state before `boot()` would mutate only the
+    empty construction portfolio and could resurrect terminal risk during the rebuild.
 13. Publish readiness and begin cadence. Readiness must never precede recovery, live-book, and
     restart reconciliation barriers.
 

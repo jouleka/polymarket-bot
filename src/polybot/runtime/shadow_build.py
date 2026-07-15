@@ -86,8 +86,14 @@ class ShadowComponents:
         if self._closed:
             return
         self._closed = True
+        errors = []
         for close in reversed(self._closers):
-            close()
+            try:
+                close()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("shadow component shutdown failed", errors)
 
 
 def build_shadow_components(config, *, ingestion, registry_provider,
