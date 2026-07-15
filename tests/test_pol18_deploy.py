@@ -58,8 +58,8 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert 'id -u "$BRAIN_USER"' in text
     assert 'id -nG "$BRAIN_USER"' in text
     assert 'expected_brain_groups' in text
-    assert 'if [ "$active_state" = "inactive" ]' in text
-    assert 'if [ "$load_state" = "not-found" ]' in text
+    assert 'systemctl show --property=ActiveState --value "$unit"' in text
+    assert 'systemctl show --property=LoadState --value "$unit"' in text
     assert text.count('if [ "$active_state" != "inactive" ]') >= 1
 
 

@@ -96,19 +96,22 @@ def test_installer_state_check_rejects_unsafe_state(
     assert message in result.stderr
 
 
-def _run_preinstall_state_check(*, ingestion_active, brain_active, brain_load):
+def _run_preinstall_state_check(*, ingestion_active, ingestion_load,
+                                brain_active, brain_load):
     text = INSTALLER.read_text()
     start = text.index("verify_services_not_active() {")
     end = text.index("\n}\n", start) + len("\n}")
     function = text[start:end]
     harness = f'''\
 systemctl() {{
-    case "$1:$2" in
-        is-active:polymarket-ingestion.service)
-            printf '%s\n' "$MOCK_INGESTION_ACTIVE"; return 3 ;;
-        is-active:polymarket-hermes.service)
-            printf '%s\n' "$MOCK_BRAIN_ACTIVE"; return 4 ;;
-        show:--property=LoadState)
+    case "$1:$2:$4" in
+        show:--property=ActiveState:polymarket-ingestion.service)
+            printf '%s\n' "$MOCK_INGESTION_ACTIVE"; return 0 ;;
+        show:--property=LoadState:polymarket-ingestion.service)
+            printf '%s\n' "$MOCK_INGESTION_LOAD"; return 0 ;;
+        show:--property=ActiveState:polymarket-hermes.service)
+            printf '%s\n' "$MOCK_BRAIN_ACTIVE"; return 0 ;;
+        show:--property=LoadState:polymarket-hermes.service)
             printf '%s\n' "$MOCK_BRAIN_LOAD"; return 0 ;;
         *) return 99 ;;
     esac
@@ -118,6 +121,7 @@ verify_services_not_active
 '''
     env = os.environ | {
         "MOCK_INGESTION_ACTIVE": ingestion_active,
+        "MOCK_INGESTION_LOAD": ingestion_load,
         "MOCK_BRAIN_ACTIVE": brain_active,
         "MOCK_BRAIN_LOAD": brain_load,
     }
@@ -129,18 +133,27 @@ verify_services_not_active
 
 def test_preinstall_gate_accepts_only_inactive_ingestion_and_absent_new_brain_unit():
     first_install = _run_preinstall_state_check(
-        ingestion_active="inactive", brain_active="unknown", brain_load="not-found",
+        ingestion_active="inactive", ingestion_load="loaded",
+        brain_active="inactive", brain_load="not-found",
     )
     assert first_install.returncode == 0, first_install.stderr
 
-    for ingestion_active, brain_active, brain_load in (
-        ("active", "unknown", "not-found"),
-        ("inactive", "activating", "loaded"),
-        ("inactive", "failed", "loaded"),
-        ("inactive", "unknown", "loaded"),
+    safe_rerun = _run_preinstall_state_check(
+        ingestion_active="inactive", ingestion_load="loaded",
+        brain_active="inactive", brain_load="loaded",
+    )
+    assert safe_rerun.returncode == 0, safe_rerun.stderr
+
+    for ingestion_active, ingestion_load, brain_active, brain_load in (
+        ("inactive", "not-found", "inactive", "not-found"),
+        ("active", "loaded", "inactive", "not-found"),
+        ("inactive", "loaded", "activating", "loaded"),
+        ("inactive", "loaded", "failed", "loaded"),
+        ("inactive", "loaded", "active", "not-found"),
     ):
         unsafe = _run_preinstall_state_check(
             ingestion_active=ingestion_active,
+            ingestion_load=ingestion_load,
             brain_active=brain_active,
             brain_load=brain_load,
         )

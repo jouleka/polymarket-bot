@@ -16,18 +16,19 @@ verify_services_not_active() {
     local unit active_state load_state
     for unit in polymarket-ingestion.service polymarket-hermes.service; do
         active_state=
-        if active_state=$(systemctl is-active "$unit" 2>&1); then :; fi
-        if [ "$active_state" = "inactive" ]; then
+        load_state=
+        if active_state=$(systemctl show --property=ActiveState --value "$unit" 2>&1); then :; fi
+        if load_state=$(systemctl show --property=LoadState --value "$unit" 2>&1); then :; fi
+        if [ "$unit" = "polymarket-ingestion.service" ] && \
+           [ "$active_state" = "inactive" ] && [ "$load_state" = "loaded" ]; then
             continue
         fi
-        if [ "$unit" = "polymarket-hermes.service" ] && [ "$active_state" = "unknown" ]; then
-            load_state=
-            if load_state=$(systemctl show --property=LoadState --value "$unit" 2>&1); then :; fi
-            if [ "$load_state" = "not-found" ]; then
-                continue
-            fi
+        if [ "$unit" = "polymarket-hermes.service" ] && \
+           [ "$active_state" = "inactive" ] && \
+           { [ "$load_state" = "loaded" ] || [ "$load_state" = "not-found" ]; }; then
+            continue
         fi
-        echo "ERROR: refusing install unless $unit is exactly inactive or the new Hermes unit is absent; got: $active_state" >&2
+        echo "ERROR: refusing install for unsafe $unit state: active=$active_state load=$load_state" >&2
         return 1
     done
 }
