@@ -23,11 +23,12 @@ class ShadowRuntime:
                  drain_resolution, drain_execution, collector,
                  apply_initial_resolution_state, controller, readiness,
                  run_cycle, cycle_interval_seconds, readiness_timeout_seconds,
-                 closers=(), lock_acquired=False):
+                 closers=(), lock_acquired=False, stop_requested=None):
         self._services = tuple(services)
         self._writer = writer
         self._lock = lock
         self._lock_acquired = lock_acquired
+        self._stop_requested = stop_requested
         self._recover_resolution = recover_resolution
         self._drain_resolution = drain_resolution
         self._drain_execution = drain_execution
@@ -44,8 +45,12 @@ class ShadowRuntime:
         self._closed = False
 
     def request_stop(self):
-        if self._stop is not None:
-            self._stop.set()
+        try:
+            if self._stop_requested is not None:
+                self._stop_requested()
+        finally:
+            if self._stop is not None:
+                self._stop.set()
 
     async def run(self):
         if not self._lock_acquired:
