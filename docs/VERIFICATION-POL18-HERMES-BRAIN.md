@@ -10,6 +10,8 @@ Branch: `pol-18-hermes-brain`
 
 Exact independently reviewed code head: `5e57449aabe43ac861e3570c373feb67937e3c92`
 
+GitHub publication: [PR #9](https://github.com/jouleka/polymarket-bot/pull/9)
+
 Canonical suite at reviewed head: **2,273 passed**
 
 POL-18 adds a capability-minimal Hermes proposal brain to the paper-only POL-17 runtime. POL-17

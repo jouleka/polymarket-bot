@@ -500,7 +500,8 @@ deployment occurred. `/opt/polymarket-bot`, systemd state, the compact productio
 raw-firehose evidence remain untouched; the service remains stopped and disabled. Sticky paper
 HALTED/PAUSED state is not replayed across DORMANT restart and must be designed before POL-4.
 
-**UPDATE 2026-07-15 — POL-18 reviewed build complete.** Exact independently reviewed head
+**UPDATE 2026-07-15 — POL-18 reviewed build published through
+[PR #9](https://github.com/jouleka/polymarket-bot/pull/9).** Exact independently reviewed head
 `5e57449` adds a same-process, supervised Unix proposal endpoint to POL-17 and a separate
 capability-minimal stdio MCP bridge. Hermes receives exactly five tools: `propose_trade`,
 `get_market`, `get_book`, `get_ledger`, and `get_flags`. POL-17 remains the only live-book owner,
@@ -521,8 +522,8 @@ The isolated mutation battery killed 46/46 with zero survivors. Evidence is in
 Linux identity/group, service checkout/unit, Hermes profile, model/provider, cron, start/enable, or
 deployment action was performed. Those remain separate owner gates.
 
-**Next work:** publish and merge the reviewed POL-18 build, then return to POL-13 for the explicitly
-gated stopped installation/profile/activation sequence and the ≤2-week paper/shadow run. The shadow
+**Next work:** merge the reviewed POL-18 build, then return to POL-13 for the explicitly gated
+stopped installation/profile/activation sequence and the ≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
