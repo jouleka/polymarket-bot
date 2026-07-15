@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import math
 import os
+from pathlib import Path
 import tomllib
 from urllib.parse import urlsplit
 
@@ -28,6 +29,10 @@ class ReadOnlyPolygonProviderConfig:
         if (parsed.scheme != "https" or not parsed.hostname
                 or parsed.username is not None or parsed.password is not None):
             raise ValueError("provider URL must be HTTPS without embedded user credentials")
+
+    @property
+    def authority_host(self):
+        return urlsplit(self.url).hostname.lower()
 
 
 @dataclass(frozen=True)
@@ -57,8 +62,16 @@ class ShadowRuntimeConfig:
         if any(not isinstance(path, str) or not path or path != path.strip()
                for path in paths):
             raise ValueError("database paths must be non-empty exact strings")
-        if len(set(paths)) != len(paths):
+        resolved_paths = tuple(Path(path).resolve(strict=False) for path in paths)
+        if len(set(resolved_paths)) != len(resolved_paths):
             raise ValueError("every logical store requires a distinct database path")
+        existing = [path for path in resolved_paths if path.exists()]
+        for index, first in enumerate(existing):
+            for second in existing[index + 1:]:
+                if os.path.samefile(first, second):
+                    raise ValueError(
+                        "every logical store requires a distinct database path"
+                    )
         providers = self.polygon_providers
         if (not isinstance(providers, tuple) or len(providers) != 2
                 or any(not isinstance(provider, ReadOnlyPolygonProviderConfig)
@@ -68,6 +81,8 @@ class ShadowRuntimeConfig:
             raise ValueError("Polygon provider IDs must be distinct")
         if providers[0].url == providers[1].url:
             raise ValueError("Polygon provider URLs must be distinct")
+        if providers[0].authority_host == providers[1].authority_host:
+            raise ValueError("Polygon provider authorities must use distinct hosts")
         for name in (
             "cycle_interval_seconds",
             "registry_refresh_seconds",
