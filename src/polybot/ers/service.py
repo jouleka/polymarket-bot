@@ -65,7 +65,7 @@ class HermesPipeline:
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
                     cluster_model=None, breaker=None, pipeline=None, controller=None,
                     gtd_for=None, fill_sink=None, shadow_planner=None,
-                    accept_wall_clock=None):
+                    accept_wall_clock=None, eligible_intent_ids=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
@@ -99,6 +99,9 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             block_reason = "l7_freeze"
 
     for intent in store.pending():
+        if (eligible_intent_ids is not None
+                and intent.intent_id not in eligible_intent_ids):
+            continue
         trade_intent = None
         shadow_execution = None
         accept_journal = None
