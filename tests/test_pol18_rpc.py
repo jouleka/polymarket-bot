@@ -126,6 +126,36 @@ def test_rpc_rejects_duplicate_keys_ambiguous_frames_and_oversized_requests():
     assert facade.calls == []
 
 
+def test_rpc_rejects_missing_and_extra_method_parameters_before_the_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    proposal = json.loads(_proposal())["params"]
+    extra_proposal = dict(proposal, unexpected=True)
+    missing_proposal = dict(proposal)
+    missing_proposal.pop("p")
+    cases = (
+        ("get_book", {}),
+        ("get_book", {"token_id": "11", "unexpected": True}),
+        ("get_flags", {"unexpected": True}),
+        ("get_market", {"unexpected": True}),
+        ("get_ledger", {"unexpected": True}),
+        ("propose_trade", extra_proposal),
+        ("propose_trade", missing_proposal),
+    )
+
+    for method, params in cases:
+        facade = _Facade()
+        request = _wire({
+            "version": 1, "id": f"schema-{method}",
+            "method": method, "params": params,
+        })
+        with pytest.raises(RpcProtocolError, match="exact schema"):
+            ProposalRpcDispatcher(facade).handle(request)
+        assert facade.calls == []
+
+
 def test_rpc_rejects_noncanonical_decimal_strings_before_the_facade():
     import pytest
 
@@ -702,6 +732,96 @@ def test_unix_client_fails_closed_for_absent_and_invalid_endpoints(tmp_path):
             with pytest.raises(RpcRemoteError, match="invalid_response"):
                 await ProposalRpcClient(path).call("get_flags", {})
         finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_unix_client_rejects_oversized_duplicate_and_mismatched_responses(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcClient, RpcRemoteError
+
+    maximum = 256
+    padding = ""
+    while True:
+        oversized = _wire({
+            "version": 1, "id": "client-request",
+            "result": {"payload": padding},
+        })
+        if len(oversized) >= maximum + 1:
+            break
+        padding += "x"
+    assert len(oversized) == maximum + 1
+    hostile_responses = (
+        oversized,
+        (b'{"version":1,"id":"client-request","id":"attacker",'
+         b'"result":{}}\n'),
+        (b'{"version":1,"id":"client-request",'
+         b'"result":{"value":1,"value":2}}\n'),
+        _wire({"version": 1, "id": "wrong", "result": {}}),
+        _wire({
+            "version": 1, "id": "wrong",
+            "error": {"code": "runtime_not_ready"},
+        }),
+    )
+
+    async def scenario():
+        import pytest
+
+        for index, hostile_response in enumerate(hostile_responses):
+            path = tmp_path / f"hostile-{index}.sock"
+
+            async def respond(_reader, writer, response=hostile_response):
+                writer.write(response)
+                await writer.drain()
+                writer.close()
+
+            server = await asyncio.start_unix_server(respond, path=path)
+            try:
+                client = ProposalRpcClient(
+                    path, request_id=lambda: "client-request",
+                    max_response_bytes=maximum,
+                )
+                with pytest.raises(RpcRemoteError) as exc:
+                    await client.call("get_flags", {})
+                assert exc.value.code == "invalid_response"
+            finally:
+                server.close()
+                await server.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_unix_client_times_out_a_hanging_endpoint(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcClient, RpcRemoteError
+
+    async def scenario():
+        import pytest
+
+        path = tmp_path / "hanging.sock"
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def hang(_reader, writer):
+            entered.set()
+            try:
+                await release.wait()
+            finally:
+                writer.close()
+                finished.set()
+
+        server = await asyncio.start_unix_server(hang, path=path)
+        try:
+            client = ProposalRpcClient(path, timeout_seconds=0.05)
+            call = asyncio.create_task(client.call("get_flags", {}))
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            with pytest.raises(RpcRemoteError) as exc:
+                await asyncio.wait_for(call, timeout=0.2)
+            assert exc.value.code == "transport_unavailable"
+        finally:
+            release.set()
+            await asyncio.wait_for(finished.wait(), timeout=1)
             server.close()
             await server.wait_closed()
 
