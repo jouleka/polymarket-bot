@@ -224,3 +224,45 @@ def test_live_book_readiness_timeout_is_fatal_and_never_announces_ready():
     assert isinstance(leaves[0], TimeoutError)
     assert str(leaves[0]) == "live-book readiness timed out"
     assert trace == ["lock", "writer", "unlock"]
+
+
+def test_fatal_shutdown_fences_and_joins_worker_before_draining_writer():
+    trace = []
+
+    async def service():
+        raise RuntimeError("fatal collector")
+
+    runtime = ShadowRuntime(
+        services=(service,),
+        writer=SimpleNamespace(close=lambda: trace.append("writer")),
+        lock=SimpleNamespace(
+            acquire=lambda: trace.append("lock"),
+            release=lambda: trace.append("unlock"),
+        ),
+        recover_resolution=lambda: asyncio.Event().wait(),
+        drain_resolution=lambda: None,
+        drain_execution=lambda: None,
+        collector=SimpleNamespace(last_frame_at=lambda: None),
+        apply_initial_resolution_state=lambda: None,
+        controller=SimpleNamespace(boot=lambda: None),
+        readiness=SimpleNamespace(ready=lambda: None, stopping=lambda: None),
+        run_cycle=lambda: asyncio.sleep(0),
+        cycle_interval_seconds=1,
+        readiness_timeout_seconds=1,
+        before_writer_closers=(
+            lambda: trace.append("stop_rpc_admission"),
+            lambda: trace.append("join_worker"),
+        ),
+        closers=(lambda: trace.append("components"),),
+    )
+
+    with pytest.raises(ExceptionGroup) as caught:
+        asyncio.run(runtime.run())
+
+    assert [str(error) for error in _leaf_errors(caught.value)] == [
+        "fatal collector",
+    ]
+    assert trace == [
+        "lock", "stop_rpc_admission", "join_worker", "writer", "components",
+        "unlock",
+    ]

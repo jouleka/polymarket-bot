@@ -23,7 +23,8 @@ class ShadowRuntime:
                  drain_resolution, drain_execution, collector,
                  apply_initial_resolution_state, controller, readiness,
                  run_cycle, cycle_interval_seconds, readiness_timeout_seconds,
-                 closers=(), lock_acquired=False, stop_requested=None):
+                 closers=(), before_writer_closers=(), lock_acquired=False,
+                 stop_requested=None):
         self._services = tuple(services)
         self._writer = writer
         self._lock = lock
@@ -40,6 +41,7 @@ class ShadowRuntime:
         self._cycle_interval_seconds = cycle_interval_seconds
         self._readiness_timeout_seconds = readiness_timeout_seconds
         self._closers = tuple(closers)
+        self._before_writer_closers = tuple(before_writer_closers)
         self._stop = None
         self._ready = False
         self._closed = False
@@ -94,7 +96,11 @@ class ShadowRuntime:
                 self._readiness.stopping()
             except Exception as exc:
                 errors.append(exc)
-        actions = (self._writer.close,) + tuple(reversed(self._closers))
+        actions = (
+            self._before_writer_closers
+            + (self._writer.close,)
+            + tuple(reversed(self._closers))
+        )
         for close in actions:
             try:
                 close()

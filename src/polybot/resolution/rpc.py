@@ -190,7 +190,8 @@ def _uint256_word(value):
 
 
 class JsonRpcClient:
-    def __init__(self, endpoint: str, client: httpx.Client | None = None):
+    def __init__(self, endpoint: str, client: httpx.Client | None = None,
+                 *, should_stop=None):
         if (not isinstance(endpoint, str) or not endpoint
                 or endpoint != endpoint.strip()):
             raise ValueError("JSON-RPC endpoint must be a non-empty exact string")
@@ -199,6 +200,17 @@ class JsonRpcClient:
         self._endpoint = endpoint
         self._client = client if client is not None else httpx.Client()
         self._next_id = 1
+        self._should_stop = None
+        if should_stop is not None:
+            self.wire_stop(should_stop)
+
+    def wire_stop(self, should_stop):
+        """Install the one-shot runtime shutdown fence for every HTTP request."""
+        if not callable(should_stop):
+            raise TypeError("JSON-RPC stop gate must be callable")
+        if self._should_stop is not None and self._should_stop is not should_stop:
+            raise RuntimeError("JSON-RPC stop gate is already wired")
+        self._should_stop = should_stop
 
     def call(self, method: str, params: list[object]) -> object:
         if (not isinstance(method, str) or not method
@@ -206,6 +218,8 @@ class JsonRpcClient:
             raise ValueError("JSON-RPC method must be a non-empty exact string")
         if not isinstance(params, list):
             raise TypeError("JSON-RPC params must be a list")
+        if self._should_stop is not None and self._should_stop():
+            raise ResolutionUnavailable("resolution runtime is stopping")
 
         request_id = self._next_id
         self._next_id += 1
@@ -257,6 +271,13 @@ class JsonRpcResolutionProvider:
         self.provider_id = provider_id
         self._rpc = rpc
         self._verified_deployments = set()
+
+    def wire_stop(self, should_stop):
+        """Fence each internal JSON-RPC call, not only the provider method entry."""
+        wire = getattr(self._rpc, "wire_stop", None)
+        if not callable(wire):
+            raise TypeError("resolution RPC does not provide a stop gate")
+        wire(should_stop)
 
     def chain_id(self):
         return decode_quantity(self._rpc.call("eth_chainId", []))

@@ -206,9 +206,10 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         run_cycle=cycle.run_cycle,
         cycle_interval_seconds=config.cycle_interval_seconds,
         readiness_timeout_seconds=config.readiness_timeout_seconds,
-        closers=tuple(extra_closers) + (
-            components.close, lambda: executor.shutdown(wait=True), worker_stop.set,
+        before_writer_closers=(
+            worker_stop.set, lambda: executor.shutdown(wait=True),
         ),
+        closers=tuple(extra_closers) + (components.close,),
         lock_acquired=lock_acquired,
         stop_requested=worker_stop.set,
     ))
