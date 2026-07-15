@@ -10,9 +10,9 @@ future tasks, parallelize SQLite writers, or mutate sacred safety/signing surfac
 Baseline: `22c0a21af5d8965311745237c3abf6175fd291b8`, 2,121 tests passing. Branch:
 `pol-17-ers-harness-runtime`.
 
-Execution status (2026-07-15): Tasks 1–9 complete at code/test checkpoint `8a37f34`; canonical
-suite 2,205 passing. Task 10 documentation, closing re-review, and repository/tracker
-reconciliation are in progress. Nothing is installed, activated, pushed, or merged.
+Execution status (2026-07-15): Tasks 1–10 complete. Mutation checkpoint `8a37f34` and closing
+lifecycle fix `f016621` pass the final independent specification/security re-review; canonical
+suite 2,208 passing. Nothing is installed, activated, pushed, or merged.
 
 ## Task 1 — Atomic ACCEPT journal
 

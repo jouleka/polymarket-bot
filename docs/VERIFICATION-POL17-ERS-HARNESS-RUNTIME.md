@@ -1,15 +1,17 @@
 # POL-17 ERS + harness runtime verification evidence
 
-Status: local reviewed-build candidate; no push, merge, installation, database migration,
+Status: local reviewed build; independent specification/security review passed; no push, merge, installation, database migration,
 service start/enable, or deployment authorized or performed
 
 Base: `22c0a21af5d8965311745237c3abf6175fd291b8`
 
 Branch: `pol-17-ers-harness-runtime`
 
-Code/test and mutation checkpoint: `8a37f34`
+Primary mutation checkpoint: `8a37f34`
 
-Canonical suite at checkpoint: 2,205 passed
+Exact independently reviewed code head: `f0166210511e57b21e68497289f7a8c800ecc327`
+
+Canonical suite at reviewed code head: 2,208 passed
 
 POL-17 composes the existing D4a ingestion, POL-14 registry, POL-15 resolution, POL-16 shadow
 execution, S4 controller, real Hermes pipeline, and S9 evidence harness into one paper-only
@@ -72,7 +74,8 @@ focused GREEN, the canonical suite, and a checkpoint. The branch history is inte
 `b39a9ba`, `957cec1`, `c5ca353`, `4616043`, `99f21ad`, `e9aa232`, `7a06b7a`, `f8fe980`,
 `4d4d913`, `580cc35`, `bdc1659`, `b1cb26e`, `4572afa`, `5791751`, `e69984b`, `496b5e1`,
 `2fb987e`, `5a9e74b`, `2b07892`, `83f9621`, `3f79f64`, `585cb05`, `ce96570`, `b9d18ed`,
-`ef64727`, `a9b9169`, `ef52f99`, `4a7f4ce`, `df98067`, `173ab1b`, `58b9517`, `8a37f34`.
+`ef64727`, `a9b9169`, `ef52f99`, `4a7f4ce`, `df98067`, `173ab1b`, `58b9517`, `8a37f34`,
+`2e6e080`, `f016621`.
 
 The mutation phase itself exposed one real late-construction leak: a pipeline binding failure after
 all stores opened did not close them. The new RED reproduced the seven leaked handles; `construct`
@@ -121,6 +124,21 @@ dispositions, journal rollback/mismatches, duplicate collector scheduling, seque
 resolution state, safety object identity, read-only RPC vocabulary, stale-generation behavior, and
 late construction cleanup. All now have named tests in checkpoint `8a37f34`.
 
+Closing re-review at documentation checkpoint `2e6e080` found three remaining lifecycle defects:
+
+1. the stop predicate was checked only at provider-method entry, so one `observe()` could start
+   later internal HTTP requests after SIGTERM;
+2. production construction cleanup stopped at the first failing provider/Gamma closer and could
+   leak the singleton; and
+3. fatal shutdown closed the evidence writer before fencing and joining the resolution worker.
+
+Each received an observed RED and minimum fix in `f016621`. The real provider now wires the stop
+predicate through to `JsonRpcClient`, which checks immediately before every HTTP POST. Production
+cleanup preserves the construction failure, attempts provider/Gamma/lock cleanup independently,
+and aggregates cleanup failures. Fatal shutdown is now stop admission → worker join → writer drain
+→ components/adapters → lock release. Both original independent reviewers re-read exact clean head
+`f016621`, independently ran focused and canonical suites, and returned PASS with no blocker.
+
 One inherited limitation is explicit rather than hidden: paper DORMANT restart rebuilds positions
 and returns a new process to RUNNING but does not replay sticky HALTED/PAUSED op-state from
 `op_audit`. This has no external authority under `PaperSigner`; durable op-state restoration is a
@@ -151,6 +169,12 @@ Result: **13/13 killed, zero survivors**. After restoration, all 13 named select
 cases) passed in 0.79 seconds; `git diff --exit-code` and porcelain status were empty. The detached
 worktree was then removed. The active checkout was never mutated by this battery.
 
+A second detached battery at `f016621` mutated the three closing fixes independently: it disabled
+the per-HTTP-request stop check, stopped cleanup after the first closer error, and moved writer
+close ahead of stop/join. All **3/3** were killed by their new named RED/GREEN tests. After
+restoration those selectors passed 3/3, the detached worktree was clean, and it was removed.
+Combined isolated result: **16/16 killed, zero survivors**.
+
 ## Verification commands and results
 
 Canonical full suite, using the owner-provided tmpfs equivalent because the VPS has unrelated disk
@@ -162,15 +186,17 @@ TMPDIR=/dev/shm ./.venv/bin/pytest -o addopts="" -q \
   --basetemp=/dev/shm/pol17-pytest
 ```
 
-Result at `8a37f34`: **2,205 passed in 7.44s**.
+Result at `f016621`: **2,208 passed in 7.30s**. Independent reviewers reproduced **2,208 passed**
+in 7.37s and 7.79s respectively.
 
 Focused mutation-coverage batch before the full suite: 45 passed. Latest cycle/adapter/component
 batch: 23 passed. No raw CLOB persistence, network deployment, production data access, or service
 operation occurs in these tests.
 
-Closing verification additionally requires compileall, diff/whitespace and link checks, sacred
-surface comparison against base, deployment artifact assertions, marker/cache checks, independent
-re-review of every fix, and one final canonical suite at the exact reviewed documentation head.
+Closing verification passed: compileall; diff/whitespace and repository-local link checks; sacred
+surface comparison against base; deployment artifact assertions (29 passed); mutation marker and
+tracked-cache checks; independent re-review of every fix; clean porcelain status; and the complete
+canonical suite. Documentation reconciliation changes no executable bytes.
 
 ## Deployment boundary
 

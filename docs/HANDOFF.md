@@ -471,7 +471,7 @@ or live-money path was added. Evidence is in
 head `89e1b6a` merged as `4d1090c`. POL-16 is not separately deployed; POL-17 owns continuous
 runtime composition, installation, and activation decisions.
 
-**UPDATE 2026-07-15 — POL-17 local reviewed-build candidate complete; closing review in progress.**
+**UPDATE 2026-07-15 — POL-17 local reviewed build complete.**
 The continuous paper loop is now composed as one supervised process so D4a ingestion and ERS share
 the same in-memory `LocalBook` and exactly one websocket collector. The real POL-14 registry,
 POL-15 resolution authority, POL-16 apply-before-ack execution fanout, S4 controller/restart/anomaly/
@@ -480,13 +480,15 @@ evidence are wired. Startup replays both outboxes before readiness; each cycle p
 fans terminal state out before ERS, then projects execution and evidence. Before POL-18, the runtime
 idles with zero proposals and never synthesizes production input.
 
-Checkpoint `8a37f34` passes 2,205 tests. The real whole-slice proof covers live book → proposal →
+Exact independently reviewed code head `f016621` passes 2,208 tests. The real whole-slice proof covers live book → proposal →
 validation → atomic ACCEPT/fill/flow/execution/outbox → crash after Maker apply before ack → reopen/
 replay → Shadow → POL-15 terminal fanout → retired risk and terminal evidence. Independent review
 findings around lock/store order, terminal restart order, alias/provider independence, worker
 shutdown, Polygon 137 preflight, stale second-book phantom risk, all-store history clocks, status,
-and partial construction were fixed and pinned. A detached 13-mutation battery killed 13/13 with
-zero survivors; the restored 17-case selector set passed and the worktree was byte-clean.
+and partial construction were fixed and pinned. Closing re-review additionally found and fixed
+per-provider-method rather than per-HTTP-request shutdown fencing, non-all-attempt production
+cleanup, and writer-before-worker shutdown ordering. Both independent reviewers returned PASS.
+Detached mutation batteries killed 16/16 with zero survivors; both restored worktrees were clean.
 
 Evidence is in
 [`VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md`](VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md).
@@ -496,7 +498,7 @@ deployment has occurred. `/opt/polymarket-bot`, systemd state, the compact produ
 raw-firehose evidence remain untouched; the service remains stopped and disabled. Sticky paper
 HALTED/PAUSED state is not replayed across DORMANT restart and must be designed before POL-4.
 
-**Next work:** finish POL-17 closing re-review and separately authorized landing, then POL-18 the
+**Next work:** obtain separate authorization for POL-17 publication/landing, then POL-18 the
 isolated propose-only Hermes brain. Only after those land and are separately deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
