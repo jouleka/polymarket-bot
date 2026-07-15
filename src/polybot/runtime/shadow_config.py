@@ -44,6 +44,7 @@ class ShadowRuntimeConfig:
     registry_refresh_seconds: float = 300.0
     registry_max_age_seconds: float = 900.0
     resolution_poll_seconds: float = 60.0
+    news_poll_seconds: float = 60.0
     rpc_timeout_seconds: float = 15.0
     readiness_timeout_seconds: float = 60.0
     outbox_batch_limit: int = 100
@@ -72,6 +73,7 @@ class ShadowRuntimeConfig:
             "registry_refresh_seconds",
             "registry_max_age_seconds",
             "resolution_poll_seconds",
+            "news_poll_seconds",
             "rpc_timeout_seconds",
             "readiness_timeout_seconds",
         ):
@@ -163,6 +165,7 @@ _INGEST_FLOAT = {
 _SHADOW_FLOAT = {
     "cycle_interval_seconds", "registry_refresh_seconds",
     "registry_max_age_seconds", "resolution_poll_seconds",
+    "news_poll_seconds",
     "rpc_timeout_seconds", "readiness_timeout_seconds",
 }
 
