@@ -60,6 +60,19 @@ class FixedUniverseRegistryProvider:
             raise RuntimeError("fixed universe registry must load before refresh")
         return self._replace(initial=False)
 
+    def require_fresh(self):
+        """Return the last coherent generation only while its age is trustworthy."""
+        if self._registry is None or self._loaded_at is None:
+            raise MarketSnapshotError("Gamma registry is not loaded")
+        now = self._age_clock()
+        if (type(now) not in (int, float) or not math.isfinite(now)
+                or type(self._loaded_at) not in (int, float)
+                or not math.isfinite(self._loaded_at)
+                or now < self._loaded_at
+                or now - self._loaded_at > self._max_age_seconds):
+            raise MarketSnapshotError("Gamma registry is stale")
+        return self._registry
+
     def _replace(self, *, initial):
         market_rows, event_rows = self._fetch_snapshot()
         candidate = MarketRegistry.from_gamma_snapshots(
