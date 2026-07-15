@@ -308,26 +308,46 @@ class ProposalRpcServer:
             if not stat.S_ISSOCK(existing.st_mode):
                 raise RuntimeError("proposal path collision with existing non-socket")
             self._remove_proven_stale_socket(existing)
-        server = await asyncio.start_unix_server(
-            self._accept, path=self._path, limit=self._max_request_bytes + 1,
+        private_path = _validated_socket_path(
+            self._path.parent / f".p-{uuid.uuid4().hex[:8]}",
         )
+        server = None
+        private_identity = None
         try:
-            os.chmod(self._path, self._socket_mode)
+            server = await asyncio.start_unix_server(
+                self._accept, path=private_path,
+                limit=self._max_request_bytes + 1,
+            )
+            private_stat = private_path.lstat()
+            if not stat.S_ISSOCK(private_stat.st_mode):
+                raise RuntimeError("private proposal listener is not a socket")
+            private_identity = (private_stat.st_dev, private_stat.st_ino)
+            os.chmod(private_path, self._socket_mode)
             if self._socket_group is not None:
-                os.chown(self._path, -1, self._socket_group)
-            socket_stat = self._path.lstat()
+                os.chown(private_path, -1, self._socket_group)
+            socket_stat = private_path.lstat()
             if (not stat.S_ISSOCK(socket_stat.st_mode)
                     or stat.S_IMODE(socket_stat.st_mode) != self._socket_mode
                     or (self._socket_group is not None
                         and socket_stat.st_gid != self._socket_group)):
                 raise RuntimeError("proposal socket ownership or mode verification failed")
+            try:
+                self._path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise RuntimeError("proposal path appeared during private setup")
+            private_path.rename(self._path)
+            socket_stat = self._path.lstat()
             self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
             self._started.set()
             await server.serve_forever()
             raise RuntimeError("proposal RPC listener returned unexpectedly")
         finally:
-            server.close()
-            await server.wait_closed()
+            if server is not None:
+                server.close()
+                await server.wait_closed()
+            self._unlink_if_identity(private_path, private_identity)
             self._unlink_owned_socket()
 
     def _prepare_socket_directory(self):
@@ -395,13 +415,19 @@ class ProposalRpcServer:
     def _unlink_owned_socket(self):
         if self._socket_identity is None:
             return
+        self._unlink_if_identity(self._path, self._socket_identity)
+
+    @staticmethod
+    def _unlink_if_identity(path, expected_identity):
+        if expected_identity is None:
+            return
         try:
-            current = self._path.lstat()
+            current = path.lstat()
         except FileNotFoundError:
             return
         identity = (current.st_dev, current.st_ino)
-        if stat.S_ISSOCK(current.st_mode) and identity == self._socket_identity:
-            self._path.unlink()
+        if stat.S_ISSOCK(current.st_mode) and identity == expected_identity:
+            path.unlink()
 
     def _remove_proven_stale_socket(self, observed):
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

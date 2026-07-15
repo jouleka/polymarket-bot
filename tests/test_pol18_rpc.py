@@ -1,5 +1,6 @@
 import json
 import asyncio
+import os
 import socket
 from decimal import Decimal
 
@@ -228,6 +229,31 @@ def test_unix_server_rejects_a_symlinked_socket_directory(tmp_path):
     with pytest.raises(RuntimeError, match="socket directory"):
         asyncio.run(server.run())
     assert not (target / "proposal.sock").exists()
+
+
+def test_unix_server_never_publishes_when_socket_ownership_setup_fails(
+        tmp_path, monkeypatch):
+    import pytest
+
+    import polybot.hermes.rpc as rpc
+
+    path = tmp_path / "proposal.sock"
+    server = rpc.ProposalRpcServer(
+        path, rpc.ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        socket_group=os.getgid(),
+    )
+    published_during_setup = []
+
+    def reject_chown(*_args):
+        published_during_setup.append(path.exists())
+        raise PermissionError("injected chown failure")
+
+    monkeypatch.setattr(rpc.os, "chown", reject_chown)
+    with pytest.raises(PermissionError, match="injected chown failure"):
+        asyncio.run(server.run())
+
+    assert published_during_setup == [False]
+    assert not path.exists()
 
 
 def test_unix_rpc_rejects_an_overlong_socket_path_before_startup(tmp_path):
