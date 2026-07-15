@@ -283,46 +283,45 @@ def test_unix_server_rejects_requests_until_runtime_readiness_is_true(tmp_path):
 def test_unix_server_fences_preconnected_clients_before_shutdown(tmp_path):
     from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
 
+    class BlockingServer(ProposalRpcServer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.handler_entered = asyncio.Event()
+            self.handler_finished = asyncio.Event()
+
+        async def _serve_one(self, reader, writer):
+            self.handler_entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                self.handler_finished.set()
+
     async def scenario():
         path = tmp_path / "shutdown.sock"
         facade = _Facade()
-        server = ProposalRpcServer(
+        server = BlockingServer(
             path, ProposalRpcDispatcher(facade), runtime_ready=lambda: True,
-            request_timeout_seconds=0.5,
+            request_timeout_seconds=0.05,
         )
         task = asyncio.create_task(server.run())
         await asyncio.wait_for(server.started.wait(), timeout=1)
-        reader, writer = await asyncio.open_unix_connection(path)
-        while not server._client_tasks:
-            await asyncio.sleep(0)
+        _reader, writer = await asyncio.open_unix_connection(path)
+        await asyncio.wait_for(server.handler_entered.wait(), timeout=1)
 
         task.cancel()
-        while server._accepting_requests:
-            await asyncio.sleep(0)
-        response = None
-        try:
-            writer.write(_wire({
-                "version": 1, "id": "too-late", "method": "get_book",
-                "params": {"token_id": "11"},
-            }))
-            await writer.drain()
-            frame = await asyncio.wait_for(reader.readline(), timeout=0.2)
-            if frame:
-                response = json.loads(frame)
-        except ConnectionError:
-            pass
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert server.handler_finished.is_set()
+        assert not server._client_tasks
+        assert server._active_requests == 0
+        assert facade.calls == []
+        assert not path.exists()
         writer.close()
         try:
             await writer.wait_closed()
         except ConnectionError:
             pass
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        if response is not None:
-            assert response["error"]["code"] == "server_stopping"
-        assert facade.calls == []
-        assert not path.exists()
 
     import pytest
     asyncio.run(scenario())
