@@ -57,6 +57,11 @@ class SystemdReadiness:
     def stopping(self):
         self._notify(b"STOPPING=1")
 
+    def status(self, message):
+        if not isinstance(message, str) or not message or "\n" in message:
+            raise ValueError("systemd status must be one non-empty line")
+        self._notify(("STATUS=" + message).encode())
+
     def _notify(self, payload):
         if not self._address:
             return

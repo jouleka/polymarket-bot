@@ -30,6 +30,7 @@ def _config(tmp_path):
         maker_db_path=path("maker.db"),
         shadow_db_path=path("shadow.db"),
         resolution_db_path=path("resolution.db"),
+        status_path=path("shadow-status.json"),
         polygon_providers=(
             ReadOnlyPolygonProviderConfig("a", "https://a.example"),
             ReadOnlyPolygonProviderConfig("b", "https://b.example"),
@@ -108,6 +109,12 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert evidence.reports
         assert all(not decision.promote_recommended
                    for decision in evidence.decisions.values())
+        runtime._cycle._status_update()
+        status = json.loads((tmp_path / "shadow-status.json").read_text())
+        assert status["controller"] == "HALTED"
+        assert status["pending_intents"] == 0
+        assert status["resolution_outbox"] == 0
+        assert status["execution_outbox"] == 0
     finally:
         runtime.close_unstarted()
 
