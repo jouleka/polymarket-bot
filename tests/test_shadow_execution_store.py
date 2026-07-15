@@ -246,3 +246,23 @@ def test_reopen_rejects_invalid_outbox_state(tmp_path):
 
     with pytest.raises(SettlementConflict, match="outbox state"):
         IntentStore(path, MonotonicStamper())
+
+
+def test_reopen_rejects_execution_identity_drift_from_accepted_intent(tmp_path):
+    path = str(tmp_path / "identity-drift.db")
+    with IntentStore(path, MonotonicStamper()) as store:
+        store.propose_trade("intent-1", **_PROPOSAL)
+        store.record_decision(
+            "intent-1",
+            Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "per_trade_cap"),
+            shadow_execution=_execution(),
+        )
+    with sqlite3.connect(path) as corrupt:
+        corrupt.execute(
+            "UPDATE shadow_executions SET token_id='202', outcome_slot=1 "
+            "WHERE execution_id='intent-1'"
+        )
+        corrupt.commit()
+
+    with pytest.raises(SettlementConflict, match="execution identity contradicts intent"):
+        IntentStore(path, MonotonicStamper())

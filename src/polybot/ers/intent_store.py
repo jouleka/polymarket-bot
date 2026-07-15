@@ -402,6 +402,15 @@ class IntentStore:
         if any(count != 2 or maker != 1 or shadow != 1
                for _execution_id, count, maker, shadow in roles):
             raise SettlementConflict("shadow execution outbox target roles are incomplete")
+        identity_drift = self._conn.execute(
+            "SELECT 1 FROM shadow_executions AS e "
+            "LEFT JOIN pending_intents AS i ON i.intent_id=e.execution_id "
+            "WHERE i.intent_id IS NULL OR i.status IS NOT 'ACCEPTED' "
+            "OR i.decision_verdict IS NOT 'ACCEPT' OR e.token_id IS NOT i.token_id "
+            "OR e.condition_id IS NOT i.condition_id OR e.event_id IS NOT i.event_id LIMIT 1"
+        ).fetchone()
+        if identity_drift is not None:
+            raise SettlementConflict("shadow execution identity contradicts intent")
         rows = self._conn.execute(
             "SELECT execution_id, token_id, condition_id, event_id, category, outcome_slot, "
             "sibling_token_ids, side, shares, price_exec, fill_mid, reward_accrued "
