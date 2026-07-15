@@ -58,6 +58,26 @@ def test_registry_refresh_cannot_expand_the_collector_universe():
     assert provider.token_ids == ("t1", "t2")
 
 
+def test_registry_refresh_replaces_market_rows_for_read_only_consumers():
+    snapshots = iter([
+        ([_market(question="Initial question")], [_event()]),
+        ([_market(question="Updated question")], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+
+    provider.load()
+    assert provider.market_rows[0]["question"] == "Initial question"
+
+    provider.refresh()
+
+    assert provider.market_rows[0]["question"] == "Updated question"
+
+
 def test_last_good_registry_fails_closed_after_its_age_budget():
     age = [100.0]
     calls = [0]

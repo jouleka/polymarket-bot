@@ -1,5 +1,9 @@
 # Deploy — polymarket-bot composite paper-shadow runtime
 
+POL-18's separately gated dedicated Hermes profile, exact-five-tool preflight, stopped install,
+activation, and rollback procedure is in [`hermes/README.md`](hermes/README.md). This document
+continues to own the composite POL-17 ingestion/ERS runtime and production persistence contract.
+
 Paper-only, with no keys, wallet, live order client, chain writes, or listening port. One supervised
 process maintains CLOB books in memory, runs the ERS and harness against those same live books,
 polls two read-only Polygon providers for resolution, persists one versioned `clob-midpoint` batch

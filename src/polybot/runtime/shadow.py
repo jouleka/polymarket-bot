@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import grp
 import logging
 import signal
 import sys
@@ -31,7 +32,7 @@ def build_production_runtime(
         health_stamper_factory=MonotonicStamper,
         news_fetch_factory=make_text_fetch,
         lock_factory=SingletonLock, readiness_factory=SystemdReadiness,
-        root_builder=build_shadow_runtime):
+        root_builder=build_shadow_runtime, group_resolver=grp.getgrnam):
     """Own all live read-only adapters and transfer them to one paper runtime."""
     if gamma_factory is None:
         gamma_factory = lambda runtime_config: make_gamma_snapshot_fetch(
@@ -45,6 +46,14 @@ def build_production_runtime(
     providers = None
     provider_close = None
     try:
+        proposal_group_gid = None
+        if getattr(config, "proposal_socket_path", None) is not None:
+            group = group_resolver(config.proposal_socket_group)
+            proposal_group_gid = group.gr_gid
+            if (isinstance(proposal_group_gid, bool)
+                    or not isinstance(proposal_group_gid, int)
+                    or proposal_group_gid < 0):
+                raise ValueError("proposal socket group resolved to an invalid gid")
         gamma = gamma_factory(config)
         providers, provider_close = provider_factory(config)
         runtime = root_builder(
@@ -58,6 +67,7 @@ def build_production_runtime(
             readiness=readiness_factory(),
             extra_closers=(gamma.close, provider_close),
             lock_acquired=True,
+            proposal_socket_group_gid=proposal_group_gid,
         )
         lock_owned = False
         return runtime

@@ -19,20 +19,24 @@ def test_installer_leaves_service_stopped_and_disabled():
         if line.strip() and not line.lstrip().startswith(("#", "echo"))
     ]
     install = 'cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service'
+    install_brain = 'cp "$APP/deploy/polymarket-hermes.service" /etc/systemd/system/polymarket-hermes.service'
     reload = "systemctl daemon-reload"
-    disable = "systemctl disable --now polymarket-ingestion.service"
+    disable = "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service"
     verify = "verify_service_stopped_disabled"
 
     assert install in commands
+    assert install_brain in commands
     assert reload in commands
     assert disable in commands
     assert verify in commands
-    assert commands.index(install) < commands.index(reload) < commands.index(disable) < commands.index(verify)
-    assert "systemctl is-active polymarket-ingestion.service" in text
-    assert "systemctl is-enabled polymarket-ingestion.service" in text
+    assert (commands.index(install) < commands.index(install_brain)
+            < commands.index(reload) < commands.index(disable) < commands.index(verify))
+    assert "for unit in polymarket-ingestion.service polymarket-hermes.service" in text
+    assert 'systemctl is-active "$unit"' in text
+    assert 'systemctl is-enabled "$unit"' in text
     assert all("|| true" not in line for line in commands if "disable --now" in line)
     assert not re.search(r"^\s*systemctl\s+(?:enable|reenable|start|restart)\b", text, re.MULTILINE)
-    assert "installed; service remains STOPPED + DISABLED" in text
+    assert "installed; both services remain STOPPED + DISABLED" in text
 
 
 def _run_installer_state_check(*, active, active_rc, enabled, enabled_rc):
@@ -92,6 +96,71 @@ def test_installer_state_check_rejects_unsafe_state(
     assert message in result.stderr
 
 
+def _run_preinstall_state_check(*, ingestion_active, ingestion_load,
+                                brain_active, brain_load):
+    text = INSTALLER.read_text()
+    start = text.index("verify_services_not_active() {")
+    end = text.index("\n}\n", start) + len("\n}")
+    function = text[start:end]
+    harness = f'''\
+systemctl() {{
+    case "$1:$2:$4" in
+        show:--property=ActiveState:polymarket-ingestion.service)
+            printf '%s\n' "$MOCK_INGESTION_ACTIVE"; return 0 ;;
+        show:--property=LoadState:polymarket-ingestion.service)
+            printf '%s\n' "$MOCK_INGESTION_LOAD"; return 0 ;;
+        show:--property=ActiveState:polymarket-hermes.service)
+            printf '%s\n' "$MOCK_BRAIN_ACTIVE"; return 0 ;;
+        show:--property=LoadState:polymarket-hermes.service)
+            printf '%s\n' "$MOCK_BRAIN_LOAD"; return 0 ;;
+        *) return 99 ;;
+    esac
+}}
+{function}
+verify_services_not_active
+'''
+    env = os.environ | {
+        "MOCK_INGESTION_ACTIVE": ingestion_active,
+        "MOCK_INGESTION_LOAD": ingestion_load,
+        "MOCK_BRAIN_ACTIVE": brain_active,
+        "MOCK_BRAIN_LOAD": brain_load,
+    }
+    return subprocess.run(
+        ["bash", "-c", harness], env=env, text=True,
+        capture_output=True, check=False,
+    )
+
+
+def test_preinstall_gate_accepts_only_inactive_ingestion_and_absent_new_brain_unit():
+    first_install = _run_preinstall_state_check(
+        ingestion_active="inactive", ingestion_load="loaded",
+        brain_active="inactive", brain_load="not-found",
+    )
+    assert first_install.returncode == 0, first_install.stderr
+
+    safe_rerun = _run_preinstall_state_check(
+        ingestion_active="inactive", ingestion_load="loaded",
+        brain_active="inactive", brain_load="loaded",
+    )
+    assert safe_rerun.returncode == 0, safe_rerun.stderr
+
+    for ingestion_active, ingestion_load, brain_active, brain_load in (
+        ("inactive", "not-found", "inactive", "not-found"),
+        ("active", "loaded", "inactive", "not-found"),
+        ("inactive", "loaded", "activating", "loaded"),
+        ("inactive", "loaded", "failed", "loaded"),
+        ("inactive", "loaded", "active", "not-found"),
+    ):
+        unsafe = _run_preinstall_state_check(
+            ingestion_active=ingestion_active,
+            ingestion_load=ingestion_load,
+            brain_active=brain_active,
+            brain_load=brain_load,
+        )
+        assert unsafe.returncode != 0
+        assert "refusing install" in unsafe.stderr
+
+
 def test_unit_describes_compact_midpoint_and_trade_persistence():
     description = next(
         line for line in UNIT.read_text().splitlines()
@@ -115,8 +184,10 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "TimeoutStopSec=60" in text
     assert "After=network-online.target" in text
     assert "Wants=network-online.target" in text
-    assert "RuntimeDirectory=polybot" in text
+    assert "RuntimeDirectory=polybot polybot-proposal" in text
     assert "RuntimeDirectoryMode=0750" in text
+    assert "SupplementaryGroups=polybot-proposal" in text
+    assert "ExecStartPre=/usr/bin/chgrp polybot-proposal /run/polybot-proposal" in text
 
 
 def test_runbook_requires_nonempty_old_database_evidence():

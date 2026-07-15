@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import math
 import os
 from pathlib import Path
+import re
 import tomllib
 from urllib.parse import urlsplit
 
@@ -54,6 +55,10 @@ class ShadowRuntimeConfig:
     readiness_timeout_seconds: float = 60.0
     outbox_batch_limit: int = 100
     status_path: str = "/run/polybot/shadow-status.json"
+    proposal_socket_path: str | None = None
+    proposal_socket_group: str | None = None
+    proposal_max_per_minute: int = 20
+    proposal_request_timeout_seconds: float = 2.0
     paper_only: bool = field(default=True, init=False)
 
     def __post_init__(self):
@@ -78,6 +83,23 @@ class ShadowRuntimeConfig:
             raise ValueError("status_path must be a non-empty exact string")
         if Path(self.status_path).resolve(strict=False) in resolved_paths:
             raise ValueError("status_path must not alias a database path")
+        if (self.proposal_socket_path is None) != (self.proposal_socket_group is None):
+            raise ValueError("proposal socket path and group must be configured together")
+        if self.proposal_socket_path is not None:
+            if (not isinstance(self.proposal_socket_path, str)
+                    or not self.proposal_socket_path
+                    or self.proposal_socket_path != self.proposal_socket_path.strip()
+                    or not Path(self.proposal_socket_path).is_absolute()):
+                raise ValueError("proposal socket path must be an absolute exact string")
+            proposal_path = Path(self.proposal_socket_path).resolve(strict=False)
+            if (proposal_path in resolved_paths
+                    or proposal_path == Path(self.status_path).resolve(strict=False)):
+                raise ValueError("proposal socket path must not alias persistence or status")
+            if (not isinstance(self.proposal_socket_group, str)
+                    or re.fullmatch(
+                        r"[a-z_][a-z0-9_-]{0,31}", self.proposal_socket_group
+                    ) is None):
+                raise ValueError("proposal socket group must be a canonical system group name")
         providers = self.polygon_providers
         if (not isinstance(providers, tuple) or len(providers) != 2
                 or any(not isinstance(provider, ReadOnlyPolygonProviderConfig)
@@ -97,6 +119,7 @@ class ShadowRuntimeConfig:
             "news_poll_seconds",
             "rpc_timeout_seconds",
             "readiness_timeout_seconds",
+            "proposal_request_timeout_seconds",
         ):
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
@@ -107,6 +130,10 @@ class ShadowRuntimeConfig:
                 or not isinstance(self.outbox_batch_limit, int)
                 or self.outbox_batch_limit <= 0):
             raise ValueError("outbox_batch_limit must be a positive integer")
+        if (isinstance(self.proposal_max_per_minute, bool)
+                or not isinstance(self.proposal_max_per_minute, int)
+                or self.proposal_max_per_minute <= 0):
+            raise ValueError("proposal_max_per_minute must be a positive integer")
 
     @property
     def database_paths(self):
@@ -188,6 +215,7 @@ _SHADOW_FLOAT = {
     "registry_max_age_seconds", "resolution_poll_seconds",
     "news_poll_seconds",
     "rpc_timeout_seconds", "readiness_timeout_seconds",
+    "proposal_request_timeout_seconds",
 }
 
 
@@ -202,7 +230,7 @@ def _coerce_ingestion(name, raw):
 
 
 def _coerce_shadow(name, raw):
-    if name == "outbox_batch_limit":
+    if name in {"outbox_batch_limit", "proposal_max_per_minute"}:
         return int(raw)
     if name in _SHADOW_FLOAT:
         return float(raw)

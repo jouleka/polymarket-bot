@@ -90,7 +90,7 @@ class FixedUniverseRegistryProvider:
         if initial:
             self._identity = identity
             self._token_ids = token_ids
-            self._market_rows = tuple(market_rows)
+        self._market_rows = tuple(market_rows)
         self._loaded_at = self._age_clock()
         return candidate
 

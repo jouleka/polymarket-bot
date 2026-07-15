@@ -56,6 +56,22 @@ def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_provider
     assert config.rpc_timeout_seconds == 15.0
     assert config.readiness_timeout_seconds == 60.0
     assert config.outbox_batch_limit > 0
+    assert config.proposal_socket_path is None
+    assert config.proposal_socket_group is None
+
+
+def test_shadow_runtime_config_requires_an_absolute_group_scoped_proposal_endpoint():
+    config = _config(
+        proposal_socket_path="/run/polybot-proposal/proposal.sock",
+        proposal_socket_group="polybot-proposal",
+        proposal_max_per_minute=20,
+        proposal_request_timeout_seconds=2.0,
+    )
+
+    assert config.proposal_socket_path == "/run/polybot-proposal/proposal.sock"
+    assert config.proposal_socket_group == "polybot-proposal"
+    assert config.proposal_max_per_minute == 20
+    assert config.proposal_request_timeout_seconds == 2.0
 
 
 @pytest.mark.parametrize(

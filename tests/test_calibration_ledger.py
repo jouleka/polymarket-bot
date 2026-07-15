@@ -306,6 +306,17 @@ def test_resolved_filters_by_category(tmp_path):
         assert [x.forecast_id for x in l.resolved(category="sports")] == ["f2"]
 
 
+def test_resolved_can_bound_the_sql_query_to_newest_rows(tmp_path):
+    with _ledger(str(tmp_path / "f.db")) as ledger:
+        for forecast_id in ("f1", "f2", "f3"):
+            _rec(ledger, forecast_id)
+            ledger.record_resolution(forecast_id, "WON")
+
+        assert [
+            row.forecast_id for row in ledger.resolved(limit=2)
+        ] == ["f3", "f2"]
+
+
 def test_rejects_an_invalid_resolution_status(tmp_path):
     with _ledger(str(tmp_path / "f.db")) as l:
         _rec(l, "f1")

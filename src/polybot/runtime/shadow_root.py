@@ -9,6 +9,19 @@ import threading
 import time
 
 from polybot.ers.heartbeat import Heartbeat
+from polybot.ers.facade import ProposeOnlyFacade
+from polybot.ers.market_meta import MarketSnapshotError
+from polybot.hermes.read_views import (
+    BookReadView,
+    FlagsReadView,
+    LedgerReadView,
+    MarketReadView,
+)
+from polybot.hermes.rpc import (
+    ProposalRateLimiter,
+    ProposalRpcDispatcher,
+    ProposalRpcServer,
+)
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 from polybot.ingestion.news import NewsPoller
 from polybot.ers.market_meta import DEFAULT_CATEGORY_POLICY
@@ -38,8 +51,14 @@ def _drain_fully(dispatcher, limit):
 def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
                          ws_connect=None, data_fetch=None, history_stamper,
                          health_stamper, news_fetch, lock, readiness,
-                         extra_closers=(), lock_acquired=False):
+                         extra_closers=(), lock_acquired=False,
+                         proposal_socket_group_gid=None):
     """Construct the real paper runtime from one Gamma generation and one collector."""
+    if config.proposal_socket_path is not None and (
+            isinstance(proposal_socket_group_gid, bool)
+            or not isinstance(proposal_socket_group_gid, int)
+            or proposal_socket_group_gid < 0):
+        raise ValueError("configured proposal endpoint requires its resolved group gid")
     registry_provider = FixedUniverseRegistryProvider(
         fetch_snapshot=gamma_snapshot_fetch,
         wall_clock=time.time,
@@ -104,6 +123,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST
     ))
     last_news_results = {}
+    proposal_admission = {"enabled": False}
 
     async def poll_news():
         while True:
@@ -127,6 +147,55 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         ramp_controller=components.ramp_controller,
         portfolio_for=components.controller.current_portfolio,
     ))
+
+    proposal_server = None
+    proposal_facade = None
+    if config.proposal_socket_path is not None:
+        def registry_fresh():
+            try:
+                registry_provider.require_fresh()
+            except MarketSnapshotError:
+                return False
+            return True
+
+        def live_book_tokens():
+            available = []
+            for token_id in ingestion.token_ids:
+                book = ingestion.book_for(token_id)
+                if (book is not None and not book.is_stale()
+                        and book.midpoint() is not None):
+                    available.append(token_id)
+            return tuple(available)
+
+        proposal_facade = guarded(lambda: ProposeOnlyFacade(
+            components.intent_store,
+            market_reader=MarketReadView(registry_provider),
+            book_reader=BookReadView(
+                ingestion.book_for, token_ids=ingestion.token_ids,
+            ),
+            ledger_reader=LedgerReadView(
+                components.forecast_ledger, categories=categories,
+            ),
+            flags_reader=FlagsReadView(
+                runtime_ready=lambda: proposal_admission["enabled"],
+                controller_state=lambda: components.controller._controller.state(),
+                resolution_state=components.resolution_store.runtime_state,
+                registry_fresh=registry_fresh,
+                live_book_tokens=live_book_tokens,
+            ),
+        ))
+        proposal_server = guarded(lambda: ProposalRpcServer(
+            config.proposal_socket_path,
+            ProposalRpcDispatcher(
+                proposal_facade,
+                proposal_gate=ProposalRateLimiter(
+                    config.proposal_max_per_minute, 60.0,
+                ),
+            ),
+            runtime_ready=lambda: proposal_admission["enabled"],
+            socket_group=proposal_socket_group_gid,
+            request_timeout_seconds=config.proposal_request_timeout_seconds,
+        ))
 
     status_reporter = RuntimeStatusReporter(
         config.status_path, readiness=readiness
@@ -188,8 +257,15 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             frozen_condition_ids=state.frozen_condition_ids,
         )
 
+    runtime_services = ingestion.services + (poll_news,)
+    if proposal_server is not None:
+        runtime_services += (proposal_server.run,)
+
+    def set_proposal_admission(enabled):
+        proposal_admission["enabled"] = enabled
+
     runtime = guarded(lambda: ShadowRuntime(
-        services=ingestion.services + (poll_news,),
+        services=runtime_services,
         writer=ingestion.writer,
         lock=lock,
         recover_resolution=recover_resolution,
@@ -212,6 +288,9 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         closers=tuple(extra_closers) + (components.close,),
         lock_acquired=lock_acquired,
         stop_requested=worker_stop.set,
+        set_proposal_admission=(
+            set_proposal_admission if proposal_server is not None else None
+        ),
     ))
     construction_closers.clear()  # ownership transferred to ShadowRuntime
     # Introspection is intentional for review/tests; none of these grants mutation
@@ -224,4 +303,6 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     runtime._news_poller = news_poller
     runtime._harness = harness
     runtime._status_reporter = status_reporter
+    runtime._proposal_server = proposal_server
+    runtime._proposal_facade = proposal_facade
     return runtime

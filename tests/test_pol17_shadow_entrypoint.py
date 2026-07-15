@@ -84,6 +84,36 @@ def test_production_builder_acquires_singleton_before_any_adapter_or_store():
     assert trace[:5] == ["lock", "gamma", "providers", "history", "stores"]
 
 
+def test_production_builder_resolves_only_the_configured_proposal_group():
+    received = []
+    config = SimpleNamespace(
+        ingestion=SimpleNamespace(db_path="/data/events.db"),
+        rpc_timeout_seconds=5,
+        database_paths=("/data/events.db",),
+        proposal_socket_path="/run/polybot-proposal/proposal.sock",
+        proposal_socket_group="polybot-proposal",
+    )
+
+    shadow.build_production_runtime(
+        config,
+        gamma_factory=lambda _config: SimpleNamespace(close=lambda: None),
+        provider_factory=lambda _config: ((object(), object()), lambda: None),
+        history_stamper_factory=lambda _paths: object(),
+        health_stamper_factory=lambda: object(),
+        news_fetch_factory=lambda **_kwargs: object(),
+        lock_factory=lambda _path: SimpleNamespace(
+            acquire=lambda: None, release=lambda: None,
+        ),
+        readiness_factory=lambda: object(),
+        group_resolver=lambda name: received.append(name) or SimpleNamespace(gr_gid=456),
+        root_builder=lambda _config, **kwargs: SimpleNamespace(
+            proposal_gid=kwargs["proposal_socket_group_gid"],
+        ),
+    )
+
+    assert received == ["polybot-proposal"]
+
+
 def test_production_builder_attempts_every_cleanup_after_construction_failure():
     trace = []
 

@@ -102,6 +102,31 @@ def test_rejects_a_stale_book():
     assert d.verdict == "REJECT" and d.reason == "book_stale"
 
 
+def test_rejects_a_stale_reporting_book_even_when_cached_prices_remain_visible():
+    class StaleCachedBook:
+        @staticmethod
+        def is_stale():
+            return True
+
+        @staticmethod
+        def best_ask():
+            return Decimal("0.50")
+
+        @staticmethod
+        def midpoint():
+            return Decimal("0.45")
+
+        @staticmethod
+        def top_of_book():
+            return (Decimal("0.40"), Decimal("1000"),
+                    Decimal("0.50"), Decimal("1000"))
+
+    d = evaluate_intent(
+        _intent("0.7", "0.60"), StaleCachedBook(), _portfolio(), RiskCaps(),
+    )
+    assert d.verdict == "REJECT" and d.reason == "book_stale"
+
+
 def test_skips_when_executable_price_is_above_the_limit():
     book = _book("0.70")
     d = evaluate_intent(_intent("0.9", "0.60"), book, _portfolio(), RiskCaps())

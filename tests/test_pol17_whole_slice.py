@@ -1,3 +1,4 @@
+import asyncio
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -6,6 +7,14 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.facade import ProposeOnlyFacade
+from polybot.hermes.mcp_bridge import ProposalMcpServer
+from polybot.hermes.read_views import BookReadView, LedgerReadView
+from polybot.hermes.rpc import (
+    ProposalRpcClient,
+    ProposalRpcDispatcher,
+    ProposalRpcServer,
+    RpcRemoteError,
+)
 from polybot.harness.evidence import evaluate_category
 from polybot.ingestion.envelope import make_envelope
 from polybot.ingestion.orderbook import LocalBook
@@ -162,12 +171,131 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
     try:
         _warm_calibration(first.forecast_ledger)
         first.controller.boot()
-        ProposeOnlyFacade(first.intent_store).propose_trade(
-            "intent-1", token_id="101", condition_id=CONDITION,
-            event_id="event-1", side="BUY", target_price="0.49",
-            max_price="0.60", size_usd_suggestion="12", p="0.90",
-            p_confidence="0.75", citations=("citation-1", "citation-2"),
+        facade = ProposeOnlyFacade(
+            first.intent_store,
+            market_reader=lambda **_params: {
+                "markets": [{"condition_id": CONDITION, "token_ids": list(TOKENS)}],
+            },
+            book_reader=BookReadView(
+                lambda token_id: book if token_id in TOKENS else None,
+                token_ids=TOKENS,
+            ),
+            ledger_reader=LedgerReadView(
+                first.forecast_ledger, categories=("politics",),
+            ),
+            flags_reader=lambda: {
+                "runtime_ready": True, "trading_permission": False,
+            },
         )
+
+        def proposal(intent_id):
+            return {
+                "intent_id": intent_id,
+                "token_id": "101",
+                "condition_id": CONDITION,
+                "event_id": "event-1",
+                "side": "BUY",
+                "target_price": "0.49",
+                "max_price": "0.60",
+                "size_usd_suggestion": "12",
+                "p": "0.90",
+                "p_confidence": "0.75",
+                "citations": ["citation-1", "citation-2"],
+            }
+
+        async def with_restarted_brain(action):
+            socket_path = tmp_path / "whole-slice.sock"
+            server = ProposalRpcServer(
+                socket_path, ProposalRpcDispatcher(facade),
+                runtime_ready=lambda: True,
+            )
+            server_task = asyncio.create_task(server.run())
+            try:
+                await asyncio.wait_for(server.started.wait(), timeout=1)
+                bridge = ProposalMcpServer(ProposalRpcClient(socket_path))
+                await action(bridge, socket_path)
+            finally:
+                server_task.cancel()
+                try:
+                    await server_task
+                except asyncio.CancelledError:
+                    pass
+            assert not socket_path.exists()
+
+        async def disconnected_and_stale_brain_phase(bridge, socket_path):
+            book.mark_stale()
+            with pytest.raises(RpcRemoteError, match="request_rejected"):
+                await bridge.call_tool("get_book", {"token_id": "101"})
+            assert first.intent_store.pending() == []
+            book.apply_book({
+                "bids": [{"price": "0.48", "size": "100000"}],
+                "asks": [{"price": "0.52", "size": "100000"}],
+            })
+
+            _reader, writer = await asyncio.open_unix_connection(socket_path)
+            writer.write(b'{"version":1,"id":"disconnected"')
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            await asyncio.sleep(0)
+            assert first.intent_store.pending() == []
+            assert await bridge.call_tool(
+                "propose_trade", proposal("intent-stale-validation"),
+            ) is True
+
+        asyncio.run(with_restarted_brain(disconnected_and_stale_brain_phase))
+        book.mark_stale()
+        first.controller.run_cycle(
+            eligible_intent_ids=frozenset({"intent-stale-validation"})
+        )
+        assert first.intent_store.get("intent-stale-validation").status == "REJECTED"
+        assert first.intent_store.pending_shadow_executions(10) == ()
+        book.apply_book({
+            "bids": [{"price": "0.48", "size": "100000"}],
+            "asks": [{"price": "0.52", "size": "100000"}],
+        })
+
+        async def stale_execution_proposal(bridge, _socket_path):
+            assert await bridge.call_tool(
+                "propose_trade", proposal("intent-stale-execution"),
+            ) is True
+
+        asyncio.run(with_restarted_brain(stale_execution_proposal))
+        real_planner = first.controller._shadow_planner
+
+        def stale_second_fetch(intent, decision):
+            book.mark_stale()
+            return real_planner(intent, decision)
+
+        first.controller._shadow_planner = stale_second_fetch
+        first.controller.run_cycle(
+            eligible_intent_ids=frozenset({"intent-stale-execution"})
+        )
+        assert first.intent_store.get("intent-stale-execution").status == "REJECTED"
+        assert first.intent_store.pending_shadow_executions(10) == ()
+        first.controller._shadow_planner = real_planner
+        book.apply_book({
+            "bids": [{"price": "0.48", "size": "100000"}],
+            "asks": [{"price": "0.52", "size": "100000"}],
+        })
+
+        async def successful_proposal(bridge, _socket_path):
+            assert (await bridge.call_tool("get_book", {"token_id": "101"}))[
+                "midpoint"] == "0.50"
+            assert (await bridge.call_tool("get_market", {"limit": 1}))[
+                "markets"][0]["condition_id"] == CONDITION
+            assert (await bridge.call_tool(
+                "get_ledger", {"category": "politics", "limit": 1},
+            ))["records"]
+            assert (await bridge.call_tool("get_flags", {}))[
+                "trading_permission"] is False
+            with pytest.raises(ValueError, match="not approved"):
+                await bridge.call_tool("record_decision", {})
+            assert await bridge.call_tool(
+                "propose_trade", proposal("intent-1"),
+            ) is True
+
+        asyncio.run(with_restarted_brain(successful_proposal))
         unresolved, = first.resolution_feed.poll((subject,))
         assert unresolved.disposition.value == "UNRESOLVED"
 

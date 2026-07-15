@@ -1,0 +1,86 @@
+{
+  "model": {
+    "default": "OWNER_CONFIG_REQUIRED",
+    "provider": "OWNER_CONFIG_REQUIRED"
+  },
+  "mcp_servers": {
+    "polymarket": {
+      "command": "/opt/polymarket-bot/.venv/bin/python",
+      "args": [
+        "-m",
+        "polybot.hermes.mcp_bridge",
+        "--socket",
+        "/run/polybot-proposal/proposal.sock"
+      ],
+      "env": {
+        "PYTHONPATH": "/opt/polymarket-bot/src"
+      },
+      "enabled": true,
+      "timeout": 5,
+      "connect_timeout": 5,
+      "supports_parallel_tool_calls": false,
+      "tools": {
+        "include": [
+          "propose_trade",
+          "get_market",
+          "get_book",
+          "get_ledger",
+          "get_flags"
+        ],
+        "resources": false,
+        "prompts": false
+      }
+    }
+  },
+  "platform_toolsets": {
+    "api_server": ["polymarket"],
+    "bluebubbles": ["polymarket"],
+    "cli": ["polymarket"],
+    "cron": ["polymarket"],
+    "dingtalk": ["polymarket"],
+    "discord": ["polymarket"],
+    "email": ["polymarket"],
+    "feishu": ["polymarket"],
+    "homeassistant": ["polymarket"],
+    "matrix": ["polymarket"],
+    "mattermost": ["polymarket"],
+    "qqbot": ["polymarket"],
+    "signal": ["polymarket"],
+    "slack": ["polymarket"],
+    "telegram": ["polymarket"],
+    "webhook": ["polymarket"],
+    "wecom": ["polymarket"],
+    "wecom_callback": ["polymarket"],
+    "weixin": ["polymarket"],
+    "whatsapp": ["polymarket"],
+    "whatsapp_cloud": ["polymarket"],
+    "yuanbao": ["polymarket"]
+  },
+  "agent": {
+    "disabled_toolsets": ["feishu_doc", "feishu_drive", "kanban"]
+  },
+  "memory": {
+    "memory_enabled": true,
+    "user_profile_enabled": true,
+    "write_approval": false,
+    "provider": ""
+  },
+  "skills": {
+    "external_dirs": [],
+    "inline_shell": false,
+    "write_approval": false
+  },
+  "approvals": {
+    "mode": "manual",
+    "cron_mode": "deny",
+    "mcp_reload_confirm": true
+  },
+  "security": {
+    "allow_private_urls": false,
+    "redact_secrets": true,
+    "tirith_enabled": true,
+    "tirith_fail_open": false,
+    "allow_lazy_installs": false
+  },
+  "hooks_auto_accept": false
+}
