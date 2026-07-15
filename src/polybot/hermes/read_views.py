@@ -142,8 +142,7 @@ class LedgerReadView:
         if (isinstance(limit, bool) or not isinstance(limit, int)
                 or limit <= 0 or limit > self._max_limit):
             raise ValueError(f"ledger limit must be in [1, {self._max_limit}]")
-        rows = self._ledger.resolved(category)
-        selected = list(reversed(rows[-limit:]))
+        selected = self._ledger.resolved(category, limit=limit)
         return {
             "category": category,
             "limit": limit,

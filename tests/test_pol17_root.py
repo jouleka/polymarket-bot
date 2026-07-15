@@ -149,6 +149,11 @@ def test_root_composes_propose_only_server_without_a_second_store_or_collector(t
             runtime._components.intent_store
         )
         assert runtime._collector is runtime._ingestion.collector
+        assert sum(
+            service == runtime._proposal_server.run
+            for service in runtime._services
+        ) == 1
+        assert runtime._components.intent_store.pending() == []
         flags = runtime._proposal_facade.get_flags()
         assert flags["runtime_ready"] is False
         assert flags["trading_permission"] is False

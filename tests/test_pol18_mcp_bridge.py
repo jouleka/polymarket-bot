@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import os
 from pathlib import Path
 import sys
@@ -52,6 +53,30 @@ def test_mcp_tool_call_maps_one_to_one_to_the_socket_client():
 
     assert result == {"method": "get_book", "params": {"token_id": "11"}}
     assert client.calls == [("get_book", {"token_id": "11"})]
+
+
+def test_mcp_bridge_imports_only_sdk_and_socket_client_capabilities():
+    path = Path(__file__).resolve().parents[1] / "src" / "polybot" / "hermes" / "mcp_bridge.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    forbidden = {
+        "intent_store", "controller", "signer", "wallet", "order", "cancel",
+        "redeem", "settlement", "subprocess", "sqlite", "terminal", "shell",
+    }
+    assert not {
+        fragment for fragment in forbidden
+        if any(fragment in module.lower() for module in imported)
+    }
+    assert set(imported) <= {
+        "__future__", "argparse", "asyncio", "mcp", "mcp.server.lowlevel",
+        "mcp.server.stdio", "polybot.hermes.rpc",
+    }
 
 
 def test_real_stdio_mcp_discovers_five_and_calls_the_unix_boundary(tmp_path):

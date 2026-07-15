@@ -125,9 +125,9 @@ class ShadowRuntime:
         await self._wait_for_live_frame()
         self._controller.boot()
         self._apply_initial_resolution_state()
-        self._change_proposal_admission(True)
         self._readiness.ready()
         self._ready = True
+        self._change_proposal_admission(True)
         while True:
             await self._run_cycle()
             try:
