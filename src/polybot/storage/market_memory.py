@@ -85,6 +85,13 @@ class EventStore:
             (observed_at_cutoff,),
         )
 
+    def max_observed_at(self):
+        """Return the durable history floor, or zero for an empty store."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(observed_at), 0) FROM events"
+        ).fetchone()
+        return row[0]
+
     def close(self):
         self._conn.close()
 
