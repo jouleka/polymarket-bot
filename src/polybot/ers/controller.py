@@ -13,6 +13,8 @@ the controller consulted FIRST. The beat-before-process order matters: the out-o
 Clocks are injected for deterministic TDD.
 """
 
+from dataclasses import replace
+
 from polybot.ers.anomaly import HALT
 from polybot.ers.lossbreaker import HALT as LOSS_HALT, PAUSE as LOSS_PAUSE
 from polybot.ers.ramp import step_daily, step_weekly
@@ -23,7 +25,8 @@ from polybot.ers.service import process_pending
 class ERSController:
     def __init__(self, *, store, book_for, caps, signer, controller, breaker=None, pipeline=None,
                  heartbeat=None, gtd_for=None, fill_sink=None, anomaly=None, lossbreakers=None,
-                 telegram=None, reconciler=None, shadow_planner=None, clock):
+                 telegram=None, reconciler=None, shadow_planner=None,
+                 accept_wall_clock=None, clock):
         self._store = store
         self._book_for = book_for
         self._caps = caps
@@ -58,6 +61,9 @@ class ERSController:
         # POL-16 opt-in ACCEPT adapter. None preserves the pre-POL-16 loop exactly;
         # a wired planner returns a canonical filled paper execution or None.
         self._shadow_planner = shadow_planner
+        # POL-17 opt-in atomic fill+flow journal clock. None preserves every
+        # pre-runtime controller call site and its existing fill_sink behavior.
+        self._accept_wall_clock = accept_wall_clock
         self._clock = clock
         # The working portfolio is threaded across cycles (S4.5 rebuilds it from reconcile on
         # boot; for the scaffold it starts empty at this NAV and folds each cycle's ACCEPTs).
@@ -78,7 +84,33 @@ class ERSController:
         from polybot.ers.validator import Portfolio
         return Portfolio(nav=self._caps.nav)
 
-    def run_cycle(self):
+    def current_portfolio(self):
+        """Return the immutable portfolio snapshot owned by this controller."""
+        return self._portfolio
+
+    def apply_resolution_state(self, *, terminal_condition_ids=(),
+                               frozen_condition_ids=()):
+        """Tighten the working portfolio from canonical resolution state.
+
+        Terminal conditions retire risk. Finalized conditions without classified
+        terminal authority remain counted but frozen. This seam cannot add or
+        unfreeze a position and does not mutate NAV or controller state.
+        """
+        from polybot.ers.validator import Portfolio
+
+        terminal = frozenset(terminal_condition_ids)
+        frozen = frozenset(frozen_condition_ids)
+        positions = []
+        for position in self._portfolio.positions:
+            if position.condition_id in terminal:
+                continue
+            if position.condition_id in frozen and not position.frozen:
+                position = replace(position, frozen=True)
+            positions.append(position)
+        self._portfolio = Portfolio(nav=self._portfolio.nav, positions=tuple(positions))
+        return self._portfolio
+
+    def run_cycle(self, *, eligible_intent_ids=None):
         """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
         process_pending(controller=...). Returns the updated portfolio (threaded for the
         next cycle)."""
@@ -146,5 +178,7 @@ class ERSController:
             caps=self._controller.active_caps(),
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
             controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink,
-            shadow_planner=self._shadow_planner)
+            shadow_planner=self._shadow_planner,
+            accept_wall_clock=self._accept_wall_clock,
+            eligible_intent_ids=eligible_intent_ids)
         return self._portfolio

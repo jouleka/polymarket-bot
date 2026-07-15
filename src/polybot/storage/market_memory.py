@@ -5,6 +5,7 @@ and replays strictly in observed_at order so backtests never see the future.
 """
 
 import json
+from pathlib import Path
 import sqlite3
 
 from polybot.core.models import Envelope
@@ -84,6 +85,13 @@ class EventStore:
             (observed_at_cutoff,),
         )
 
+    def max_observed_at(self):
+        """Return the durable history floor, or zero for an empty store."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(observed_at), 0) FROM events"
+        ).fetchone()
+        return row[0]
+
     def close(self):
         self._conn.close()
 
@@ -111,3 +119,36 @@ class EventStore:
             market_links=tuple(json.loads(row[7])),
             trust=row[8],
         )
+
+
+class ReadOnlyEventStore:
+    """Independent WAL reader for live ERS consumers; deliberately no append API."""
+
+    def __init__(self, path):
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        self._conn = sqlite3.connect(uri, uri=True)
+        self._conn.execute("PRAGMA query_only=ON")
+
+    def all(self):
+        return self._query(f"SELECT {_COLUMNS} FROM events ORDER BY observed_at, rowid")
+
+    def replay_until(self, observed_at_cutoff):
+        return self._query(
+            f"SELECT {_COLUMNS} FROM events WHERE observed_at <= ? "
+            "ORDER BY observed_at, rowid",
+            (observed_at_cutoff,),
+        )
+
+    def close(self):
+        self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def _query(self, sql, params=()):
+        rows = self._conn.execute(sql, params).fetchall()
+        return [EventStore._row_to_envelope(row) for row in rows]

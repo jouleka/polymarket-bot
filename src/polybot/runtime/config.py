@@ -75,6 +75,11 @@ def load_config(toml_path: str | None = None, *, env: Mapping[str, str] = os.env
         with open(toml_path, "rb") as fh:
             loaded = tomllib.load(fh)
         for key, val in loaded.items():
+            # POL-17 extends the same deployment file with a strict [shadow]
+            # table. The ingestion-only diagnostic CLI ignores that table while
+            # remaining strict about every other unknown top-level key.
+            if key == "shadow" and isinstance(val, dict):
+                continue
             if key not in field_names:
                 raise ValueError(f"unknown ingestion config key in {toml_path}: {key!r}")
             values[key] = val

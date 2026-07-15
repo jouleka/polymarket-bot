@@ -3,7 +3,7 @@
 Project board: <https://mysigner.youtrack.cloud/projects/POL>
 
 This file is a repository roadmap, not a substitute for the live tracker. Ticket states below were
-reconciled with YouTrack and the repository on 2026-07-14. Each ticket is self-contained; global
+reconciled with YouTrack and the repository on 2026-07-15. Each ticket is self-contained; global
 context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 [`specs/2026-06-24-autonomous-polymarket-bot-design.md`](specs/2026-06-24-autonomous-polymarket-bot-design.md).
 
@@ -25,7 +25,7 @@ context lives in [`CONTEXT.md`](CONTEXT.md), and the master design is in
 | **POL-14** | D1 — MarketRegistry from Gamma metadata | DONE — landed on `main` via [PR #1](https://github.com/jouleka/polymarket-bot/pull/1); merged suite 1,482 passed; 64/64 required mutants and 19/19 bounded sweep pass with zero survivors; not deployed or runtime-composed | POL-13 ingestion substrate |
 | **POL-15** | D2 — resolution / settlement feed | DONE — exact reviewed head `6dc9f6a` landed via [PR #3](https://github.com/jouleka/polymarket-bot/pull/3) as merge `5c4eb7b`; 2,070 tests and final specification/security/mutation gates pass with zero survivors; installed on the VPS after the 1,800-second storage gate, with service stopped/disabled pending later runtime composition | POL-13 substrate; Gamma/on-chain resolution sources |
 | **POL-16** | D3 — shadow-execution and ledger wiring | DONE — exact reviewed head `89e1b6a` landed via [PR #5](https://github.com/jouleka/polymarket-bot/pull/5) as merge `4d1090c`; 2,121 tests; whole-slice crash/replay/settlement proof; independent review found and closed explicit-rounding and restart-integrity gaps; closing re-review and isolated 8/8 mutation gate pass with zero survivors; no runtime, deployment, or signing | POL-15 |
-| **POL-17** | D4b — continuous ERS + harness runtime | OPEN | POL-14, POL-15, POL-16; brain proposal seam |
+| **POL-17** | D4b — continuous ERS + harness runtime | LOCAL REVIEWED BUILD — one-process shared-live-book composition, real safety/registry/resolution/shadow/harness stack, supervised lifecycle, whole-slice restart proof, 16/16 isolated mutations, and 2,208 tests; exact independently reviewed code head `f016621`; not pushed, merged, installed, activated, or deployed | POL-14, POL-15, POL-16; POL-18 later attaches through propose-only transport |
 | **POL-18** | deployed isolated propose-only Hermes brain | OPEN | facade/MCP deployment; consumed by POL-17 runtime |
 
 ## Current build order

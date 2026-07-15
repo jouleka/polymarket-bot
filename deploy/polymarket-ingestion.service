@@ -1,5 +1,5 @@
 [Unit]
-Description=polymarket-bot ingestion (read-only shadow Phase-0; 60-second midpoint batches + trade tape)
+Description=polymarket-bot composite paper shadow (60-second midpoint batches + trade tape)
 After=network-online.target
 Wants=network-online.target
 # Fail-loud: a PERSISTENT venue format-change HALT trips this limit and stays down for a human
@@ -8,22 +8,25 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 User=polybot
+RuntimeDirectory=polybot
+RuntimeDirectoryMode=0750
 WorkingDirectory=/opt/polymarket-bot
 Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=-/opt/polymarket-bot/.env
-ExecStart=/opt/polymarket-bot/.venv/bin/python -m polybot.runtime.ingestion --config /opt/polymarket-bot/config.toml
+ExecStart=/opt/polymarket-bot/.venv/bin/python -m polybot.runtime.shadow --config /opt/polymarket-bot/config.toml
 # on-failure (not always): a clean SIGTERM stop is not restarted; a HALT (exit!=0) restarts up to the limit above.
 Restart=on-failure
-RestartSec=10
-TimeoutStartSec=30
+RestartSec=5
+TimeoutStartSec=60
 # Graceful shutdown: SIGTERM lets IngestionRuntime cancel the collectors and drain the off-loop
 # writer queue (the durability path) before exit. Give it room before SIGKILL.
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec=60
 # Hardening (mirrors memecoin-bot.service).
 NoNewPrivileges=true
 PrivateTmp=true

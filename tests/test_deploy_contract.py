@@ -103,6 +103,22 @@ def test_unit_describes_compact_midpoint_and_trade_persistence():
     assert "un-backfillable order-book" not in description
 
 
+def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
+    text = UNIT.read_text()
+
+    assert "Type=notify" in text
+    assert "NotifyAccess=main" in text
+    assert "python -m polybot.runtime.shadow" in text
+    assert "Restart=on-failure" in text
+    assert "RestartSec=5" in text
+    assert "TimeoutStartSec=60" in text
+    assert "TimeoutStopSec=60" in text
+    assert "After=network-online.target" in text
+    assert "Wants=network-online.target" in text
+    assert "RuntimeDirectory=polybot" in text
+    assert "RuntimeDirectoryMode=0750" in text
+
+
 def test_runbook_requires_nonempty_old_database_evidence():
     text = RUNBOOK.read_text()
     source_check = "test -s /opt/polymarket-bot/data/market_memory.db"
