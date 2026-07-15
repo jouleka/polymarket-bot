@@ -9,6 +9,7 @@ is deliberately separate from the append-only Market-Memory EventStore.
 """
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -61,6 +62,27 @@ class AcceptJournalRecord:
     price_exec: Decimal
     worst_case_risk: Decimal
     wall_at: float
+
+    def __post_init__(self):
+        for name in ("token_id", "condition_id", "event_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("shares", "price_exec", "worst_case_risk"):
+            if not isinstance(getattr(self, name), Decimal):
+                raise TypeError(f"{name} must be a Decimal")
+        if not self.shares.is_finite() or self.shares <= 0:
+            raise ValueError("shares must be finite and > 0")
+        if (not self.price_exec.is_finite()
+                or not (Decimal(0) < self.price_exec < Decimal(1))):
+            raise ValueError("price_exec must be finite and in (0, 1)")
+        if not self.worst_case_risk.is_finite() or self.worst_case_risk <= 0:
+            raise ValueError("worst_case_risk must be finite and > 0")
+        if self.shares != self.worst_case_risk / self.price_exec:
+            raise ValueError("shares must equal worst_case_risk / price_exec")
+        if (type(self.wall_at) not in (int, float)
+                or not math.isfinite(self.wall_at) or self.wall_at < 0):
+            raise ValueError("wall_at must be finite and >= 0")
 
 
 @dataclass(frozen=True)
