@@ -19,20 +19,24 @@ def test_installer_leaves_service_stopped_and_disabled():
         if line.strip() and not line.lstrip().startswith(("#", "echo"))
     ]
     install = 'cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service'
+    install_brain = 'cp "$APP/deploy/polymarket-hermes.service" /etc/systemd/system/polymarket-hermes.service'
     reload = "systemctl daemon-reload"
-    disable = "systemctl disable --now polymarket-ingestion.service"
+    disable = "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service"
     verify = "verify_service_stopped_disabled"
 
     assert install in commands
+    assert install_brain in commands
     assert reload in commands
     assert disable in commands
     assert verify in commands
-    assert commands.index(install) < commands.index(reload) < commands.index(disable) < commands.index(verify)
-    assert "systemctl is-active polymarket-ingestion.service" in text
-    assert "systemctl is-enabled polymarket-ingestion.service" in text
+    assert (commands.index(install) < commands.index(install_brain)
+            < commands.index(reload) < commands.index(disable) < commands.index(verify))
+    assert "for unit in polymarket-ingestion.service polymarket-hermes.service" in text
+    assert 'systemctl is-active "$unit"' in text
+    assert 'systemctl is-enabled "$unit"' in text
     assert all("|| true" not in line for line in commands if "disable --now" in line)
     assert not re.search(r"^\s*systemctl\s+(?:enable|reenable|start|restart)\b", text, re.MULTILINE)
-    assert "installed; service remains STOPPED + DISABLED" in text
+    assert "installed; both services remain STOPPED + DISABLED" in text
 
 
 def _run_installer_state_check(*, active, active_rc, enabled, enabled_rc):
@@ -115,8 +119,10 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "TimeoutStopSec=60" in text
     assert "After=network-online.target" in text
     assert "Wants=network-online.target" in text
-    assert "RuntimeDirectory=polybot" in text
+    assert "RuntimeDirectory=polybot polybot-proposal" in text
     assert "RuntimeDirectoryMode=0750" in text
+    assert "SupplementaryGroups=polybot-proposal" in text
+    assert "ExecStartPre=/usr/bin/chgrp polybot-proposal /run/polybot-proposal" in text
 
 
 def test_runbook_requires_nonempty_old_database_evidence():
