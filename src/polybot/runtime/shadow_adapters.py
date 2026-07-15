@@ -11,6 +11,7 @@ import httpx
 from polybot.ingestion.gamma import normalize_market
 from polybot.resolution.rpc import JsonRpcClient, JsonRpcResolutionProvider
 from polybot.runtime.discovery import discover_universe
+from polybot.runtime.registry_provider import RegistryRefreshUnavailable
 
 
 class SingletonLock:
@@ -110,8 +111,16 @@ class _GammaSnapshotFetcher:
         return markets, events
 
     def _get_list(self, path, params):
-        response = self._client.get(path, params=params)
-        response.raise_for_status()
+        try:
+            response = self._client.get(path, params=params)
+            response.raise_for_status()
+        except httpx.TransportError as exc:
+            raise RegistryRefreshUnavailable("Gamma transport unavailable") from exc
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429 or 500 <= status < 600:
+                raise RegistryRefreshUnavailable("Gamma server unavailable") from exc
+            raise
         payload = response.json()
         if not isinstance(payload, list):
             raise TypeError(f"Gamma {path} response must be a list")

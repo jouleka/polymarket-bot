@@ -10,6 +10,7 @@ from polybot.runtime.shadow_cycle import (
     ShadowCycleCoordinator,
     make_resolution_batch,
 )
+from polybot.runtime.registry_provider import RegistryRefreshUnavailable
 
 
 def test_cycle_orders_terminal_authority_before_ers_and_execution_projection():
@@ -187,3 +188,46 @@ def test_cycle_drains_every_older_terminal_batch_before_ers():
         "resolution_state",
         ("ers", frozenset()),
     ]
+
+
+def test_transient_registry_refresh_uses_only_a_still_fresh_generation():
+    trace = []
+
+    class Registry:
+        def refresh(self):
+            raise RegistryRefreshUnavailable("Gamma transport unavailable")
+
+        def require_fresh(self):
+            trace.append("last_good")
+            return object()
+
+    class Controller:
+        def apply_resolution_state(self, **_state):
+            pass
+
+        def run_cycle(self, *, eligible_intent_ids):
+            trace.append(("ers", eligible_intent_ids))
+
+    async def run_blocking(call, *args):
+        return call(*args)
+
+    coordinator = ShadowCycleCoordinator(
+        heartbeat=lambda: None,
+        registry_provider=Registry(),
+        subjects_for=lambda _registry: ResolutionBatch((), {}),
+        resolution_feed=SimpleNamespace(poll=lambda _subjects: ()),
+        resolution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        controller=Controller(),
+        execution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        evidence_update=lambda: None,
+        status_update=lambda: None,
+        run_blocking=run_blocking,
+        clock=lambda: 100.0,
+        registry_refresh_seconds=300.0,
+        resolution_poll_seconds=60.0,
+        outbox_batch_limit=2,
+    )
+
+    asyncio.run(coordinator.run_cycle())
+
+    assert trace == ["last_good", ("ers", frozenset())]
