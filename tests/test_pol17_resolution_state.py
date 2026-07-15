@@ -1,6 +1,12 @@
 """POL-17 restart state derives only from durable POL-15 authority."""
 
+from types import SimpleNamespace
+
+import pytest
+
 from polybot.core.clock import MonotonicStamper
+from polybot.resolution.errors import SettlementConflict
+from polybot.resolution.feed import ResolutionFeed
 from polybot.resolution.models import (
     DisputeState,
     LifecyclePhase,
@@ -55,3 +61,16 @@ def test_resolution_store_exposes_terminal_and_finalized_unknown_restart_state(t
         state = reopened.runtime_state()
         assert state.terminal_condition_ids == (terminal_subject.condition_id,)
         assert state.frozen_condition_ids == (unknown_subject.condition_id,)
+
+
+def test_resolution_startup_preflight_rejects_non_polygon_provider(tmp_path):
+    providers = (
+        SimpleNamespace(provider_id="a", chain_id=lambda: 137),
+        SimpleNamespace(provider_id="b", chain_id=lambda: 1),
+    )
+    with ResolutionStore(
+            str(tmp_path / "resolution.db"), MonotonicStamper()) as store:
+        feed = ResolutionFeed(store, providers)
+
+        with pytest.raises(SettlementConflict, match="Polygon chain 137"):
+            feed.validate_providers()

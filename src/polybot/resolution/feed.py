@@ -81,6 +81,21 @@ class ResolutionFeed:
         self._store = store
         self._providers = providers
 
+    def validate_providers(self):
+        """Fail startup unless both configured authorities prove Polygon chain 137."""
+        try:
+            chain_ids = tuple(provider.chain_id() for provider in self._providers)
+        except Exception as exc:
+            raise ResolutionUnavailable(
+                "resolution provider startup preflight unavailable"
+            ) from exc
+        if any(isinstance(chain_id, bool) or not isinstance(chain_id, int)
+               or chain_id != 137 for chain_id in chain_ids):
+            raise SettlementConflict(
+                "resolution providers must prove Polygon chain 137"
+            )
+        return chain_ids
+
     def poll(self, subjects):
         self._validate_subjects(subjects)
         if not subjects:
