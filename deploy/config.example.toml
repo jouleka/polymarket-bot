@@ -31,6 +31,10 @@ rpc_timeout_seconds = 15.0
 readiness_timeout_seconds = 60.0
 outbox_batch_limit = 100
 status_path = "/run/polybot/shadow-status.json"
+proposal_socket_path = "/run/polybot-proposal/proposal.sock"
+proposal_socket_group = "polybot-proposal"
+proposal_max_per_minute = 20
+proposal_request_timeout_seconds = 2.0
 
 [[shadow.polygon_providers]]
 provider_id = "polygon-publicnode"
