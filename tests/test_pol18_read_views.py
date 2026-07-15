@@ -158,7 +158,7 @@ def test_ledger_reader_returns_only_bounded_resolved_history_newest_first():
             return [resolved]
 
         def all(self):
-            return [resolved, pending]
+            raise AssertionError("Hermes ledger view must never query pending forecasts")
 
     reader = LedgerReadView(Ledger(), categories=("sports",), max_limit=20)
 

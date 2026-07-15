@@ -58,6 +58,7 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert 'id -u "$BRAIN_USER"' in text
     assert 'id -nG "$BRAIN_USER"' in text
     assert 'expected_brain_groups' in text
+    assert text.count('if [ "$active_state" != "inactive" ]') >= 2
 
 
 def test_composite_example_configures_only_the_group_scoped_local_endpoint():
