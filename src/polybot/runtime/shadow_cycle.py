@@ -130,16 +130,24 @@ class ShadowCycleCoordinator:
             frozen = tuple(frozen_ids)
             self._last_resolution_poll = now
 
-        self._resolution_dispatcher.drain(self._outbox_batch_limit)
+        self._drain_all(self._resolution_dispatcher)
         self._controller.apply_resolution_state(
             terminal_condition_ids=terminal,
             frozen_condition_ids=frozen,
         )
         self._controller.run_cycle(eligible_intent_ids=eligible)
-        self._execution_dispatcher.drain(self._outbox_batch_limit)
+        self._drain_all(self._execution_dispatcher)
         self._evidence_update()
         self._status_update()
 
     @staticmethod
     def _due(last, interval, now):
         return last is None or now - last >= interval
+
+    def _drain_all(self, dispatcher):
+        while True:
+            count = dispatcher.drain(self._outbox_batch_limit)
+            # Simple injected recorders historically return None. Real dispatchers
+            # return an exact count; only a full batch can imply more durable work.
+            if count is None or count < self._outbox_batch_limit:
+                return

@@ -132,3 +132,58 @@ def test_resolution_batch_unions_unresolved_forecasts_and_pending_intents_by_con
     assert batch.intent_ids_by_condition == {
         condition_id: frozenset({"intent-1"}),
     }
+
+
+def test_cycle_drains_every_older_terminal_batch_before_ers():
+    trace = []
+
+    class Registry:
+        def refresh(self):
+            pass
+
+        def require_fresh(self):
+            return object()
+
+    class Dispatcher:
+        def __init__(self):
+            self.counts = iter((2, 1))
+
+        def drain(self, limit):
+            trace.append(("resolution_dispatch", limit))
+            return next(self.counts)
+
+    class Controller:
+        def apply_resolution_state(self, **_state):
+            trace.append("resolution_state")
+
+        def run_cycle(self, *, eligible_intent_ids):
+            trace.append(("ers", eligible_intent_ids))
+
+    async def run_blocking(call, *args):
+        return call(*args)
+
+    coordinator = ShadowCycleCoordinator(
+        heartbeat=lambda: None,
+        registry_provider=Registry(),
+        subjects_for=lambda _registry: ResolutionBatch((), {}),
+        resolution_feed=SimpleNamespace(poll=lambda _subjects: ()),
+        resolution_dispatcher=Dispatcher(),
+        controller=Controller(),
+        execution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        evidence_update=lambda: None,
+        status_update=lambda: None,
+        run_blocking=run_blocking,
+        clock=lambda: 100.0,
+        registry_refresh_seconds=300.0,
+        resolution_poll_seconds=60.0,
+        outbox_batch_limit=2,
+    )
+
+    asyncio.run(coordinator.run_cycle())
+
+    assert trace == [
+        ("resolution_dispatch", 2),
+        ("resolution_dispatch", 2),
+        "resolution_state",
+        ("ers", frozenset()),
+    ]
