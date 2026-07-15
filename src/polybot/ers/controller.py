@@ -13,6 +13,8 @@ the controller consulted FIRST. The beat-before-process order matters: the out-o
 Clocks are injected for deterministic TDD.
 """
 
+from dataclasses import replace
+
 from polybot.ers.anomaly import HALT
 from polybot.ers.lossbreaker import HALT as LOSS_HALT, PAUSE as LOSS_PAUSE
 from polybot.ers.ramp import step_daily, step_weekly
@@ -77,6 +79,28 @@ class ERSController:
     def _empty_portfolio(self):
         from polybot.ers.validator import Portfolio
         return Portfolio(nav=self._caps.nav)
+
+    def apply_resolution_state(self, *, terminal_condition_ids=(),
+                               frozen_condition_ids=()):
+        """Tighten the working portfolio from canonical resolution state.
+
+        Terminal conditions retire risk. Finalized conditions without classified
+        terminal authority remain counted but frozen. This seam cannot add or
+        unfreeze a position and does not mutate NAV or controller state.
+        """
+        from polybot.ers.validator import Portfolio
+
+        terminal = frozenset(terminal_condition_ids)
+        frozen = frozenset(frozen_condition_ids)
+        positions = []
+        for position in self._portfolio.positions:
+            if position.condition_id in terminal:
+                continue
+            if position.condition_id in frozen and not position.frozen:
+                position = replace(position, frozen=True)
+            positions.append(position)
+        self._portfolio = Portfolio(nav=self._portfolio.nav, positions=tuple(positions))
+        return self._portfolio
 
     def run_cycle(self, *, eligible_intent_ids=None):
         """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
