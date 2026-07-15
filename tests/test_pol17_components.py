@@ -12,9 +12,11 @@ import pytest
 from polybot.calibration.ledger import ForecastLedger
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.controller import ERSController
+from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.market_meta import MarketRegistry
-from polybot.ers.service import HermesPipeline, PaperSigner
+from polybot.ers.service import HermesPipeline, PaperSigner, process_pending
+from polybot.ers.validator import Portfolio
 from polybot.fusion.component_log import ComponentLog
 from polybot.harness.execution import ShadowExecutionDispatcher
 from polybot.harness.ledger import ShadowLedger
@@ -30,6 +32,7 @@ from polybot.runtime.shadow_config import (
     ShadowRuntimeConfig,
 )
 from polybot.storage.market_memory import EventStore, ReadOnlyEventStore
+from polybot.ingestion.orderbook import LocalBook
 
 
 def _config(tmp_path):
@@ -186,5 +189,58 @@ def test_resolution_store_is_owned_by_the_serial_blocking_worker(tmp_path):
             assert executor.submit(
                 components.resolution_feed.recover_pending
             ).result() == 0
+    finally:
+        components.close()
+
+
+def test_production_planner_vetoes_accept_when_second_live_book_has_no_fill(tmp_path):
+    config = _config(tmp_path)
+    with EventStore(config.ingestion.db_path):
+        pass
+    registry = _registry()
+    health_ns = time.monotonic_ns()
+    components = build_shadow_components(
+        config,
+        ingestion=SimpleNamespace(
+            stamper=MonotonicStamper(),
+            collector=SimpleNamespace(last_frame_at=lambda: health_ns),
+            # This is the second, execution-authority fetch: unavailable.
+            book_for=lambda _token_id: None,
+        ),
+        registry_provider=SimpleNamespace(require_fresh=lambda: registry),
+        resolution_providers=(
+            SimpleNamespace(provider_id="a"),
+            SimpleNamespace(provider_id="b"),
+        ),
+        wall_clock=lambda: 1_750_000_000.25,
+        health_clock_seconds=time.monotonic,
+        health_clock_ns=time.monotonic_ns,
+    )
+    validation_book = LocalBook()
+    validation_book.apply_book({
+        "bids": [{"price": "0.48", "size": "1000"}],
+        "asks": [{"price": "0.52", "size": "1000"}],
+    })
+    try:
+        components.intent_store.propose_trade(
+            "intent", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49",
+            max_price="0.60", size_usd_suggestion="12", p="0.90",
+            p_confidence="0.75",
+        )
+
+        process_pending(
+            components.intent_store,
+            book_for=lambda _token_id: validation_book,
+            portfolio=Portfolio(nav=RiskCaps().nav),
+            caps=RiskCaps(),
+            signer=PaperSigner(),
+            shadow_planner=components.controller._shadow_planner,
+            accept_wall_clock=lambda: 1_750_000_000.25,
+        )
+
+        assert components.intent_store.get("intent").status == "REJECTED"
+        assert components.intent_store.fills_log() == []
+        assert components.intent_store.pending_shadow_executions(10) == ()
     finally:
         components.close()
