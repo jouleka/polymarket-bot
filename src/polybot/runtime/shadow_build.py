@@ -29,9 +29,12 @@ from polybot.harness.execution import (
     make_mark_for,
     make_shadow_execution_planner,
 )
+from polybot.harness.config import RampConfig
 from polybot.harness.ledger import ShadowLedger
+from polybot.harness.ramp_controller import RampController
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 from polybot.maker.config import DEFAULT_FEE_SCHEDULE, MakerConfig
+from polybot.maker.gate import MakerGate
 from polybot.maker.ledger import MakerLedger
 from polybot.resolution.dispatcher import ResolutionDispatcher
 from polybot.resolution.feed import ResolutionFeed
@@ -63,6 +66,11 @@ class ShadowComponents:
     shadow_ledger: ShadowLedger
     resolution_store: ResolutionStore
     pipeline: HermesPipeline
+    calibration_gate: CalibrationGate
+    maker_config: MakerConfig
+    maker_gate: MakerGate
+    ramp_config: RampConfig
+    ramp_controller: RampController
     signer: PaperSigner
     controller: ERSController
     resolution_feed: ResolutionFeed
@@ -164,6 +172,9 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         wallet=None,
     )
     maker_config = MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
+    maker_gate = MakerGate(maker_ledger, maker_config)
+    ramp_config = RampConfig()
+    ramp_controller = RampController(ramp_config=ramp_config, caps=caps)
     planner = make_shadow_execution_planner(
         book_for=ingestion.book_for,
         subject_for=market_registry.resolution_subject_for,
@@ -203,6 +214,11 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         shadow_ledger=shadow_ledger,
         resolution_store=resolution_store,
         pipeline=pipeline,
+        calibration_gate=calibration_gate,
+        maker_config=maker_config,
+        maker_gate=maker_gate,
+        ramp_config=ramp_config,
+        ramp_controller=ramp_controller,
         signer=signer,
         controller=controller,
         resolution_feed=resolution_feed,

@@ -101,5 +101,9 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert runtime._ingestion.token_ids == ("101", "202")
         assert isinstance(runtime._news_poller, NewsPoller)
         assert runtime._components.intent_store.pending() == []
+        evidence = runtime._harness.update()
+        assert evidence.reports
+        assert all(not decision.promote_recommended
+                   for decision in evidence.decisions.values())
     finally:
         runtime.close_unstarted()
