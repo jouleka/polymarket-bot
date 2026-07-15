@@ -94,6 +94,8 @@ class ShadowCycleCoordinator:
         self._outbox_batch_limit = outbox_batch_limit
         self._last_registry_refresh = None
         self._last_resolution_poll = None
+        self.last_registry_error = None
+        self.last_resolution_results = ()
 
     async def run_cycle(self):
         self._heartbeat()
@@ -102,10 +104,12 @@ class ShadowCycleCoordinator:
         if self._due(self._last_registry_refresh, self._registry_refresh_seconds, now):
             try:
                 await self._run_blocking(self._registry_provider.refresh)
-            except RegistryRefreshUnavailable:
+            except RegistryRefreshUnavailable as exc:
                 # The last coherent generation remains usable only through its
                 # independently enforced TTL. Retry at the normal refresh cadence.
-                pass
+                self.last_registry_error = str(exc)
+            else:
+                self.last_registry_error = None
             self._last_registry_refresh = now
         registry = self._registry_provider.require_fresh()
 
@@ -117,6 +121,7 @@ class ShadowCycleCoordinator:
             results = await self._run_blocking(
                 self._resolution_feed.poll, batch.subjects
             )
+            self.last_resolution_results = tuple(results)
             eligible_ids = set()
             terminal_ids = []
             frozen_ids = []

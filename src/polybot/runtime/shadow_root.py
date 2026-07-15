@@ -23,6 +23,7 @@ from polybot.runtime.shadow_cycle import (
     make_resolution_batch,
 )
 from polybot.runtime.shadow_runtime import ShadowRuntime
+from polybot.runtime.status import RuntimeStatusReporter
 
 
 def _drain_fully(dispatcher, limit):
@@ -102,10 +103,12 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     news_poller = guarded(lambda: NewsPoller(
         news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST
     ))
+    last_news_results = {}
 
     async def poll_news():
         while True:
-            await news_poller.poll_all()
+            last_news_results.clear()
+            last_news_results.update(await news_poller.poll_all())
             await asyncio.sleep(config.news_poll_seconds)
 
     categories = DEFAULT_CATEGORY_POLICY.precedence
@@ -125,6 +128,36 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         portfolio_for=components.controller.current_portfolio,
     ))
 
+    status_reporter = RuntimeStatusReporter(
+        config.status_path, readiness=readiness
+    )
+
+    def update_status():
+        dispositions = {}
+        for result in cycle.last_resolution_results:
+            name = result.disposition.value
+            dispositions[name] = dispositions.get(name, 0) + 1
+        status_reporter.update({
+            "controller": components.controller._controller.state(),
+            "pending_intents": len(components.intent_store.pending()),
+            "resolution_outbox": len(
+                components.resolution_store.pending_outbox(2**31 - 1)
+            ),
+            "execution_outbox": len(
+                components.intent_store.pending_shadow_executions(2**31 - 1)
+            ),
+            "resolution_dispositions": dispositions,
+            "registry_error": cycle.last_registry_error,
+            "news_failures": sorted(
+                name for name, value in last_news_results.items()
+                if isinstance(value, Exception)
+            ),
+            "promotion_recommendations": sorted(
+                category for category, decision in harness.latest.decisions.items()
+                if decision.promote_recommended
+            ),
+        })
+
     cycle = guarded(lambda: ShadowCycleCoordinator(
         heartbeat=heartbeat,
         registry_provider=registry_provider,
@@ -136,7 +169,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         controller=components.controller,
         execution_dispatcher=components.execution_dispatcher,
         evidence_update=harness.update,
-        status_update=lambda: None,
+        status_update=update_status,
         run_blocking=run_blocking,
         clock=time.monotonic,
         registry_refresh_seconds=config.registry_refresh_seconds,
@@ -189,4 +222,5 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     runtime._collector = ingestion.collector
     runtime._news_poller = news_poller
     runtime._harness = harness
+    runtime._status_reporter = status_reporter
     return runtime

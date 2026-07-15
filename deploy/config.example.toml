@@ -30,6 +30,7 @@ news_poll_seconds = 60.0
 rpc_timeout_seconds = 15.0
 readiness_timeout_seconds = 60.0
 outbox_batch_limit = 100
+status_path = "/run/polybot/shadow-status.json"
 
 [[shadow.polygon_providers]]
 provider_id = "polygon-publicnode"

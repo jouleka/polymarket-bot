@@ -53,6 +53,7 @@ class ShadowRuntimeConfig:
     rpc_timeout_seconds: float = 15.0
     readiness_timeout_seconds: float = 60.0
     outbox_batch_limit: int = 100
+    status_path: str = "/run/polybot/shadow-status.json"
     paper_only: bool = field(default=True, init=False)
 
     def __post_init__(self):
@@ -72,6 +73,11 @@ class ShadowRuntimeConfig:
                     raise ValueError(
                         "every logical store requires a distinct database path"
                     )
+        if (not isinstance(self.status_path, str) or not self.status_path
+                or self.status_path != self.status_path.strip()):
+            raise ValueError("status_path must be a non-empty exact string")
+        if Path(self.status_path).resolve(strict=False) in resolved_paths:
+            raise ValueError("status_path must not alias a database path")
         providers = self.polygon_providers
         if (not isinstance(providers, tuple) or len(providers) != 2
                 or any(not isinstance(provider, ReadOnlyPolygonProviderConfig)
