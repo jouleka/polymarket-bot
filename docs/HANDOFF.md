@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-14)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-15)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -30,7 +30,7 @@ A fully-autonomous, 24/7 **Polymarket** prediction-market trading bot. Brain/han
   `/root/git/polymarket-bot.git` bare repository.
 - **Venv:** gitignored `.venv` with Python 3.13. Canonical verification:
   `./.venv/bin/pytest -o addopts="" -q`. POL-15 landed with **2,070 passed**; the current POL-16
-  local candidate passes **2,118 tests** (see the dated §7 update).
+  reviewed POL-16 candidate passes **2,121 tests** (see the dated §7 update).
 - **Synchronize safely:** check status, `git fetch --prune origin`, compare ahead/behind, and fast-forward
   only a clean non-diverged checkout. Do not blindly pull over local work.
 - **Service state:** `polymarket-ingestion.service` is stopped and disabled. Deployment, database
@@ -453,22 +453,22 @@ storage gate passed at 0.236382 GiB/day. The old raw database is checksummed and
 `/opt/polymarket-bot/data/raw-firehose-20260714T155112Z`. The service remains stopped and disabled,
 and POL-17 still owns continuous runtime composition. No chain write/signing path was added.
 
-**UPDATE 2026-07-14 — POL-16 is implemented locally; independent review and landing are pending.**
-Code/test candidate `ecb87e2` atomically couples an ERS ACCEPT to a canonical two-target execution
+**UPDATE 2026-07-15 — POL-16 is independently reviewed and owner-approved for landing.**
+Exact code/test candidate `1ebb026` atomically couples an ERS ACCEPT to a canonical two-target execution
 outbox, re-fetches fresh best bid for a forced-BUY maker simulation sized only from approved stake,
 and projects idempotently into Maker and Shadow. Target-commit crashes replay safely; a terminal that
 wins the race produces exact already-settled rows; terminal values dominate live midpoint marks. The
 real-stack test runs intent → ACCEPT/outbox → injected crash → replay → both ledgers → POL-15 terminal
-fanout → exact marks. The canonical suite passes 2,118 tests. Twelve local
-authority/atomicity/corruption mutations were killed with zero
-survivors, the sacred validator/facade/caps/signer surfaces are untouched, and no runtime, signing,
-deployment, or live-money path was added. Evidence is in
-[`VERIFICATION-POL16-SHADOW-EXECUTION.md`](VERIFICATION-POL16-SHADOW-EXECUTION.md). This candidate has
-only a rigorous same-agent review because the current environment did not authorize a reviewer
-sub-session; per `AGENTS.md`, independent specification/security and mutation review must still pass
-before push/merge.
+fanout → exact marks. The canonical suite passes 2,121 tests. The independent review caught and
+closed two real gaps: repeating Decimal share division could round infinitesimally above approved
+notional, and reopen integrity did not fence invalid outbox state or execution-to-intent drift.
+Explicit round-down and restart fences are regression-pinned and passed closing re-review. Twelve
+local mutations plus a separate isolated 8/8 cross-cutting battery were killed with zero survivors.
+The sacred validator/facade/caps/signer surfaces are untouched, and no runtime, signing, deployment,
+or live-money path was added. Evidence is in
+[`VERIFICATION-POL16-SHADOW-EXECUTION.md`](VERIFICATION-POL16-SHADOW-EXECUTION.md).
 
-**Next work:** complete POL-16's independent review and land it, then POL-17 the continuous
+**Next work:** land POL-16, then begin POL-17 the continuous
 ERS/harness runtime, and POL-18 the isolated propose-only Hermes brain. Only after those land and are deployed does the ≤2-week
 paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
 net-positive, out-of-sample results; otherwise do not proceed.
