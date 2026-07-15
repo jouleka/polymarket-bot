@@ -385,6 +385,12 @@ class IntentStore:
         ).fetchone()
         if orphan is not None:
             raise SettlementConflict("orphaned shadow execution outbox")
+        invalid_state = self._conn.execute(
+            "SELECT 1 FROM shadow_execution_outbox "
+            "WHERE state IS NULL OR state NOT IN ('PENDING', 'DELIVERED') LIMIT 1"
+        ).fetchone()
+        if invalid_state is not None:
+            raise SettlementConflict("shadow execution outbox state is invalid")
         roles = self._conn.execute(
             "SELECT e.execution_id, COUNT(o.sequence), "
             "SUM(CASE WHEN o.role='MAKER' THEN 1 ELSE 0 END), "
