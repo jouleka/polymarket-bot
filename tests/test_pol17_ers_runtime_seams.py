@@ -140,6 +140,21 @@ def test_controller_resolution_state_only_retires_or_freezes_risk(tmp_path):
         ]
         assert resolved.total_open_risk() == Decimal("12")
 
+        repeated = controller.apply_resolution_state()
+        assert [(position.condition_id, position.frozen)
+                for position in repeated.positions] == [
+            ("unknown", True),
+            ("open", False),
+        ]
+
+        tightened = controller.apply_resolution_state(
+            terminal_condition_ids=("unknown",),
+        )
+        assert [position.condition_id for position in tightened.positions] == ["open"]
+        assert [position.condition_id for position in controller.apply_resolution_state(
+            frozen_condition_ids=("unknown",),
+        ).positions] == ["open"]
+
 
 def test_controller_threads_atomic_accept_wall_clock(tmp_path):
     with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:

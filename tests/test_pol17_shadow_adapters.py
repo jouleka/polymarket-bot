@@ -1,4 +1,6 @@
+import inspect
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +14,7 @@ from polybot.runtime.shadow_adapters import (
     StopAwareResolutionProvider,
 )
 from polybot.resolution.errors import ResolutionUnavailable
+from polybot.resolution.rpc import JsonRpcResolutionProvider
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
     ShadowRuntimeConfig,
@@ -181,3 +184,19 @@ def test_stop_aware_provider_never_starts_another_rpc_after_shutdown():
         wrapped.latest_block()
 
     assert calls == ["chain"]
+
+
+def test_polygon_resolution_adapter_has_only_read_only_rpc_vocabulary():
+    source = inspect.getsource(JsonRpcResolutionProvider)
+    methods = set(re.findall(r'_rpc\.call\(\s*"([^"]+)"', source))
+
+    assert methods == {
+        "eth_chainId", "eth_blockNumber", "eth_getBlockByNumber", "eth_getCode",
+        "eth_getLogs", "eth_call",
+    }
+    lowered = source.lower()
+    for forbidden in (
+        "eth_sendtransaction", "eth_sendrawtransaction", "personal_sign",
+        "eth_sign", "wallet", "private_key", "cancel", "redeem",
+    ):
+        assert forbidden not in lowered

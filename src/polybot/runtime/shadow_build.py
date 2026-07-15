@@ -115,13 +115,25 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     stamper = ingestion.stamper
     opened_closers = []
 
-    def open_owned(factory):
+    def construct(factory):
         try:
-            resource = factory()
-        except Exception:
+            return factory()
+        except BaseException as construction_error:
+            close_errors = []
             for close in reversed(opened_closers):
-                close()
+                try:
+                    close()
+                except BaseException as close_error:
+                    close_errors.append(close_error)
+            if close_errors:
+                raise BaseExceptionGroup(
+                    "shadow component construction and cleanup failed",
+                    [construction_error, *close_errors],
+                )
             raise
+
+    def open_owned(factory):
+        resource = construct(factory)
         opened_closers.append(resource.close)
         return resource
 
@@ -153,11 +165,11 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     )
     closers = tuple(opened_closers)
 
-    market_registry = CurrentMarketRegistry(registry_provider)
-    calibration_gate = CalibrationGate(
+    market_registry = construct(lambda: CurrentMarketRegistry(registry_provider))
+    calibration_gate = construct(lambda: CalibrationGate(
         forecast_ledger, PriorEngine(), CalibrationConfig()
-    )
-    pipeline = HermesPipeline(
+    ))
+    pipeline = construct(lambda: HermesPipeline(
         calib_gate=calibration_gate,
         fusion_config=FusionConfig(
             w_news=0.20, w_base=0.30, w_micro=0.0,
@@ -175,31 +187,32 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         allowlist=DEFAULT_ALLOWLIST,
         event_store=event_reader,
         stamper=stamper,
-    )
+    ))
 
-    safety = SafetyController(
+    safety = construct(lambda: SafetyController(
         caps=caps, store=intent_store, clock=health_clock_seconds
-    )
-    safety.wire_flow_gate(make_flow_gate(
+    ))
+    flow_gate = construct(lambda: make_flow_gate(
         intent_store, safety.active_caps, wall_clock=wall_clock
     ))
-    reconciler = ThreeWayReconciler(caps=caps)
-    recon_provider = make_recon_provider(
+    construct(lambda: safety.wire_flow_gate(flow_gate))
+    reconciler = construct(lambda: ThreeWayReconciler(caps=caps))
+    recon_provider = construct(lambda: make_recon_provider(
         intent_store, event_reader, reconciler,
         wallet=None, clock_ns=health_clock_ns,
-    )
-    anomaly = AnomalyMonitor(
+    ))
+    anomaly = construct(lambda: AnomalyMonitor(
         caps,
         clock=health_clock_seconds,
         ws_last_frame_at=ingestion.collector.last_frame_at,
         recon_provider=recon_provider,
-    )
-    lossbreakers = LossBreakers(
+    ))
+    lossbreakers = construct(lambda: LossBreakers(
         store=intent_store,
         caps_provider=safety.active_caps,
         wall_clock=wall_clock,
-    )
-    restart = RestartReconciler(
+    ))
+    restart = construct(lambda: RestartReconciler(
         store=intent_store,
         event_store=event_reader,
         reconciler=reconciler,
@@ -207,16 +220,20 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         caps=caps,
         clock=health_clock_ns,
         wallet=None,
+    ))
+    maker_config = construct(
+        lambda: MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
     )
-    maker_config = MakerConfig(fee_schedule=DEFAULT_FEE_SCHEDULE)
-    maker_gate = MakerGate(maker_ledger, maker_config)
-    ramp_config = RampConfig()
-    ramp_controller = RampController(ramp_config=ramp_config, caps=caps)
-    paper_planner = make_shadow_execution_planner(
+    maker_gate = construct(lambda: MakerGate(maker_ledger, maker_config))
+    ramp_config = construct(RampConfig)
+    ramp_controller = construct(
+        lambda: RampController(ramp_config=ramp_config, caps=caps)
+    )
+    paper_planner = construct(lambda: make_shadow_execution_planner(
         book_for=ingestion.book_for,
         subject_for=market_registry.resolution_subject_for,
         maker_config=maker_config,
-    )
+    ))
 
     def planner(intent, decision):
         execution = paper_planner(intent, decision)
@@ -228,7 +245,7 @@ def build_shadow_components(config, *, ingestion, registry_provider,
             raise RuntimeError("shadow execution unavailable on second live-book fetch")
         return execution
 
-    signer = PaperSigner()
+    signer = construct(PaperSigner)
 
     def gtd_for(decision, position, *, caps, standing_exit_total):
         # Paper-only passive backstop. The fixed 24-hour horizon is renewed per
@@ -241,7 +258,7 @@ def build_shadow_components(config, *, ingestion, registry_provider,
             standing_exit_total=standing_exit_total,
         )
 
-    controller = ERSController(
+    controller = construct(lambda: ERSController(
         store=intent_store,
         book_for=ingestion.book_for,
         caps=caps,
@@ -256,17 +273,23 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         shadow_planner=planner,
         accept_wall_clock=wall_clock,
         clock=health_clock_seconds,
+    ))
+    resolution_feed = construct(
+        lambda: ResolutionFeed(resolution_store, resolution_providers)
     )
-    resolution_feed = ResolutionFeed(resolution_store, resolution_providers)
-    resolution_dispatcher = ResolutionDispatcher(
+    resolution_dispatcher = construct(lambda: ResolutionDispatcher(
         resolution_store, forecast_ledger, maker_ledger, shadow_ledger
-    )
-    execution_dispatcher = ShadowExecutionDispatcher(
+    ))
+    execution_dispatcher = construct(lambda: ShadowExecutionDispatcher(
         intent_store, maker_ledger, shadow_ledger
+    ))
+    maker_mark_for = construct(
+        lambda: make_mark_for(maker_ledger, book_for=ingestion.book_for)
     )
-    maker_mark_for = make_mark_for(maker_ledger, book_for=ingestion.book_for)
-    shadow_mark_for = make_mark_for(shadow_ledger, book_for=ingestion.book_for)
-    return ShadowComponents(
+    shadow_mark_for = construct(
+        lambda: make_mark_for(shadow_ledger, book_for=ingestion.book_for)
+    )
+    return construct(lambda: ShadowComponents(
         event_reader=event_reader,
         intent_store=intent_store,
         forecast_ledger=forecast_ledger,
@@ -289,4 +312,4 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         shadow_mark_for=shadow_mark_for,
         market_registry=market_registry,
         _closers=closers,
-    )
+    ))

@@ -12,6 +12,7 @@ import pytest
 from polybot.calibration.ledger import ForecastLedger
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.controller import ERSController
+from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.market_meta import MarketRegistry
@@ -132,6 +133,18 @@ def test_component_factory_wires_real_paper_safety_and_authority_types(
         assert components.controller._reconciler is not None
         assert components.controller._accept_wall_clock is not None
         assert components.controller._controller._flow_gate is not None
+        assert isinstance(components.controller._breaker, DrawdownBreaker)
+        assert components.controller._breaker._caps is components.controller._caps
+        assert components.controller._controller._caps is components.controller._caps
+        assert components.controller._anomaly._caps is components.controller._caps
+        assert components.controller._anomaly._ws_last_frame_at is (
+            ingestion.collector.last_frame_at
+        )
+        assert components.controller._lossbreakers._caps_provider.__self__ is (
+            components.controller._controller
+        )
+        assert components.controller._reconciler._caps is components.controller._caps
+        assert components.controller._gtd_for is not None
         assert len(startup_checks) == 1
         assert startup_checks[0][1]["expected_caps_hash"] == (
             "9c5265736b4930c1d8270788e3543c1d9144454cf4e99407520da4862c7b03ab"
@@ -285,4 +298,55 @@ def test_component_construction_unwinds_opened_stores_on_later_failure(
     assert trace == [
         "open_events", "open_intents", "open_forecasts",
         "close_intents", "close_events",
+    ]
+
+
+def test_component_construction_unwinds_all_stores_when_pipeline_binding_fails(
+        tmp_path, monkeypatch):
+    trace = []
+
+    class Opened:
+        def __init__(self, name, *_args, **_kwargs):
+            self.name = name
+            trace.append(f"open_{name}")
+
+        def close(self):
+            trace.append(f"close_{self.name}")
+
+    for attribute, name in (
+        ("ReadOnlyEventStore", "events"),
+        ("IntentStore", "intents"),
+        ("ForecastLedger", "forecasts"),
+        ("ComponentLog", "components"),
+        ("MakerLedger", "maker"),
+        ("ShadowLedger", "shadow"),
+        ("ResolutionStore", "resolution"),
+    ):
+        monkeypatch.setattr(
+            shadow_build, attribute,
+            lambda *_args, _name=name, **_kwargs: Opened(_name),
+        )
+    monkeypatch.setattr(
+        shadow_build, "HermesPipeline",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("pipeline bind failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="pipeline bind failed"):
+        build_shadow_components(
+            _config(tmp_path),
+            ingestion=SimpleNamespace(
+                stamper=MonotonicStamper(),
+                collector=SimpleNamespace(last_frame_at=lambda: None),
+                book_for=lambda _token_id: None,
+            ),
+            registry_provider=object(), resolution_providers=(),
+            wall_clock=time.time, health_clock_seconds=time.monotonic,
+            health_clock_ns=time.monotonic_ns,
+        )
+
+    assert trace == [
+        "open_events", "open_intents", "open_forecasts", "open_components",
+        "open_maker", "open_shadow", "open_resolution",
+        "close_resolution", "close_shadow", "close_maker", "close_components",
+        "close_forecasts", "close_intents", "close_events",
     ]

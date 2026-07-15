@@ -170,3 +170,73 @@ def test_process_pending_can_commit_restart_and_flow_authority_atomically(tmp_pa
             "token_id": "101",
             "amount": decision.decision_stake_usd,
         }
+
+
+def test_injected_precommit_failure_rolls_back_journal_and_both_outbox_targets(
+        tmp_path):
+    condition_id = "0x" + "11" * 32
+    execution = ShadowExecutionRecord(
+        execution_id="intent-1", token_id="101", condition_id=condition_id,
+        event_id="event-1", category="politics", outcome_slot=0,
+        sibling_token_ids=("101", "202"), side="BUY",
+        shares=Decimal("24"), price_exec=Decimal("0.50"),
+        fill_mid=Decimal("0.51"), reward_accrued=Decimal("1.25"),
+    )
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id=condition_id,
+            event_id="event-1", side="BUY", target_price="0.49",
+            max_price="0.60", size_usd_suggestion="12", p="0.80",
+            p_confidence="0.75",
+        )
+        store._before_shadow_execution_commit = lambda: (_ for _ in ()).throw(
+            RuntimeError("injected journal precommit failure")
+        )
+
+        with pytest.raises(RuntimeError, match="journal precommit"):
+            store.record_decision(
+                "intent-1",
+                Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "cap"),
+                shadow_execution=execution,
+                accept_journal=_journal(),
+            )
+
+        assert store.get("intent-1").status == "PROPOSED"
+        assert store.audit_log() == []
+        assert store.fills_log() == []
+        assert store.flow_log() == []
+        assert store.pending_shadow_executions(10) == ()
+
+
+@pytest.mark.parametrize(
+    ("decision", "journal", "error", "message"),
+    [
+        (Decision("REJECT", None, None, "no_book"), _journal(), ValueError,
+         "only ACCEPT"),
+        (Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "cap"), object(),
+         TypeError, "AcceptJournalRecord"),
+        (Decision("ACCEPT", Decimal("11"), Decimal("0.52"), "cap"), _journal(),
+         ValueError, "economics contradict"),
+        (Decision("ACCEPT", Decimal("12"), Decimal("0.52"), "cap"),
+         _journal(token_id="202"), ValueError, "identity contradicts"),
+    ],
+)
+def test_accept_journal_boundary_mismatch_never_partially_decides_intent(
+        tmp_path, decision, journal, error, message):
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "intent-1", token_id="101", condition_id="0x" + "11" * 32,
+            event_id="event-1", side="BUY", target_price="0.49",
+            max_price="0.60", size_usd_suggestion="12", p="0.80",
+            p_confidence="0.75",
+        )
+
+        with pytest.raises(error, match=message):
+            store.record_decision(
+                "intent-1", decision, accept_journal=journal,
+            )
+
+        assert store.get("intent-1").status == "PROPOSED"
+        assert store.audit_log() == []
+        assert store.fills_log() == []
+        assert store.flow_log() == []
