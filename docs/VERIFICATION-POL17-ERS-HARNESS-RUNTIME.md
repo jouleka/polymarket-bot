@@ -1,7 +1,7 @@
 # POL-17 ERS + harness runtime verification evidence
 
-Status: local reviewed build; independent specification/security review passed; no push, merge, installation, database migration,
-service start/enable, or deployment authorized or performed
+Status: landed on `main`; independent specification/security review passed; no installation,
+database migration, service start/enable, or deployment authorized or performed
 
 Base: `22c0a21af5d8965311745237c3abf6175fd291b8`
 
@@ -10,6 +10,11 @@ Branch: `pol-17-ers-harness-runtime`
 Primary mutation checkpoint: `8a37f34`
 
 Exact independently reviewed code head: `f0166210511e57b21e68497289f7a8c800ecc327`
+
+Reviewed branch head: `c1659719afaf7dc177059a708c8a2ee9e231370b`
+
+GitHub landing: [PR #7](https://github.com/jouleka/polymarket-bot/pull/7), merge
+`b6ae7e180ef64be2e1d71f3daa7f0fb1717f4c91`
 
 Canonical suite at reviewed code head: 2,208 passed
 
@@ -25,8 +30,8 @@ The owner approved the architecture and implementation after reviewing
 followed [`PLAN-POL17-ERS-HARNESS-RUNTIME.md`](PLAN-POL17-ERS-HARNESS-RUNTIME.md) from baseline
 2,121 tests.
 
-This ticket ends at a reviewed build. Installation while stopped, activation, push, and merge are
-independent future gates. The VPS service remains inactive and disabled. Existing raw-firehose
+Publication and merge were separately authorized after the reviewed build. Installation while
+stopped and activation remain independent future gates. The VPS service remains inactive and disabled. Existing raw-firehose
 evidence and the compact production database were not touched.
 
 ## Implemented runtime contract
@@ -206,5 +211,5 @@ store, status/readiness checks, activation verification, and non-destructive rol
 still inactive and disabled. The service checkout, production databases, raw-firehose evidence,
 systemd state, and VPS configuration were not changed by POL-17 development.
 
-This document is evidence, not authorization. Do not push, merge, install, migrate, start, enable,
-or deploy without the owner approving that exact action.
+This document is evidence, not operational authorization. The owner authorized PR #7 and its
+merge only. Do not install, migrate, start, enable, or deploy without approval for that exact action.
