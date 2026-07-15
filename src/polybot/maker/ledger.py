@@ -161,6 +161,115 @@ class MakerLedger:
                 f"condition {condition_id!r} already has a terminal receipt"
             )
 
+    def apply_shadow_execution(self, execution):
+        """Project one typed POL-16 paper execution into the maker ledger."""
+        from polybot.ers.intent_store import ShadowExecutionRecord
+
+        if not isinstance(execution, ShadowExecutionRecord):
+            raise TypeError("execution must be a ShadowExecutionRecord")
+        try:
+            changed = self.record_fill(
+                execution.execution_id,
+                token_id=execution.token_id,
+                condition_id=execution.condition_id,
+                category=execution.category,
+                side=execution.side,
+                shares=execution.shares,
+                price_exec=execution.price_exec,
+                fill_mid=execution.fill_mid,
+                reward_accrued=execution.reward_accrued,
+                event_id=execution.event_id,
+                outcome_slot=execution.outcome_slot,
+                sibling_token_ids=execution.sibling_token_ids,
+            )
+        except ConditionAlreadyTerminal:
+            return self._apply_shadow_execution_after_terminal(execution)
+        if not changed:
+            row = self._query(
+                f"SELECT {_COLUMNS} FROM maker_fills WHERE fill_id=?",
+                (execution.execution_id,),
+            )[0]
+            actual = (
+                row.token_id, row.condition_id, row.category, row.side, row.shares,
+                row.price_exec, row.fill_mid, row.reward_accrued, row.event_id,
+                row.outcome_slot, row.sibling_token_ids,
+            )
+            expected = (
+                execution.token_id, execution.condition_id, execution.category,
+                execution.side, execution.shares, execution.price_exec, execution.fill_mid,
+                execution.reward_accrued, execution.event_id, execution.outcome_slot,
+                execution.sibling_token_ids,
+            )
+            if actual != expected:
+                raise SettlementConflict("maker row contradicts shadow execution")
+        return changed
+
+    def _apply_shadow_execution_after_terminal(self, execution):
+        from polybot.resolution.store import decode_terminal
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            receipt = self._conn.execute(
+                "SELECT terminal_id, payload FROM resolution_receipts WHERE condition_id=?",
+                (execution.condition_id,),
+            ).fetchone()
+            if receipt is None:
+                raise SettlementConflict("maker terminal receipt disappeared during replay")
+            terminal = decode_terminal(receipt[0], receipt[1])
+            subject = terminal.subject
+            if (subject.event_id != execution.event_id
+                    or subject.condition_id != execution.condition_id
+                    or subject.category != execution.category
+                    or subject.token_ids != execution.sibling_token_ids
+                    or subject.token_ids[execution.outcome_slot] != execution.token_id):
+                raise SettlementConflict("maker terminal subject contradicts shadow execution")
+            status, value, numerator, denominator = _terminal_projection(
+                terminal, execution.outcome_slot
+            )
+            sibling_json = json.dumps(
+                list(execution.sibling_token_ids), ensure_ascii=False, separators=(",", ":")
+            )
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO maker_fills "
+                "(fill_id, token_id, condition_id, category, side, shares, price_exec, "
+                "fill_mid, reward_accrued, created_at, status, resolution_value, settled_at, "
+                "event_id, outcome_slot, sibling_token_ids, resolution_numerator, "
+                "resolution_denominator, terminal_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (execution.execution_id, execution.token_id, execution.condition_id,
+                 execution.category, execution.side, str(execution.shares),
+                 str(execution.price_exec), str(execution.fill_mid),
+                 str(execution.reward_accrued), self._stamper.stamp(), status, value,
+                 self._stamper.stamp(), execution.event_id, execution.outcome_slot,
+                 sibling_json, str(numerator), str(denominator), terminal.terminal_id),
+            )
+            row = self._query(
+                f"SELECT {_COLUMNS} FROM maker_fills WHERE fill_id=?",
+                (execution.execution_id,),
+            )[0]
+            actual = (
+                row.token_id, row.condition_id, row.category, row.side, row.shares,
+                row.price_exec, row.fill_mid, row.reward_accrued, row.event_id,
+                row.outcome_slot, row.sibling_token_ids, row.status, row.resolution_value,
+                row.resolution_numerator, row.resolution_denominator, row.terminal_id,
+            )
+            expected = (
+                execution.token_id, execution.condition_id, execution.category,
+                execution.side, execution.shares, execution.price_exec, execution.fill_mid,
+                execution.reward_accrued, execution.event_id, execution.outcome_slot,
+                execution.sibling_token_ids, status,
+                None if value is None else Decimal(value), numerator, denominator,
+                terminal.terminal_id,
+            )
+            if actual != expected:
+                raise SettlementConflict("maker row contradicts terminal shadow execution")
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+        return cur.rowcount > 0
+
     def record_fill(self, fill_id, *, token_id, condition_id, category, side, shares,
                     price_exec, fill_mid, reward_accrued, event_id=None,
                     outcome_slot=None, sibling_token_ids=None):
