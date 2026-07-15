@@ -61,13 +61,25 @@ def build_production_runtime(
         )
         lock_owned = False
         return runtime
-    except Exception:
+    except BaseException as construction_error:
+        cleanup_errors = []
+        actions = []
         if provider_close is not None:
-            provider_close()
+            actions.append(provider_close)
         if gamma is not None:
-            gamma.close()
+            actions.append(gamma.close)
         if lock_owned:
-            lock.release()
+            actions.append(lock.release)
+        for close in actions:
+            try:
+                close()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            raise BaseExceptionGroup(
+                "production runtime construction and cleanup failed",
+                [construction_error, *cleanup_errors],
+            ) from construction_error
         raise
 
 

@@ -14,7 +14,8 @@ from polybot.runtime.shadow_adapters import (
     StopAwareResolutionProvider,
 )
 from polybot.resolution.errors import ResolutionUnavailable
-from polybot.resolution.rpc import JsonRpcResolutionProvider
+from polybot.resolution.models import ResolutionSubject
+from polybot.resolution.rpc import JsonRpcClient, JsonRpcResolutionProvider
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
     ShadowRuntimeConfig,
@@ -184,6 +185,47 @@ def test_stop_aware_provider_never_starts_another_rpc_after_shutdown():
         wrapped.latest_block()
 
     assert calls == ["chain"]
+
+
+def test_stop_gate_is_rechecked_before_each_rpc_inside_one_observation():
+    stopped = [False]
+    requests = []
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    class Client:
+        def post(self, _endpoint, *, json):
+            requests.append(json["method"])
+            stopped[0] = True
+            return Response({
+                "jsonrpc": "2.0", "id": json["id"],
+                "result": {
+                    "number": "0x64",
+                    "hash": "0x" + "11" * 32,
+                },
+            })
+
+    provider = JsonRpcResolutionProvider(
+        "a", JsonRpcClient("https://a.example", Client())
+    )
+    wrapped = StopAwareResolutionProvider(provider, lambda: stopped[0])
+    subject = ResolutionSubject(
+        event_id="event-1", condition_id="0x" + "22" * 32,
+        token_ids=("101", "202"), category="politics",
+    )
+
+    with pytest.raises(ResolutionUnavailable, match="stopping"):
+        wrapped.observe(subject, 100)
+
+    assert requests == ["eth_getBlockByNumber"]
 
 
 def test_polygon_resolution_adapter_has_only_read_only_rpc_vocabulary():

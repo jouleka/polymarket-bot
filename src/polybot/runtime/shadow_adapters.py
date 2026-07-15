@@ -82,6 +82,11 @@ class StopAwareResolutionProvider:
         self.provider_id = provider.provider_id
         self._provider = provider
         self._should_stop = should_stop
+        wire_stop = getattr(provider, "wire_stop", None)
+        if wire_stop is not None:
+            if not callable(wire_stop):
+                raise TypeError("resolution provider stop gate must be callable")
+            wire_stop(should_stop)
 
     def _call(self, name, *args):
         if self._should_stop():

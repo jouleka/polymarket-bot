@@ -1,6 +1,8 @@
 import inspect
 from types import SimpleNamespace
 
+import pytest
+
 from polybot.runtime import shadow
 
 
@@ -80,3 +82,44 @@ def test_production_builder_acquires_singleton_before_any_adapter_or_store():
 
     assert built is runtime
     assert trace[:5] == ["lock", "gamma", "providers", "history", "stores"]
+
+
+def test_production_builder_attempts_every_cleanup_after_construction_failure():
+    trace = []
+
+    def fail(name):
+        def close():
+            trace.append(name)
+            raise RuntimeError(f"{name} failed")
+        return close
+
+    config = SimpleNamespace(
+        ingestion=SimpleNamespace(db_path="/data/events.db"),
+        rpc_timeout_seconds=5,
+        database_paths=("/data/events.db",),
+    )
+
+    with pytest.raises(BaseExceptionGroup) as caught:
+        shadow.build_production_runtime(
+            config,
+            gamma_factory=lambda _config: SimpleNamespace(close=fail("gamma_close")),
+            provider_factory=lambda _config: (
+                (object(), object()), fail("provider_close")
+            ),
+            history_stamper_factory=lambda _paths: object(),
+            health_stamper_factory=lambda: object(),
+            news_fetch_factory=lambda **_kwargs: object(),
+            lock_factory=lambda _path: SimpleNamespace(
+                acquire=lambda: trace.append("lock"),
+                release=lambda: trace.append("unlock"),
+            ),
+            readiness_factory=lambda: object(),
+            root_builder=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("root build failed")
+            ),
+        )
+
+    assert trace == ["lock", "provider_close", "gamma_close", "unlock"]
+    assert {str(error) for error in caught.value.exceptions} == {
+        "root build failed", "provider_close failed", "gamma_close failed",
+    }
