@@ -1,3 +1,4 @@
+import asyncio
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -6,6 +7,13 @@ import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.facade import ProposeOnlyFacade
+from polybot.hermes.mcp_bridge import ProposalMcpServer
+from polybot.hermes.read_views import BookReadView, LedgerReadView
+from polybot.hermes.rpc import (
+    ProposalRpcClient,
+    ProposalRpcDispatcher,
+    ProposalRpcServer,
+)
 from polybot.harness.evidence import evaluate_category
 from polybot.ingestion.envelope import make_envelope
 from polybot.ingestion.orderbook import LocalBook
@@ -162,12 +170,63 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
     try:
         _warm_calibration(first.forecast_ledger)
         first.controller.boot()
-        ProposeOnlyFacade(first.intent_store).propose_trade(
-            "intent-1", token_id="101", condition_id=CONDITION,
-            event_id="event-1", side="BUY", target_price="0.49",
-            max_price="0.60", size_usd_suggestion="12", p="0.90",
-            p_confidence="0.75", citations=("citation-1", "citation-2"),
+        facade = ProposeOnlyFacade(
+            first.intent_store,
+            market_reader=lambda **_params: {
+                "markets": [{"condition_id": CONDITION, "token_ids": list(TOKENS)}],
+            },
+            book_reader=BookReadView(
+                lambda token_id: book if token_id in TOKENS else None,
+                token_ids=TOKENS,
+            ),
+            ledger_reader=LedgerReadView(
+                first.forecast_ledger, categories=("politics",),
+            ),
+            flags_reader=lambda: {
+                "runtime_ready": True, "trading_permission": False,
+            },
         )
+
+        async def propose_through_mcp_rpc():
+            socket_path = tmp_path / "whole-slice.sock"
+            server = ProposalRpcServer(
+                socket_path, ProposalRpcDispatcher(facade),
+                runtime_ready=lambda: True,
+            )
+            server_task = asyncio.create_task(server.run())
+            try:
+                await asyncio.wait_for(server.started.wait(), timeout=1)
+                bridge = ProposalMcpServer(ProposalRpcClient(socket_path))
+                assert (await bridge.call_tool("get_book", {"token_id": "101"}))[
+                    "midpoint"] == "0.50"
+                assert (await bridge.call_tool("get_market", {"limit": 1}))[
+                    "markets"][0]["condition_id"] == CONDITION
+                assert (await bridge.call_tool(
+                    "get_ledger", {"category": "politics", "limit": 1},
+                ))["records"]
+                assert (await bridge.call_tool("get_flags", {}))[
+                    "trading_permission"] is False
+                assert await bridge.call_tool("propose_trade", {
+                    "intent_id": "intent-1",
+                    "token_id": "101",
+                    "condition_id": CONDITION,
+                    "event_id": "event-1",
+                    "side": "BUY",
+                    "target_price": "0.49",
+                    "max_price": "0.60",
+                    "size_usd_suggestion": "12",
+                    "p": "0.90",
+                    "p_confidence": "0.75",
+                    "citations": ["citation-1", "citation-2"],
+                }) is True
+            finally:
+                server_task.cancel()
+                try:
+                    await server_task
+                except asyncio.CancelledError:
+                    pass
+
+        asyncio.run(propose_through_mcp_rpc())
         unresolved, = first.resolution_feed.poll((subject,))
         assert unresolved.disposition.value == "UNRESOLVED"
 

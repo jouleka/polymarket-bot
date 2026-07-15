@@ -10,6 +10,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import socket
 import time
@@ -34,6 +35,17 @@ class RpcRemoteError(RuntimeError):
     def __init__(self, code):
         self.code = code
         super().__init__(f"proposal RPC failed closed: {code}")
+
+
+def _validated_socket_path(path):
+    candidate = Path(path)
+    try:
+        encoded = os.fsencode(candidate)
+    except UnicodeEncodeError as exc:
+        raise ValueError("proposal socket path must be valid filesystem text") from exc
+    if not candidate.is_absolute() or len(encoded) > 100:
+        raise ValueError("proposal socket path must be absolute and at most 100 bytes")
+    return candidate
 
 
 class ProposalRateLimiter:
@@ -208,6 +220,11 @@ def _exact_keys(values, required, optional=frozenset()):
 
 
 def _text(value, name, maximum, *, allow_empty=False):
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RpcProtocolError(f"{name} must be a bounded exact string") from exc
     if (not isinstance(value, str) or (not value and not allow_empty)
             or len(value) > maximum
             or any(ord(char) < 32 or ord(char) == 127 for char in value)):
@@ -222,7 +239,8 @@ def _integer(value, name, *, minimum):
 
 
 def _decimal(value, name, *, lower, upper, lower_inclusive=True):
-    if not isinstance(value, str) or not value or len(value) > 128:
+    if (not isinstance(value, str) or len(value) > 128
+            or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None):
         raise RpcProtocolError(f"{name} must be an exact decimal string")
     try:
         parsed = Decimal(value)
@@ -243,9 +261,7 @@ class ProposalRpcServer:
                  socket_mode=0o660, request_timeout_seconds=2.0,
                  max_concurrent_requests=8, max_request_bytes=65_536,
                  max_response_bytes=262_144):
-        self._path = Path(path)
-        if not self._path.is_absolute():
-            raise ValueError("proposal socket path must be absolute")
+        self._path = _validated_socket_path(path)
         if not isinstance(dispatcher, ProposalRpcDispatcher):
             raise TypeError("dispatcher must be a ProposalRpcDispatcher")
         if not callable(runtime_ready):
@@ -283,7 +299,7 @@ class ProposalRpcServer:
         return self._started
 
     async def run(self):
-        self._path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+        self._prepare_socket_directory()
         try:
             existing = self._path.lstat()
         except FileNotFoundError:
@@ -313,6 +329,17 @@ class ProposalRpcServer:
             server.close()
             await server.wait_closed()
             self._unlink_owned_socket()
+
+    def _prepare_socket_directory(self):
+        parent = self._path.parent
+        parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+        observed = parent.lstat()
+        if (not stat.S_ISDIR(observed.st_mode)
+                or observed.st_uid != os.geteuid()
+                or stat.S_IMODE(observed.st_mode) & 0o022
+                or (self._socket_group is not None
+                    and observed.st_gid != self._socket_group)):
+            raise RuntimeError("proposal socket directory is not securely owned")
 
     async def _accept(self, reader, writer):
         async with self._semaphore:
@@ -403,9 +430,7 @@ class ProposalRpcClient:
 
     def __init__(self, path, *, request_id=None, timeout_seconds=3.0,
                  max_response_bytes=262_144):
-        self._path = Path(path)
-        if not self._path.is_absolute():
-            raise ValueError("proposal socket path must be absolute")
+        self._path = _validated_socket_path(path)
         self._request_id = (lambda: uuid.uuid4().hex) if request_id is None else request_id
         if not callable(self._request_id):
             raise TypeError("request_id must be callable")
