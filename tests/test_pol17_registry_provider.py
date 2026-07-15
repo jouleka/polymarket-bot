@@ -56,3 +56,31 @@ def test_registry_refresh_cannot_expand_the_collector_universe():
     assert provider.registry is first
     assert provider.condition_ids == frozenset({"c1"})
     assert provider.token_ids == ("t1", "t2")
+
+
+def test_last_good_registry_fails_closed_after_its_age_budget():
+    age = [100.0]
+    calls = [0]
+
+    def fetch_snapshot():
+        calls[0] += 1
+        if calls[0] == 1:
+            return [_market()], [_event()]
+        raise RuntimeError("Gamma unavailable")
+
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=fetch_snapshot,
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: age[0],
+        max_age_seconds=900.0,
+    )
+    loaded = provider.load()
+
+    age[0] = 999.0
+    with pytest.raises(RuntimeError, match="Gamma unavailable"):
+        provider.refresh()
+    assert provider.require_fresh() is loaded
+
+    age[0] = 1000.1
+    with pytest.raises(MarketSnapshotError, match="stale"):
+        provider.require_fresh()
