@@ -12,6 +12,16 @@ BRAIN_HOME=/var/lib/polybot-hermes
 BRIDGE_GROUP=polybot-proposal
 UV=/root/.local/bin/uv
 
+verify_services_not_active() {
+    local unit
+    for unit in polymarket-ingestion.service polymarket-hermes.service; do
+        if systemctl is-active --quiet "$unit"; then
+            echo "ERROR: refusing install while $unit is active" >&2
+            return 1
+        fi
+    done
+}
+
 verify_service_stopped_disabled() {
     local unit active_state enabled_state
     for unit in polymarket-ingestion.service polymarket-hermes.service; do
@@ -31,6 +41,8 @@ verify_service_stopped_disabled() {
     done
 }
 
+verify_services_not_active
+
 echo "== 1. isolated users + proposal-socket group =="
 if ! id "$SVC_USER" >/dev/null 2>&1; then
     useradd --system --home "$APP" --shell /usr/sbin/nologin "$SVC_USER"
@@ -44,11 +56,26 @@ fi
 if ! id "$BRAIN_USER" >/dev/null 2>&1; then
     useradd --system --create-home --home-dir "$BRAIN_HOME" \
         --shell /usr/sbin/nologin "$BRAIN_USER"
+else
+    brain_passwd=$(getent passwd "$BRAIN_USER")
+    brain_uid=$(id -u "$BRAIN_USER")
+    if [ "$(printf '%s' "$brain_passwd" | cut -d: -f6)" != "$BRAIN_HOME" ] || \
+       [ "$(printf '%s' "$brain_passwd" | cut -d: -f7)" != /usr/sbin/nologin ] || \
+       [ "$brain_uid" -ge 1000 ]; then
+        echo "ERROR: existing $BRAIN_USER identity violates the isolated system-user contract" >&2
+        exit 1
+    fi
 fi
 usermod -a -G "$BRIDGE_GROUP" "$SVC_USER"
 usermod -a -G "$BRIDGE_GROUP" "$BRAIN_USER"
 if id -nG "$BRAIN_USER" | tr ' ' '\n' | grep -Fx "$SVC_USER" >/dev/null; then
     echo "ERROR: $BRAIN_USER must not belong to database/config group $SVC_USER" >&2
+    exit 1
+fi
+expected_brain_groups=$(printf '%s\n%s\n' "$BRAIN_USER" "$BRIDGE_GROUP" | sort)
+actual_brain_groups=$(id -nG "$BRAIN_USER" | tr ' ' '\n' | sort)
+if [ "$actual_brain_groups" != "$expected_brain_groups" ]; then
+    echo "ERROR: $BRAIN_USER has supplementary authority outside the socket-only contract" >&2
     exit 1
 fi
 
@@ -80,6 +107,13 @@ echo "== 5. ownership (ONLY the writable data dir -> $SVC_USER) =="
 # still run .venv/bin/python + read src/, and (b) redeploys (`git pull` as root) never hit git's
 # dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 in the unit keeps src/ write-free.
 chown -R "$SVC_USER:$SVC_USER" "$APP/data"
+chmod 0750 "$APP/data"
+chown root:"$SVC_USER" "$APP/config.toml"
+chmod 0640 "$APP/config.toml"
+if [ -f "$APP/.env" ]; then
+    chown root:"$SVC_USER" "$APP/.env"
+    chmod 0640 "$APP/.env"
+fi
 
 echo "== 6. systemd units (install only; remain stopped + disabled) =="
 # Activation is a separate owner-approved action. An update must never restart or enable capture implicitly.

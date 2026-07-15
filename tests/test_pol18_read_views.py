@@ -105,6 +105,21 @@ def test_book_reader_returns_exact_live_local_book_projection():
     }
 
 
+def test_book_reader_rejects_a_stale_shared_local_book():
+    from polybot.hermes.read_views import BookReadView, ReadViewUnavailable
+    from polybot.ingestion.orderbook import LocalBook
+
+    book = LocalBook()
+    book.apply_book({
+        "bids": [{"price": "0.40", "size": "12.50"}],
+        "asks": [{"price": "0.44", "size": "7.25"}],
+    })
+    book.is_stale = lambda: True
+
+    with pytest.raises(ReadViewUnavailable, match="stale"):
+        BookReadView(lambda _token_id: book, token_ids=("11",))(token_id="11")
+
+
 def test_ledger_reader_returns_only_bounded_resolved_history_newest_first():
     from polybot.hermes.read_views import LedgerReadView
 
@@ -120,12 +135,13 @@ def test_ledger_reader_returns_only_bounded_resolved_history_newest_first():
     )
 
     class Ledger:
-        def resolved(self, category=None):
+        def resolved(self, category=None, limit=None):
             assert category == "sports"
+            assert limit == 1
             return [resolved]
 
         def all(self):
-            return [pending, resolved]
+            return [resolved, pending]
 
     reader = LedgerReadView(Ledger(), categories=("sports",), max_limit=20)
 

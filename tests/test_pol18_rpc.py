@@ -3,6 +3,7 @@ import asyncio
 import os
 from pathlib import Path
 import socket
+import time
 from decimal import Decimal
 
 
@@ -96,6 +97,22 @@ def test_rpc_rejects_json_float_before_the_proposal_facade():
     assert facade.calls == []
 
 
+def test_rpc_rejects_duplicate_keys_ambiguous_frames_and_oversized_requests():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    facade = _Facade()
+    dispatcher = ProposalRpcDispatcher(facade, max_request_bytes=256)
+    duplicate = (
+        b'{"version":1,"id":"a","id":"b","method":"get_flags","params":{}}\n'
+    )
+    for request in (duplicate, b'{}', b'{}\n{}\n', b'{' + b'x' * 256 + b'}\n'):
+        with pytest.raises(RpcProtocolError):
+            dispatcher.handle(request)
+    assert facade.calls == []
+
+
 def test_rpc_rejects_noncanonical_decimal_strings_before_the_facade():
     import pytest
 
@@ -124,6 +141,24 @@ def test_rpc_rejects_non_utf8_scalar_text_before_the_facade():
     with pytest.raises(RpcProtocolError, match="bounded exact string"):
         ProposalRpcDispatcher(facade).handle(_wire(payload))
     assert facade.calls == []
+
+
+def test_rpc_rejects_invalid_or_format_control_text_before_any_write():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    for field, value in (("id", "bad-\ud800"), ("thesis", "hidden\u202econtrol")):
+        facade = _Facade()
+        payload = json.loads(_proposal())
+        if field == "id":
+            payload["id"] = value
+        else:
+            payload["params"][field] = value
+
+        with pytest.raises(RpcProtocolError, match="bounded exact string"):
+            ProposalRpcDispatcher(facade).handle(_wire(payload))
+        assert facade.calls == []
 
 
 def test_rpc_rate_gate_runs_immediately_before_insert_only_proposal():
@@ -186,6 +221,165 @@ def test_unix_server_serves_one_bounded_request_and_cleans_up_socket(tmp_path):
     asyncio.run(scenario())
 
 
+def test_unix_server_rejects_requests_until_runtime_readiness_is_true(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "readiness.sock"
+        ready = [False]
+        facade = _Facade()
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(facade), runtime_ready=lambda: ready[0],
+        )
+        task = asyncio.create_task(server.run())
+        try:
+            await asyncio.wait_for(server.started.wait(), timeout=1)
+            reader, writer = await asyncio.open_unix_connection(path)
+            writer.write(_wire({
+                "version": 1, "id": "not-ready", "method": "get_book",
+                "params": {"token_id": "11"},
+            }))
+            await writer.drain()
+            response = json.loads(await reader.readline())
+            writer.close()
+            await writer.wait_closed()
+            assert response["error"]["code"] == "runtime_not_ready"
+            assert facade.calls == []
+
+            ready[0] = True
+            reader, writer = await asyncio.open_unix_connection(path)
+            writer.write(_wire({
+                "version": 1, "id": "ready", "method": "get_book",
+                "params": {"token_id": "11"},
+            }))
+            await writer.drain()
+            response = json.loads(await reader.readline())
+            writer.close()
+            await writer.wait_closed()
+            assert response["result"]["token_id"] == "11"
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
+
+
+def test_unix_server_fences_preconnected_clients_before_shutdown(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "shutdown.sock"
+        facade = _Facade()
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(facade), runtime_ready=lambda: True,
+            request_timeout_seconds=0.5,
+        )
+        task = asyncio.create_task(server.run())
+        await asyncio.wait_for(server.started.wait(), timeout=1)
+        reader, writer = await asyncio.open_unix_connection(path)
+        while not server._client_tasks:
+            await asyncio.sleep(0)
+
+        task.cancel()
+        while server._accepting_requests:
+            await asyncio.sleep(0)
+        response = None
+        try:
+            writer.write(_wire({
+                "version": 1, "id": "too-late", "method": "get_book",
+                "params": {"token_id": "11"},
+            }))
+            await writer.drain()
+            frame = await asyncio.wait_for(reader.readline(), timeout=0.2)
+            if frame:
+                response = json.loads(frame)
+        except ConnectionError:
+            pass
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        if response is not None:
+            assert response["error"]["code"] == "server_stopping"
+        assert facade.calls == []
+        assert not path.exists()
+
+    import pytest
+    asyncio.run(scenario())
+
+
+def test_unix_server_halts_when_a_handler_escapes_its_isolation_boundary(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "fatal-handler.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        )
+
+        async def escaped_handler(_reader, _writer):
+            raise RuntimeError("escaped handler")
+
+        server._accept = escaped_handler
+        task = asyncio.create_task(server.run())
+        await asyncio.wait_for(server.started.wait(), timeout=1)
+        _reader, writer = await asyncio.open_unix_connection(path)
+        with pytest.raises(RuntimeError, match="handler escaped"):
+            await asyncio.wait_for(task, timeout=1)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+        assert not path.exists()
+
+    import pytest
+    asyncio.run(scenario())
+
+
+def test_unix_server_halts_instead_of_acknowledging_an_overdue_sync_dispatch(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    class SlowFacade(_Facade):
+        def get_book(self, **params):
+            time.sleep(0.05)
+            return super().get_book(**params)
+
+    async def scenario():
+        path = tmp_path / "overdue.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(SlowFacade()), runtime_ready=lambda: True,
+            request_timeout_seconds=0.01,
+        )
+        task = asyncio.create_task(server.run())
+        await asyncio.wait_for(server.started.wait(), timeout=1)
+        reader, writer = await asyncio.open_unix_connection(path)
+        writer.write(_wire({
+            "version": 1, "id": "overdue", "method": "get_book",
+            "params": {"token_id": "11"},
+        }))
+        await writer.drain()
+        assert await asyncio.wait_for(reader.readline(), timeout=0.2) == b""
+        with pytest.raises(RuntimeError, match="handler escaped") as exc:
+            await asyncio.wait_for(task, timeout=1)
+        assert "deadline" in str(exc.value.__cause__)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+
+    import pytest
+    asyncio.run(scenario())
+
+
 def test_unix_server_recovers_only_a_proven_stale_socket(tmp_path):
     from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
 
@@ -211,6 +405,135 @@ def test_unix_server_recovers_only_a_proven_stale_socket(tmp_path):
 
     asyncio.run(scenario())
     assert not path.exists()
+
+
+def test_unix_server_rejects_active_non_socket_and_stale_identity_collisions(tmp_path):
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def active_collision():
+        path = tmp_path / "active.sock"
+        first = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        )
+        task = asyncio.create_task(first.run())
+        try:
+            await asyncio.wait_for(first.started.wait(), timeout=1)
+            second = ProposalRpcServer(
+                path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+            )
+            with pytest.raises(RuntimeError, match="already accepting"):
+                await second.run()
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(active_collision())
+
+    collision = tmp_path / "not-a-socket"
+    collision.write_text("preserve", encoding="utf-8")
+    server = ProposalRpcServer(
+        collision, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+    )
+    with pytest.raises(RuntimeError, match="non-socket"):
+        asyncio.run(server.run())
+    assert collision.read_text(encoding="utf-8") == "preserve"
+
+    path = tmp_path / "identity.sock"
+    original = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    original.bind(str(path))
+    observed = path.lstat()
+    old_path = tmp_path / "old-identity.sock"
+    path.rename(old_path)
+    original.close()
+    replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    replacement.bind(str(path))
+    try:
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        )
+        with pytest.raises(RuntimeError, match="changed"):
+            server._remove_proven_stale_socket(observed)
+        assert path.exists()
+    finally:
+        replacement.close()
+        path.unlink(missing_ok=True)
+        old_path.unlink(missing_ok=True)
+
+
+def test_unix_server_rejects_excess_clients_without_queueing_handlers(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "bounded.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+            max_concurrent_requests=1, request_timeout_seconds=1.0,
+        )
+        task = asyncio.create_task(server.run())
+        first_writer = second_writer = None
+        try:
+            await asyncio.wait_for(server.started.wait(), timeout=1)
+            _first_reader, first_writer = await asyncio.open_unix_connection(path)
+            second_reader, second_writer = await asyncio.open_unix_connection(path)
+            second_writer.write(_wire({
+                "version": 1,
+                "id": "over-limit",
+                "method": "get_book",
+                "params": {"token_id": "11"},
+            }))
+            await second_writer.drain()
+
+            response = json.loads(
+                await asyncio.wait_for(second_reader.readline(), timeout=0.2)
+            )
+            assert response["error"]["code"] == "server_busy"
+        finally:
+            for writer in (first_writer, second_writer):
+                if writer is not None:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except ConnectionError:
+                        pass
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
+
+
+def test_unix_server_times_out_an_idle_admitted_client(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "idle.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+            request_timeout_seconds=0.05,
+        )
+        task = asyncio.create_task(server.run())
+        try:
+            await asyncio.wait_for(server.started.wait(), timeout=1)
+            reader, writer = await asyncio.open_unix_connection(path)
+            response = json.loads(await asyncio.wait_for(reader.readline(), timeout=0.2))
+            writer.close()
+            await writer.wait_closed()
+            assert response["error"]["code"] == "request_timeout"
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
 
 
 def test_unix_server_rejects_a_symlinked_socket_directory(tmp_path):
@@ -271,6 +594,35 @@ def test_unix_server_never_publishes_when_socket_ownership_setup_fails(
     assert attachable_during_setup == [False]
     assert staging_modes == [0o700]
     assert not path.exists()
+    assert not list(tmp_path.glob(".p-*"))
+
+
+def test_unix_server_cleanup_preserves_a_replacement_socket_inode(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    async def scenario():
+        path = tmp_path / "owned.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(_Facade()), runtime_ready=lambda: True,
+        )
+        task = asyncio.create_task(server.run())
+        replacement = None
+        try:
+            await asyncio.wait_for(server.started.wait(), timeout=1)
+            path.unlink()
+            replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            replacement.bind(str(path))
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert path.exists()
+        finally:
+            if replacement is not None:
+                replacement.close()
+            path.unlink(missing_ok=True)
+
+    import pytest
+    asyncio.run(scenario())
 
 
 def test_unix_rpc_rejects_an_overlong_socket_path_before_startup(tmp_path):
@@ -306,6 +658,70 @@ def test_unix_client_round_trips_without_any_database_capability(tmp_path):
             assert await client.call("get_book", {"token_id": "11"}) == {
                 "token_id": "11", "midpoint": "0.4200",
             }
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(scenario())
+
+
+def test_unix_client_fails_closed_for_absent_and_invalid_endpoints(tmp_path):
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcClient, RpcRemoteError
+
+    async def scenario():
+        missing = ProposalRpcClient(tmp_path / "missing.sock")
+        with pytest.raises(RpcRemoteError, match="transport_unavailable"):
+            await missing.call("get_flags", {})
+
+        path = tmp_path / "invalid.sock"
+
+        async def invalid_response(_reader, writer):
+            writer.write(b"not-json\n")
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_unix_server(invalid_response, path=path)
+        try:
+            with pytest.raises(RpcRemoteError, match="invalid_response"):
+                await ProposalRpcClient(path).call("get_flags", {})
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(scenario())
+
+
+def test_unix_server_rejects_a_response_over_its_byte_ceiling(tmp_path):
+    from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
+
+    class LargeFacade(_Facade):
+        def get_book(self, **params):
+            return {"token_id": params["token_id"], "payload": "x" * 500}
+
+    async def scenario():
+        path = tmp_path / "response-limit.sock"
+        server = ProposalRpcServer(
+            path, ProposalRpcDispatcher(LargeFacade()), runtime_ready=lambda: True,
+            max_response_bytes=128,
+        )
+        task = asyncio.create_task(server.run())
+        try:
+            await asyncio.wait_for(server.started.wait(), timeout=1)
+            reader, writer = await asyncio.open_unix_connection(path)
+            writer.write(_wire({
+                "version": 1, "id": "large", "method": "get_book",
+                "params": {"token_id": "11"},
+            }))
+            await writer.drain()
+            response = json.loads(await reader.readline())
+            writer.close()
+            await writer.wait_closed()
+            assert response["error"]["code"] == "request_rejected"
         finally:
             task.cancel()
             try:

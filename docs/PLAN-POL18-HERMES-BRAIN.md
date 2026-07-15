@@ -26,7 +26,7 @@ Baseline: `8deee0459a61754bc33da4733d4efea6f59e764f`, 2,208 tests passing. Branc
    decimal-safe JSON.
 2. GREEN: strict codec/dispatcher with exact schemas, duplicate-key rejection, unknown-key/method
    failure, byte/string/list bounds, and sanitized errors.
-3. Serial RED/GREEN: async Unix listener lifecycle, readiness gate, concurrency/timeout/proposal
+3. Serial RED/GREEN: async Unix listener lifecycle, readiness gate, bounded admission/wire-timeout/proposal
    rate bounds, socket type/ownership/mode, and request isolation.
 4. Wire the server as an optional supervised POL-17 service with `None` preserving old behavior;
    listener return/failure halts while request failures isolate.

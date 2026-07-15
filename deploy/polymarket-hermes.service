@@ -2,6 +2,8 @@
 Description=polymarket propose-only Hermes brain (paper/shadow)
 After=network-online.target polymarket-ingestion.service
 Wants=network-online.target
+Requisite=polymarket-ingestion.service
+PartOf=polymarket-ingestion.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -14,6 +16,7 @@ WorkingDirectory=/var/lib/polybot-hermes
 Environment=HOME=/var/lib/polybot-hermes
 Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock
 ExecStartPre=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_verify --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket
 ExecStart=/usr/local/bin/hermes --profile polymarket gateway run --replace
 Restart=on-failure
@@ -29,6 +32,9 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent /usr/local/bin/hermes
 ReadWritePaths=/var/lib/polybot-hermes
+InaccessiblePaths=-/opt/polymarket-bot/config.toml
+InaccessiblePaths=-/opt/polymarket-bot/.env
+InaccessiblePaths=-/opt/polymarket-bot/data
 RestrictSUIDSGID=true
 LockPersonality=true
 

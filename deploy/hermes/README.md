@@ -5,13 +5,15 @@ runtime. It never grants wallet/trading keys, database access, a shell, or tools
 five-tool MCP surface. The existing root-owned default, coder, memecoin, and optionsbot profiles
 must not be cloned, edited, stopped, or restarted.
 
-Code installation, profile creation, model authentication, cron creation, POL-17 activation,
+Code/identity installation, profile creation, model authentication, cron creation, POL-17 activation,
 POL-18 activation, and enablement are separate owner gates. Running one section does not authorize
 the next. The repository build and tests do not perform any of these operations.
 
-## 1. Code installation while both services remain stopped
+## 1. Code and isolated-identity installation while both services remain stopped
 
-Requires explicit code-installation approval:
+Requires explicit code/identity-installation approval. This single stopped-host gate includes
+creation or validation of the two nologin users and socket-only group; it is never run under the
+reviewed-build approval alone:
 
 ```sh
 systemctl disable --now polymarket-hermes.service polymarket-ingestion.service
@@ -34,6 +36,9 @@ id -nG polybot
 id -nG polybot-hermes
 test "$(getent passwd polybot-hermes | cut -d: -f7)" = /usr/sbin/nologin
 ! id -nG polybot-hermes | tr ' ' '\n' | grep -Fx polybot
+! sudo -u polybot-hermes test -r /opt/polymarket-bot/config.toml
+! sudo -u polybot-hermes test -r /opt/polymarket-bot/.env
+! sudo -u polybot-hermes test -x /opt/polymarket-bot/data
 ```
 
 Both users must belong to `polybot-proposal`. `polybot-hermes` must not belong to `polybot`; it
@@ -115,7 +120,8 @@ sudo -u polybot-hermes env \
   PYTHONPATH=/opt/polymarket-bot/src \
   /usr/local/lib/hermes-agent/venv/bin/python \
   -m polybot.hermes.profile_verify \
-  --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket
+  --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket \
+  --expect-no-cron
 ```
 
 Required output ends with `exact five; PASS`. Any version mismatch, extra/missing MCP tool,
@@ -128,12 +134,33 @@ Requires separate cron-state approval. Use the reviewed prompt verbatim and do n
 scripts, workdirs, delivery platforms, or additional tools:
 
 ```sh
-PROMPT=$(cat /opt/polymarket-bot/deploy/hermes/polymarket-profile/cron-prompt.md)
-sudo -u polybot-hermes env HOME=/var/lib/polybot-hermes \
-  /usr/local/bin/hermes --profile polymarket cron create \
-  "every 5m" "$PROMPT" --name polymarket-propose-only
+sudo -u polybot-hermes env \
+  HOME=/var/lib/polybot-hermes \
+  HERMES_HOME=/var/lib/polybot-hermes/.hermes/profiles/polymarket \
+  /usr/local/lib/hermes-agent/venv/bin/python - <<'PY'
+from pathlib import Path
+from cron.jobs import create_job
+
+prompt = Path(
+    "/opt/polymarket-bot/deploy/hermes/polymarket-profile/cron-prompt.md"
+).read_text(encoding="utf-8").rstrip("\n")
+create_job(
+    prompt=prompt,
+    schedule="every 5m",
+    name="polymarket-propose-only",
+    deliver="local",
+    skills=[],
+    enabled_toolsets=["polymarket"],
+)
+PY
 sudo -u polybot-hermes env HOME=/var/lib/polybot-hermes \
   /usr/local/bin/hermes --profile polymarket cron list
+sudo -u polybot-hermes env \
+  HOME=/var/lib/polybot-hermes \
+  PYTHONPATH=/opt/polymarket-bot/src \
+  /usr/local/lib/hermes-agent/venv/bin/python \
+  -m polybot.hermes.profile_verify \
+  --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket
 systemctl is-active polymarket-hermes.service   # inactive
 systemctl is-enabled polymarket-hermes.service # disabled
 ```
@@ -155,6 +182,11 @@ systemctl start polymarket-hermes.service
 systemctl is-active polymarket-hermes.service
 journalctl -u polymarket-hermes.service --since=-5m --no-pager
 ```
+
+`Requisite=` makes a brain start fail unless POL-17 is already active and does not pull-start it;
+`PartOf=` propagates explicit POL-17 stop/restart operations. An unexpected POL-17 crash can leave
+the Hermes gateway process present while systemd restarts POL-17, but the missing proposal socket
+makes every affected brain run fail closed with zero fallback authority.
 
 Required before leaving it running:
 

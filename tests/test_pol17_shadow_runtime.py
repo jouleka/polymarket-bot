@@ -137,7 +137,7 @@ def test_shadow_runtime_opens_proposal_admission_only_after_restart_barriers():
 
     assert trace == [
         "resolution_drain", "execution_drain", "boot", "resolution_state",
-        "admission:True", "systemd_ready", "cycle", "admission:False",
+        "systemd_ready", "admission:True", "cycle", "admission:False",
         "systemd_stopping",
     ]
 

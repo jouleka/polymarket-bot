@@ -18,12 +18,18 @@ def test_brain_unit_is_dedicated_fail_closed_and_does_not_activate_pol17():
     assert "profile_verify --profile-home" in text
     assert "--profile polymarket gateway run --replace" in text
     assert "After=network-online.target polymarket-ingestion.service" in text
+    assert "Requisite=polymarket-ingestion.service" in text
+    assert "PartOf=polymarket-ingestion.service" in text
     assert "Requires=polymarket-ingestion.service" not in text
     assert "Wants=polymarket-ingestion.service" not in text
+    assert "ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock" in text
     assert "Restart=on-failure" in text
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
     assert "ReadWritePaths=/var/lib/polybot-hermes" in text
+    assert "InaccessiblePaths=-/opt/polymarket-bot/config.toml" in text
+    assert "InaccessiblePaths=-/opt/polymarket-bot/.env" in text
+    assert "InaccessiblePaths=-/opt/polymarket-bot/data" in text
     assert "WantedBy=multi-user.target" in text
 
 
@@ -41,6 +47,17 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert "systemctl enable" not in text
     assert "systemctl start" not in text
     assert "hermes profile create" not in text
+    assert 'chmod 0750 "$APP/data"' in text
+    assert 'chmod 0640 "$APP/config.toml"' in text
+    assert 'chown root:"$SVC_USER" "$APP/config.toml"' in text
+    assert 'chmod 0640 "$APP/.env"' in text
+    assert text.index("verify_services_not_active") < text.index(
+        'echo "== 1. isolated users + proposal-socket group =="'
+    )
+    assert 'getent passwd "$BRAIN_USER"' in text
+    assert 'id -u "$BRAIN_USER"' in text
+    assert 'id -nG "$BRAIN_USER"' in text
+    assert 'expected_brain_groups' in text
 
 
 def test_composite_example_configures_only_the_group_scoped_local_endpoint():

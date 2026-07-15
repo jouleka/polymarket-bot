@@ -343,13 +343,18 @@ class ForecastLedger:
             self._conn.commit()
         return len(rows)
 
-    def resolved(self, category=None):
+    def resolved(self, category=None, limit=None):
+        if (limit is not None
+                and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0)):
+            raise ValueError("resolved limit must be a positive integer or None")
         sql = f"SELECT {_COLUMNS} FROM forecasts WHERE resolution_status IS NOT NULL"
         params = ()
         if category is not None:
             sql += " AND category=?"
             params = (category,)
-        return self._query(sql + " ORDER BY rowid", params)
+        if limit is None:
+            return self._query(sql + " ORDER BY rowid", params)
+        return self._query(sql + " ORDER BY rowid DESC LIMIT ?", params + (limit,))
 
     def get(self, forecast_id):
         rows = self._query(f"SELECT {_COLUMNS} FROM forecasts WHERE forecast_id=?", (forecast_id,))

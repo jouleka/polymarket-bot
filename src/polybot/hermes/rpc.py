@@ -14,6 +14,7 @@ import re
 import stat
 import socket
 import time
+import unicodedata
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -35,6 +36,10 @@ class RpcRemoteError(RuntimeError):
     def __init__(self, code):
         self.code = code
         super().__init__(f"proposal RPC failed closed: {code}")
+
+
+class _RpcSupervisionHalt(RuntimeError):
+    """A request boundary invariant failed and must terminate the listener."""
 
 
 def _validated_socket_path(path):
@@ -80,7 +85,7 @@ def _object_without_duplicates(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise RpcProtocolError(f"duplicate JSON key: {key}")
+            raise RpcProtocolError("RPC JSON contains a duplicate key")
         result[key] = value
     return result
 
@@ -116,10 +121,7 @@ class ProposalRpcDispatcher:
             raise RpcProtocolError("RPC request envelope keys are invalid")
         if payload["version"] != PROTOCOL_VERSION or isinstance(payload["version"], bool):
             raise RpcProtocolError("RPC protocol version is unsupported")
-        request_id = payload["id"]
-        if (not isinstance(request_id, str) or not request_id
-                or len(request_id) > 128 or any(ord(char) < 32 for char in request_id)):
-            raise RpcProtocolError("RPC request id is invalid")
+        request_id = _text(payload["id"], "RPC request id", 128)
         method = payload["method"]
         if method not in APPROVED_METHODS:
             raise RpcProtocolError("RPC method is not approved")
@@ -227,7 +229,7 @@ def _text(value, name, maximum, *, allow_empty=False):
             raise RpcProtocolError(f"{name} must be a bounded exact string") from exc
     if (not isinstance(value, str) or (not value and not allow_empty)
             or len(value) > maximum
-            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            or any(unicodedata.category(char).startswith("C") for char in value)):
         raise RpcProtocolError(f"{name} must be a bounded exact string")
     return value
 
@@ -290,9 +292,13 @@ class ProposalRpcServer:
         self._request_timeout = request_timeout_seconds
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
-        self._semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self._max_concurrent_requests = max_concurrent_requests
+        self._active_requests = 0
+        self._accepting_requests = False
+        self._client_tasks = set()
         self._started = asyncio.Event()
         self._socket_identity = None
+        self._handler_failure = None
 
     @property
     def started(self):
@@ -316,11 +322,14 @@ class ProposalRpcServer:
         if (not stat.S_ISDIR(staging_stat.st_mode)
                 or staging_stat.st_uid != os.geteuid()
                 or stat.S_IMODE(staging_stat.st_mode) != 0o700):
+            self._remove_staging_directory(staging_directory, staging_identity)
             raise RuntimeError("proposal staging directory is not private")
         server = None
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        serve_task = None
+        listener = None
         private_identity = None
         try:
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             listener.bind(str(private_path))
             private_stat = private_path.lstat()
             if not stat.S_ISSOCK(private_stat.st_mode):
@@ -347,22 +356,42 @@ class ProposalRpcServer:
             socket_stat = self._path.lstat()
             self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
             server = await asyncio.start_unix_server(
-                self._accept, sock=listener,
+                self._schedule_client, sock=listener,
                 limit=self._max_request_bytes + 1,
             )
             listener = None  # ownership transferred to the asyncio server
+            self._handler_failure = asyncio.get_running_loop().create_future()
+            self._accepting_requests = True
             self._started.set()
-            await server.serve_forever()
+            serve_task = asyncio.create_task(server.serve_forever())
+            done, _pending = await asyncio.wait(
+                (serve_task, self._handler_failure),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if self._handler_failure in done:
+                raise RuntimeError(
+                    "proposal RPC handler escaped isolation — HALT"
+                ) from self._handler_failure.result()
+            await serve_task
             raise RuntimeError("proposal RPC listener returned unexpectedly")
         finally:
+            self._accepting_requests = False
             if server is not None:
                 server.close()
-                await server.wait_closed()
             elif listener is not None:
                 listener.close()
+            await self._drain_client_tasks()
+            if serve_task is not None and not serve_task.done():
+                serve_task.cancel()
+            if serve_task is not None:
+                await asyncio.gather(serve_task, return_exceptions=True)
+            if server is not None:
+                await server.wait_closed()
             self._unlink_if_identity(private_path, private_identity)
             self._unlink_owned_socket()
             self._remove_staging_directory(staging_directory, staging_identity)
+            if self._handler_failure is not None and not self._handler_failure.done():
+                self._handler_failure.cancel()
 
     def _prepare_socket_directory(self):
         parent = self._path.parent
@@ -386,22 +415,54 @@ class ProposalRpcServer:
             path.rmdir()
 
     async def _accept(self, reader, writer):
-        async with self._semaphore:
+        if not self._accepting_requests:
+            await self._write_error(writer, "server_stopping")
+            return
+        try:
+            await asyncio.wait_for(
+                self._serve_one(reader, writer), timeout=self._request_timeout,
+            )
+        except _RpcSupervisionHalt:
+            raise
+        except TimeoutError:
+            await self._write_error(writer, "request_timeout")
+        except Exception:
+            log.warning("isolated proposal RPC request rejected")
+            await self._write_error(writer, "request_rejected")
+
+    async def _run_client(self, reader, writer):
+        try:
+            await self._accept(reader, writer)
+        finally:
+            writer.close()
             try:
-                await asyncio.wait_for(
-                    self._serve_one(reader, writer), timeout=self._request_timeout,
-                )
-            except TimeoutError:
-                await self._write_error(writer, "request_timeout")
-            except Exception:
-                log.exception("isolated proposal RPC client failure")
-                await self._write_error(writer, "request_rejected")
-            finally:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except (ConnectionError, OSError):
-                    pass
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+
+    def _schedule_client(self, reader, writer):
+        if not self._accepting_requests:
+            writer.write(self._error_frame("server_stopping"))
+            writer.close()
+            return
+        if self._active_requests >= self._max_concurrent_requests:
+            writer.write(self._error_frame("server_busy"))
+            writer.close()
+            return
+        self._active_requests += 1
+        task = asyncio.create_task(self._run_client(reader, writer))
+        self._client_tasks.add(task)
+        task.add_done_callback(self._client_done)
+
+    def _client_done(self, task):
+        self._active_requests -= 1
+        self._client_tasks.discard(task)
+        if task.cancelled():
+            return
+        failure = task.exception()
+        if (failure is not None and self._handler_failure is not None
+                and not self._handler_failure.done()):
+            self._handler_failure.set_result(failure)
 
     async def _serve_one(self, reader, writer):
         frame = await reader.readline()
@@ -409,32 +470,52 @@ class ProposalRpcServer:
             raise RpcProtocolError("RPC client closed before a request")
         if len(frame) > self._max_request_bytes:
             raise RpcProtocolError("RPC request exceeds byte limit")
+        if not self._accepting_requests:
+            await self._write_error(writer, "server_stopping")
+            return
         ready = self._runtime_ready()
         if not isinstance(ready, bool):
             raise TypeError("runtime readiness must be boolean")
         if not ready:
             await self._write_error(writer, "runtime_not_ready")
             return
+        started_at = asyncio.get_running_loop().time()
         response = self._dispatcher.handle(frame)
+        if asyncio.get_running_loop().time() - started_at > self._request_timeout:
+            raise _RpcSupervisionHalt("synchronous RPC dispatch exceeded its deadline")
         if len(response) > self._max_response_bytes:
             raise RuntimeError("proposal RPC response exceeds byte limit")
         writer.write(response)
         await writer.drain()
 
+    async def _drain_client_tasks(self):
+        tasks = tuple(task for task in self._client_tasks if not task.done())
+        if not tasks:
+            return
+        _done, pending = await asyncio.wait(tasks, timeout=self._request_timeout)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     @staticmethod
     async def _write_error(writer, code):
         if writer.is_closing():
             return
+        writer.write(ProposalRpcServer._error_frame(code))
+        try:
+            await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+
+    @staticmethod
+    def _error_frame(code):
         payload = {
             "version": PROTOCOL_VERSION,
             "id": None,
             "error": {"code": code, "message": "proposal request failed closed"},
         }
-        writer.write((json.dumps(payload, separators=(",", ":")) + "\n").encode())
-        try:
-            await writer.drain()
-        except (ConnectionError, OSError):
-            pass
+        return (json.dumps(payload, separators=(",", ":")) + "\n").encode()
 
     def _unlink_owned_socket(self):
         if self._socket_identity is None:

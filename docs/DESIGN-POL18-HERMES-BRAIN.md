@@ -10,7 +10,7 @@ and conservative flag views, then enqueue an untrusted `PROPOSED` intent through
 `ProposeOnlyFacade`. It receives no database handle, key, wallet, signer, controller, shell, file,
 browser, order, cancellation, settlement, process, or service-lifecycle authority.
 
-POL-18 ends at a reviewed build. Creating the Linux user/group or Hermes profile, installing the
+POL-18 ends at a reviewed build. Running the stopped code/identity installer, creating a Hermes profile, installing the
 checkout or units, configuring a model/provider, creating cron state, starting/enabling either
 service, opening production databases, and activation are separate owner gates.
 
@@ -97,7 +97,12 @@ The local protocol is versioned newline-delimited JSON with one request and one 
 connection. Requests carry `{version,id,method,params}`; responses carry either `{version,id,result}`
 or `{version,id,error}`. The server enforces a fixed byte ceiling before JSON decoding, strict UTF-8,
 duplicate-key rejection, exact method names and schemas, a short per-request timeout, bounded
-concurrency, and a proposal rate limit. It never logs proposal thesis/citations or raw request
+admission, and a proposal rate limit. The timeout directly bounds incomplete wire reads and the
+tracked-client shutdown drain. Facade/SQLite calls remain synchronous to preserve the sole-writer
+thread; they are structurally bounded, and an operation that returns after the deadline receives
+no success acknowledgement and HALTs the supervised listener. A kernel-level storage stall is not
+preemptible by asyncio; the service will not acknowledge the request and requires external
+supervision/operator recovery if it does not return. It never logs proposal thesis/citations or raw request
 payloads.
 
 The server binds atomically: remove only its own stale socket after proving it is a socket, bind a
@@ -107,9 +112,9 @@ Client disconnect, malformed input, rejected proposal, stale book, or rate exhau
 request. An unavailable POL-17 socket or MCP subprocess failure fails that brain run only; it cannot
 alter ERS state or stop POL-17.
 
-The endpoint does not accept until POL-17 has completed resolution recovery/outbox drains, observed
-a live frame, booted the controller, and applied terminal/frozen state. Shutdown first stops new
-requests, waits only for the bounded in-flight timeout, unlinks its own socket, then follows POL-17's
+The endpoint does not admit proposals until POL-17 has completed resolution recovery/outbox drains, observed
+a live frame, booted the controller, applied terminal/frozen state, and published systemd readiness. Shutdown first stops new
+requests, tracks and drains/cancels admitted clients within the configured timeout, unlinks only its own socket, then follows POL-17's
 existing writer/store/lock closure order.
 
 ## 5. Hermes configuration and verification
@@ -152,8 +157,11 @@ These never mutate status, retry a proposal with a new ID automatically, or weak
 - protocol framing ambiguity, request handler escaping its isolation boundary, or facade/read-view
   construction without the real POL-17 components.
 
-POL-17 may continue safely if the separate brain service is down. The brain service must remain
-down if POL-17 is unavailable; it does not fall back to SQLite, persisted midpoint snapshots, or a
+POL-17 may continue safely if the separate brain service is down. `Requisite` refuses brain startup
+unless POL-17 is already active without pull-starting it, and `PartOf` propagates explicit POL-17
+stop/restart operations. If POL-17 dies unexpectedly while the gateway remains present, every cron
+tool call fails on the missing socket and cannot propose; this safer non-pulling tradeoff preserves
+the separate activation gate. There is no fallback to SQLite, persisted midpoint snapshots, or a
 duplicate collector.
 
 ## 7. Safety and acceptance invariants
