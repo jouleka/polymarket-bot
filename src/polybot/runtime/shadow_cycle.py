@@ -8,6 +8,7 @@ from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.resolution.feed import PollDisposition
 from polybot.resolution.models import ResolutionSubject
 from polybot.resolution.errors import SettlementConflict
+from polybot.runtime.registry_provider import RegistryRefreshUnavailable
 
 
 @dataclass(frozen=True)
@@ -99,7 +100,12 @@ class ShadowCycleCoordinator:
         now = self._clock()
 
         if self._due(self._last_registry_refresh, self._registry_refresh_seconds, now):
-            await self._run_blocking(self._registry_provider.refresh)
+            try:
+                await self._run_blocking(self._registry_provider.refresh)
+            except RegistryRefreshUnavailable:
+                # The last coherent generation remains usable only through its
+                # independently enforced TTL. Retry at the normal refresh cadence.
+                pass
             self._last_registry_refresh = now
         registry = self._registry_provider.require_fresh()
 

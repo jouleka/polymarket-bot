@@ -8,6 +8,10 @@ import math
 from polybot.ers.market_meta import MarketRegistry, MarketSnapshotError
 
 
+class RegistryRefreshUnavailable(RuntimeError):
+    """A transient Gamma transport/server failure with no new snapshot authority."""
+
+
 def _snapshot_identity(market_rows):
     identities = {}
     token_order = []
