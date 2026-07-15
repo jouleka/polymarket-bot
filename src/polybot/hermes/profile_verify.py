@@ -186,6 +186,18 @@ def _verify_profile_filesystem(home):
         raise RuntimeError("Hermes process group membership is unsafe")
 
 
+def verify_model_selection(config):
+    model = config.get("model") if isinstance(config, dict) else None
+    if not isinstance(model, dict):
+        raise RuntimeError("profile model/provider requires owner selection")
+    for field in ("default", "provider"):
+        value = model.get(field)
+        if (not isinstance(value, str) or not value.strip()
+                or value == "OWNER_CONFIG_REQUIRED"):
+            raise RuntimeError("profile model/provider requires owner selection")
+    return True
+
+
 def verify_installed_profile(profile_home, *, expect_no_cron=False):
     """Run inside the pinned Hermes venv; discovery starts only the stdio bridge."""
     home = Path(profile_home)
@@ -204,11 +216,7 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
     )
 
     config = read_raw_config()
-    model = config.get("model") if isinstance(config, dict) else None
-    if (not isinstance(model, dict)
-            or model.get("default") == "OWNER_CONFIG_REQUIRED"
-            or model.get("provider") == "OWNER_CONFIG_REQUIRED"):
-        raise RuntimeError("profile model/provider requires an owner-approved stopped configuration")
+    verify_model_selection(config)
     platform_toolsets = {
         platform: _get_platform_tools(config, platform)
         for platform in PROFILE_PLATFORMS

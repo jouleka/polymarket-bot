@@ -133,3 +133,21 @@ def test_cron_contract_requires_one_exact_job_and_exact_model_visible_tools():
         verify_cron_contract([job, job], prompt, sorted(MODEL_VISIBLE))
     with pytest.raises(RuntimeError, match="model-visible"):
         verify_cron_contract([job], prompt, sorted(MODEL_VISIBLE | {"terminal"}))
+
+
+def test_activation_requires_nonempty_owner_selected_model_and_provider():
+    from polybot.hermes.profile_verify import verify_model_selection
+
+    verify_model_selection({
+        "model": {"default": "reviewed-model", "provider": "reviewed-provider"},
+    })
+    for model in (
+        None,
+        {},
+        {"default": "", "provider": "reviewed-provider"},
+        {"default": "reviewed-model", "provider": "  "},
+        {"default": 7, "provider": "reviewed-provider"},
+        {"default": "OWNER_CONFIG_REQUIRED", "provider": "reviewed-provider"},
+    ):
+        with pytest.raises(RuntimeError, match="model/provider"):
+            verify_model_selection({"model": model})
