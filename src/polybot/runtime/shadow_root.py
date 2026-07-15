@@ -10,6 +10,9 @@ import time
 from polybot.ers.heartbeat import Heartbeat
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 from polybot.ingestion.news import NewsPoller
+from polybot.ers.market_meta import DEFAULT_CATEGORY_POLICY
+from polybot.harness.evidence import evaluate_category
+from polybot.runtime.harness_runtime import HarnessEvidenceRuntime
 from polybot.runtime.ingestion import build_ingestion_assembly
 from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
 from polybot.runtime.shadow_build import build_shadow_components
@@ -76,6 +79,23 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             await news_poller.poll_all()
             await asyncio.sleep(config.news_poll_seconds)
 
+    categories = DEFAULT_CATEGORY_POLICY.precedence
+    harness = HarnessEvidenceRuntime(
+        categories=categories,
+        evaluate=lambda category: evaluate_category(
+            category,
+            shadow_ledger=components.shadow_ledger,
+            forecast_ledger=components.forecast_ledger,
+            calibration_gate=components.calibration_gate,
+            maker_gate=components.maker_gate,
+            ramp_config=components.ramp_config,
+            maker_config=components.maker_config,
+            family_size=len(categories),
+        ),
+        ramp_controller=components.ramp_controller,
+        portfolio_for=lambda: components.controller._portfolio,
+    )
+
     cycle = ShadowCycleCoordinator(
         heartbeat=heartbeat,
         registry_provider=registry_provider,
@@ -86,7 +106,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         resolution_dispatcher=components.resolution_dispatcher,
         controller=components.controller,
         execution_dispatcher=components.execution_dispatcher,
-        evidence_update=lambda: None,
+        evidence_update=harness.update,
         status_update=lambda: None,
         run_blocking=run_blocking,
         clock=time.monotonic,
@@ -133,4 +153,5 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     runtime._cycle = cycle
     runtime._collector = ingestion.collector
     runtime._news_poller = news_poller
+    runtime._harness = harness
     return runtime
