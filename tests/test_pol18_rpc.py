@@ -105,9 +105,22 @@ def test_rpc_rejects_duplicate_keys_ambiguous_frames_and_oversized_requests():
     facade = _Facade()
     dispatcher = ProposalRpcDispatcher(facade, max_request_bytes=256)
     duplicate = (
-        b'{"version":1,"id":"a","id":"b","method":"get_flags","params":{}}\n'
+        b'{"version":1,"id":"a","id":"b","method":"get_book",'
+        b'"params":{"token_id":"11"}}\n'
     )
-    for request in (duplicate, b'{}', b'{}\n{}\n', b'{' + b'x' * 256 + b'}\n'):
+    valid_with_bytes_after_frame = _wire({
+        "version": 1, "id": "framing", "method": "get_book",
+        "params": {"token_id": "11"},
+    }) + b" "
+    oversized_valid = _wire({
+        "version": 1, "id": "i" * 128, "method": "get_book",
+        "params": {"token_id": "t" * 128},
+    })
+    assert len(oversized_valid) > 256
+    for request in (
+        duplicate, b'{}', b'{}\n{}\n', valid_with_bytes_after_frame,
+        oversized_valid,
+    ):
         with pytest.raises(RpcProtocolError):
             dispatcher.handle(request)
     assert facade.calls == []
