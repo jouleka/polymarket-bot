@@ -113,27 +113,45 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     caps = RiskCaps()
     verify_or_refuse(caps, expected_caps_hash=EXPECTED_RISK_CAPS_HASH)
     stamper = ingestion.stamper
-    event_reader = ReadOnlyEventStore(config.ingestion.db_path)
-    intent_store = IntentStore(config.intents_db_path, stamper)
-    forecast_ledger = ForecastLedger(config.forecasts_db_path, stamper)
-    component_log = ComponentLog(config.components_db_path, stamper=stamper)
-    maker_ledger = MakerLedger(config.maker_db_path, stamper)
-    shadow_ledger = ShadowLedger(config.shadow_db_path, stamper)
+    opened_closers = []
+
+    def open_owned(factory):
+        try:
+            resource = factory()
+        except Exception:
+            for close in reversed(opened_closers):
+                close()
+            raise
+        opened_closers.append(resource.close)
+        return resource
+
+    event_reader = open_owned(
+        lambda: ReadOnlyEventStore(config.ingestion.db_path)
+    )
+    intent_store = open_owned(
+        lambda: IntentStore(config.intents_db_path, stamper)
+    )
+    forecast_ledger = open_owned(
+        lambda: ForecastLedger(config.forecasts_db_path, stamper)
+    )
+    component_log = open_owned(
+        lambda: ComponentLog(config.components_db_path, stamper=stamper)
+    )
+    maker_ledger = open_owned(
+        lambda: MakerLedger(config.maker_db_path, stamper)
+    )
+    shadow_ledger = open_owned(
+        lambda: ShadowLedger(config.shadow_db_path, stamper)
+    )
     # ResolutionFeed is the only off-loop store user. The root serializes its
     # worker with every event-loop dispatcher/state access and joins that worker
     # before closing this connection.
-    resolution_store = ResolutionStore(
-        config.resolution_db_path, stamper, check_same_thread=False
+    resolution_store = open_owned(
+        lambda: ResolutionStore(
+            config.resolution_db_path, stamper, check_same_thread=False
+        )
     )
-    closers = (
-        event_reader.close,
-        intent_store.close,
-        forecast_ledger.close,
-        component_log.close,
-        maker_ledger.close,
-        shadow_ledger.close,
-        resolution_store.close,
-    )
+    closers = tuple(opened_closers)
 
     market_registry = CurrentMarketRegistry(registry_provider)
     calibration_gate = CalibrationGate(

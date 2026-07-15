@@ -56,12 +56,33 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     )
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pol17-blocking")
     worker_stop = threading.Event()
+    construction_closers = [
+        ingestion.writer.close,
+        lambda: executor.shutdown(wait=True),
+    ]
+
+    def guarded(factory):
+        try:
+            return factory()
+        except Exception as construction_error:
+            cleanup_errors = []
+            for close in reversed(construction_closers):
+                try:
+                    close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                raise ExceptionGroup(
+                    "shadow root construction cleanup failed",
+                    [construction_error, *cleanup_errors],
+                ) from construction_error
+            raise
 
     async def run_blocking(call, *args):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, partial(call, *args))
 
-    components = build_shadow_components(
+    components = guarded(lambda: build_shadow_components(
         config,
         ingestion=ingestion,
         registry_provider=registry_provider,
@@ -72,14 +93,15 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         wall_clock=time.time,
         health_clock_seconds=time.monotonic,
         health_clock_ns=time.monotonic_ns,
-    )
+    ))
+    construction_closers.append(components.close)
     heartbeat = (
         Heartbeat(config.ingestion.heartbeat_path).beat
         if config.ingestion.heartbeat_path else (lambda: None)
     )
-    news_poller = NewsPoller(
+    news_poller = guarded(lambda: NewsPoller(
         news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST
-    )
+    ))
 
     async def poll_news():
         while True:
@@ -87,7 +109,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             await asyncio.sleep(config.news_poll_seconds)
 
     categories = DEFAULT_CATEGORY_POLICY.precedence
-    harness = HarnessEvidenceRuntime(
+    harness = guarded(lambda: HarnessEvidenceRuntime(
         categories=categories,
         evaluate=lambda category: evaluate_category(
             category,
@@ -101,9 +123,9 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         ),
         ramp_controller=components.ramp_controller,
         portfolio_for=components.controller.current_portfolio,
-    )
+    ))
 
-    cycle = ShadowCycleCoordinator(
+    cycle = guarded(lambda: ShadowCycleCoordinator(
         heartbeat=heartbeat,
         registry_provider=registry_provider,
         subjects_for=lambda registry: make_resolution_batch(
@@ -120,7 +142,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         registry_refresh_seconds=config.registry_refresh_seconds,
         resolution_poll_seconds=config.resolution_poll_seconds,
         outbox_batch_limit=config.outbox_batch_limit,
-    )
+    ))
 
     async def recover_resolution():
         await run_blocking(components.resolution_feed.validate_providers)
@@ -133,7 +155,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             frozen_condition_ids=state.frozen_condition_ids,
         )
 
-    runtime = ShadowRuntime(
+    runtime = guarded(lambda: ShadowRuntime(
         services=ingestion.services + (poll_news,),
         writer=ingestion.writer,
         lock=lock,
@@ -156,7 +178,8 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         ),
         lock_acquired=lock_acquired,
         stop_requested=worker_stop.set,
-    )
+    ))
+    construction_closers.clear()  # ownership transferred to ShadowRuntime
     # Introspection is intentional for review/tests; none of these grants mutation
     # authority to Hermes or changes the runtime's public lifecycle surface.
     runtime._ingestion = ingestion

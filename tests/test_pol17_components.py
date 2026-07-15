@@ -244,3 +244,45 @@ def test_production_planner_vetoes_accept_when_second_live_book_has_no_fill(tmp_
         assert components.intent_store.pending_shadow_executions(10) == ()
     finally:
         components.close()
+
+
+def test_component_construction_unwinds_opened_stores_on_later_failure(
+        tmp_path, monkeypatch):
+    trace = []
+
+    class Opened:
+        def __init__(self, name):
+            self.name = name
+            trace.append(f"open_{name}")
+
+        def close(self):
+            trace.append(f"close_{self.name}")
+
+    monkeypatch.setattr(
+        shadow_build, "ReadOnlyEventStore", lambda _path: Opened("events")
+    )
+    monkeypatch.setattr(
+        shadow_build, "IntentStore", lambda _path, _stamper: Opened("intents")
+    )
+
+    def fail_forecast(_path, _stamper):
+        trace.append("open_forecasts")
+        raise RuntimeError("forecast schema failed")
+
+    monkeypatch.setattr(shadow_build, "ForecastLedger", fail_forecast)
+
+    with pytest.raises(RuntimeError, match="forecast schema"):
+        build_shadow_components(
+            _config(tmp_path),
+            ingestion=SimpleNamespace(stamper=MonotonicStamper()),
+            registry_provider=object(),
+            resolution_providers=(),
+            wall_clock=time.time,
+            health_clock_seconds=time.monotonic,
+            health_clock_ns=time.monotonic_ns,
+        )
+
+    assert trace == [
+        "open_events", "open_intents", "open_forecasts",
+        "close_intents", "close_events",
+    ]

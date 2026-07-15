@@ -4,6 +4,8 @@ import json
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.news import NewsPoller
 from polybot.runtime.config import IngestionConfig
@@ -12,6 +14,7 @@ from polybot.runtime.shadow_config import (
     ShadowRuntimeConfig,
 )
 from polybot.runtime.shadow_root import build_shadow_runtime
+import polybot.runtime.shadow_root as shadow_root
 from polybot.runtime.shadow_runtime import ShadowRuntime
 
 
@@ -107,3 +110,51 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
                    for decision in evidence.decisions.values())
     finally:
         runtime.close_unstarted()
+
+
+def test_root_construction_unwinds_writer_and_executor_on_component_failure(
+        tmp_path, monkeypatch):
+    trace = []
+    assembly = SimpleNamespace(
+        services=(),
+        writer=SimpleNamespace(close=lambda: trace.append("writer_close")),
+        collector=object(),
+        token_ids=("101", "202"),
+        stamper=MonotonicStamper(),
+        health_stamper=MonotonicStamper(),
+        book_for=lambda _token_id: None,
+    )
+
+    class Executor:
+        def __init__(self, **_kwargs):
+            trace.append("executor_open")
+
+        def shutdown(self, *, wait):
+            trace.append(("executor_close", wait))
+
+    monkeypatch.setattr(shadow_root, "build_ingestion_assembly", lambda *_a, **_k: assembly)
+    monkeypatch.setattr(shadow_root, "ThreadPoolExecutor", Executor)
+    monkeypatch.setattr(
+        shadow_root,
+        "build_shadow_components",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("component failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="component failed"):
+        build_shadow_runtime(
+            _config(tmp_path),
+            gamma_snapshot_fetch=_snapshot,
+            resolution_providers=(
+                SimpleNamespace(provider_id="a"),
+                SimpleNamespace(provider_id="b"),
+            ),
+            history_stamper=MonotonicStamper(),
+            health_stamper=MonotonicStamper(),
+            news_fetch=lambda _url: None,
+            lock=SimpleNamespace(acquire=lambda: None, release=lambda: None),
+            readiness=SimpleNamespace(ready=lambda: None, stopping=lambda: None),
+        )
+
+    assert trace == [
+        "executor_open", ("executor_close", True), "writer_close",
+    ]
