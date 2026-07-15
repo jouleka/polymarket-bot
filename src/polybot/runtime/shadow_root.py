@@ -145,7 +145,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         cycle_interval_seconds=config.cycle_interval_seconds,
         readiness_timeout_seconds=config.readiness_timeout_seconds,
         closers=tuple(extra_closers) + (
-            lambda: executor.shutdown(wait=True), components.close,
+            components.close, lambda: executor.shutdown(wait=True),
         ),
         lock_acquired=lock_acquired,
     )

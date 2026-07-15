@@ -11,6 +11,8 @@ StartLimitBurst=5
 Type=notify
 NotifyAccess=main
 User=polybot
+RuntimeDirectory=polybot
+RuntimeDirectoryMode=0750
 WorkingDirectory=/opt/polymarket-bot
 Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONUNBUFFERED=1

@@ -115,6 +115,8 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "TimeoutStopSec=60" in text
     assert "After=network-online.target" in text
     assert "Wants=network-online.target" in text
+    assert "RuntimeDirectory=polybot" in text
+    assert "RuntimeDirectoryMode=0750" in text
 
 
 def test_runbook_requires_nonempty_old_database_evidence():
