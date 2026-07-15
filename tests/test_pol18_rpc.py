@@ -1,6 +1,7 @@
 import json
 import asyncio
 import os
+from pathlib import Path
 import socket
 from decimal import Decimal
 
@@ -243,9 +244,23 @@ def test_unix_server_never_publishes_when_socket_ownership_setup_fails(
         socket_group=os.getgid(),
     )
     published_during_setup = []
+    attachable_during_setup = []
+    staging_modes = []
 
-    def reject_chown(*_args):
+    def reject_chown(staged_path, *_args):
         published_during_setup.append(path.exists())
+        staged_path = Path(staged_path)
+        staging_modes.append(staged_path.parent.stat().st_mode & 0o777)
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(0.1)
+        try:
+            probe.connect(str(staged_path))
+        except OSError:
+            attachable_during_setup.append(False)
+        else:
+            attachable_during_setup.append(True)
+        finally:
+            probe.close()
         raise PermissionError("injected chown failure")
 
     monkeypatch.setattr(rpc.os, "chown", reject_chown)
@@ -253,6 +268,8 @@ def test_unix_server_never_publishes_when_socket_ownership_setup_fails(
         asyncio.run(server.run())
 
     assert published_during_setup == [False]
+    assert attachable_during_setup == [False]
+    assert staging_modes == [0o700]
     assert not path.exists()
 
 

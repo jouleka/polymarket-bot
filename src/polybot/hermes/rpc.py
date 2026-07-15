@@ -308,16 +308,20 @@ class ProposalRpcServer:
             if not stat.S_ISSOCK(existing.st_mode):
                 raise RuntimeError("proposal path collision with existing non-socket")
             self._remove_proven_stale_socket(existing)
-        private_path = _validated_socket_path(
-            self._path.parent / f".p-{uuid.uuid4().hex[:8]}",
-        )
+        staging_directory = self._path.parent / f".p-{uuid.uuid4().hex[:8]}"
+        private_path = _validated_socket_path(staging_directory / "s")
+        staging_directory.mkdir(mode=0o700)
+        staging_stat = staging_directory.lstat()
+        staging_identity = (staging_stat.st_dev, staging_stat.st_ino)
+        if (not stat.S_ISDIR(staging_stat.st_mode)
+                or staging_stat.st_uid != os.geteuid()
+                or stat.S_IMODE(staging_stat.st_mode) != 0o700):
+            raise RuntimeError("proposal staging directory is not private")
         server = None
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         private_identity = None
         try:
-            server = await asyncio.start_unix_server(
-                self._accept, path=private_path,
-                limit=self._max_request_bytes + 1,
-            )
+            listener.bind(str(private_path))
             private_stat = private_path.lstat()
             if not stat.S_ISSOCK(private_stat.st_mode):
                 raise RuntimeError("private proposal listener is not a socket")
@@ -337,9 +341,16 @@ class ProposalRpcServer:
                 pass
             else:
                 raise RuntimeError("proposal path appeared during private setup")
+            listener.listen(128)
+            listener.setblocking(False)
             private_path.rename(self._path)
             socket_stat = self._path.lstat()
             self._socket_identity = (socket_stat.st_dev, socket_stat.st_ino)
+            server = await asyncio.start_unix_server(
+                self._accept, sock=listener,
+                limit=self._max_request_bytes + 1,
+            )
+            listener = None  # ownership transferred to the asyncio server
             self._started.set()
             await server.serve_forever()
             raise RuntimeError("proposal RPC listener returned unexpectedly")
@@ -347,8 +358,11 @@ class ProposalRpcServer:
             if server is not None:
                 server.close()
                 await server.wait_closed()
+            elif listener is not None:
+                listener.close()
             self._unlink_if_identity(private_path, private_identity)
             self._unlink_owned_socket()
+            self._remove_staging_directory(staging_directory, staging_identity)
 
     def _prepare_socket_directory(self):
         parent = self._path.parent
@@ -360,6 +374,16 @@ class ProposalRpcServer:
                 or (self._socket_group is not None
                     and observed.st_gid != self._socket_group)):
             raise RuntimeError("proposal socket directory is not securely owned")
+
+    @staticmethod
+    def _remove_staging_directory(path, expected_identity):
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            return
+        if (stat.S_ISDIR(current.st_mode)
+                and (current.st_dev, current.st_ino) == expected_identity):
+            path.rmdir()
 
     async def _accept(self, reader, writer):
         async with self._semaphore:
