@@ -78,7 +78,7 @@ class ERSController:
         from polybot.ers.validator import Portfolio
         return Portfolio(nav=self._caps.nav)
 
-    def run_cycle(self):
+    def run_cycle(self, *, eligible_intent_ids=None):
         """One cadence tick: beat (if wired) -> L5 anomaly consult (if wired) ->
         process_pending(controller=...). Returns the updated portfolio (threaded for the
         next cycle)."""
@@ -146,5 +146,6 @@ class ERSController:
             caps=self._controller.active_caps(),
             signer=self._signer, breaker=self._breaker, pipeline=self._pipeline,
             controller=self._controller, gtd_for=self._gtd_for, fill_sink=self._fill_sink,
-            shadow_planner=self._shadow_planner)
+            shadow_planner=self._shadow_planner,
+            eligible_intent_ids=eligible_intent_ids)
         return self._portfolio
