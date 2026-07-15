@@ -1,9 +1,13 @@
 import json
 
+import pytest
+
 from polybot.runtime.config import IngestionConfig
 from polybot.runtime.shadow_adapters import (
     make_gamma_snapshot_fetch,
     make_resolution_providers,
+    SingletonLock,
+    SystemdReadiness,
 )
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
@@ -112,3 +116,47 @@ def test_resolution_provider_factory_owns_exactly_two_timed_read_only_clients():
     assert [client.timeout for client in made] == [7.5, 7.5]
     close()
     assert all(client.closed for client in made)
+
+
+def test_singleton_lock_is_nonblocking_and_reusable_after_release(tmp_path):
+    path = str(tmp_path / "shadow.lock")
+    first = SingletonLock(path)
+    second = SingletonLock(path)
+
+    first.acquire()
+    with pytest.raises(RuntimeError, match="already running"):
+        second.acquire()
+    first.release()
+
+    second.acquire()
+    second.release()
+
+
+def test_systemd_readiness_sends_native_abstract_socket_notifications():
+    sent = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            pass
+
+        def connect(self, address):
+            sent.append(("connect", address))
+
+        def sendall(self, payload):
+            sent.append(("send", payload))
+
+    readiness = SystemdReadiness(
+        environ={"NOTIFY_SOCKET": "@polybot"},
+        socket_factory=lambda *_args: Socket(),
+    )
+
+    readiness.ready()
+    readiness.stopping()
+
+    assert sent == [
+        ("connect", "\0polybot"), ("send", b"READY=1"),
+        ("connect", "\0polybot"), ("send", b"STOPPING=1"),
+    ]
