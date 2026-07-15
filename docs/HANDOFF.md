@@ -495,15 +495,36 @@ The reviewed branch head `c165971` landed as true merge commit `b6ae7e1`.
 Evidence is in
 [`VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md`](VERIFICATION-POL17-ERS-HARNESS-RUNTIME.md).
 The deployment runbook now describes the stopped composite config migration, seven distinct DBs,
-two read-only providers, and rollback. No push, merge, install, migration, service start/enable, or
-deployment has occurred. `/opt/polymarket-bot`, systemd state, the compact production DB, and the
+two read-only providers, and rollback. No installation, migration, service start/enable, or
+deployment occurred. `/opt/polymarket-bot`, systemd state, the compact production DB, and the
 raw-firehose evidence remain untouched; the service remains stopped and disabled. Sticky paper
 HALTED/PAUSED state is not replayed across DORMANT restart and must be designed before POL-4.
 
-**Next work:** begin POL-18, the isolated propose-only Hermes brain. Only after it lands and POL-17/POL-18
-are separately deployed does the ≤2-week
-paper/shadow period begin. The shadow must accrue honest resolved outcomes and prove calibrated,
-net-positive, out-of-sample results; otherwise do not proceed.
+**UPDATE 2026-07-15 — POL-18 reviewed build complete.** Exact independently reviewed head
+`5e57449` adds a same-process, supervised Unix proposal endpoint to POL-17 and a separate
+capability-minimal stdio MCP bridge. Hermes receives exactly five tools: `propose_trade`,
+`get_market`, `get_book`, `get_ledger`, and `get_flags`. POL-17 remains the only live-book owner,
+database writer, ERS/controller authority, and paper executor; the bridge cannot import stores,
+signers, wallets, orders, shell/file/browser tools, or service lifecycle authority.
+
+The dedicated Hermes 0.18.2 profile contract pins MCP 1.26.0, the exact authored/discovered/cron/
+model-visible inventory, conservative security and approval settings, a dedicated nologin user,
+and a socket-only shared group. Before a separately approved model/profile/cron exists, the runtime
+idles with zero proposals and never synthesizes input. The whole-slice proof crosses live book →
+RPC/MCP proposal → ERS → atomic Maker/Shadow outbox → apply-before-ack crash/restart → resolution
+retry/fanout → terminal marks/evidence, while stale reads, stale validation/execution books,
+disconnects, and repeated bridge/server restarts fail closed.
+
+Both independent reviewers pass exact clean head `5e57449`; the canonical suite is 2,273 passing.
+The isolated mutation battery killed 46/46 with zero survivors. Evidence is in
+[`VERIFICATION-POL18-HERMES-BRAIN.md`](VERIFICATION-POL18-HERMES-BRAIN.md). No stopped installer,
+Linux identity/group, service checkout/unit, Hermes profile, model/provider, cron, start/enable, or
+deployment action was performed. Those remain separate owner gates.
+
+**Next work:** publish and merge the reviewed POL-18 build, then return to POL-13 for the explicitly
+gated stopped installation/profile/activation sequence and the ≤2-week paper/shadow run. The shadow
+must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
+otherwise do not proceed.
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
