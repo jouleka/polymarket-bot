@@ -93,7 +93,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             family_size=len(categories),
         ),
         ramp_controller=components.ramp_controller,
-        portfolio_for=lambda: components.controller._portfolio,
+        portfolio_for=components.controller.current_portfolio,
     )
 
     cycle = ShadowCycleCoordinator(

@@ -164,3 +164,18 @@ def test_controller_threads_atomic_accept_wall_clock(tmp_path):
 
         assert len(store.fills_log()) == 1
         assert store.flow_log()[0]["wall_at"] == 1_750_000_000.25
+
+
+def test_controller_exposes_read_only_current_portfolio(tmp_path):
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        caps = RiskCaps()
+        controller = ERSController(
+            store=store,
+            book_for=lambda _token_id: None,
+            caps=caps,
+            signer=PaperSigner(),
+            controller=SafetyController(caps=caps, store=store, clock=lambda: 1),
+            clock=lambda: 1,
+        )
+
+        assert controller.current_portfolio() == Portfolio(nav=caps.nav)
