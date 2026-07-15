@@ -27,7 +27,7 @@ from polybot.ers.validator import (
 )
 from polybot.fusion.engine import FusionError
 from polybot.resolution.errors import ConditionAlreadyTerminal
-from polybot.ers.intent_store import ShadowExecutionRecord
+from polybot.ers.intent_store import AcceptJournalRecord, ShadowExecutionRecord
 from polybot.ers.market_meta import (
     MarketMetadataUnavailable,
     ResolutionSubjectMetadata,
@@ -64,7 +64,8 @@ class HermesPipeline:
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
                     cluster_model=None, breaker=None, pipeline=None, controller=None,
-                    gtd_for=None, fill_sink=None, shadow_planner=None):
+                    gtd_for=None, fill_sink=None, shadow_planner=None,
+                    accept_wall_clock=None, eligible_intent_ids=None):
     """Process every PROPOSED intent in FIFO order; return the updated portfolio.
 
     Runs the L7 breaker FIRST (when wired): FLATTEN signals the exit + blocks adds (l7_flatten),
@@ -98,8 +99,12 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
             block_reason = "l7_freeze"
 
     for intent in store.pending():
+        if (eligible_intent_ids is not None
+                and intent.intent_id not in eligible_intent_ids):
+            continue
         trade_intent = None
         shadow_execution = None
+        accept_journal = None
         try:
             if block_reason is not None:
                 decision = Decision("REJECT", None, None, block_reason)
@@ -126,17 +131,32 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
                 # an unmeasured position.
                 decision = Decision("REJECT", None, None, REASON_SHADOW_EXECUTION_ERROR)
                 shadow_execution = None
+        if decision.verdict == "ACCEPT" and accept_wall_clock is not None:
+            try:
+                accept_journal = AcceptJournalRecord(
+                    token_id=trade_intent.token_id,
+                    condition_id=trade_intent.condition_id,
+                    event_id=trade_intent.event_id,
+                    shares=decision.stake_usd / decision.price_exec,
+                    price_exec=decision.price_exec,
+                    worst_case_risk=decision.stake_usd,
+                    wall_at=accept_wall_clock(),
+                )
+            except Exception:
+                decision = Decision("REJECT", None, None, "internal_error")
+                shadow_execution = None
+                accept_journal = None
         guard = nullcontext()
         if decision.verdict == "ACCEPT" and pipeline is not None:
             guard = pipeline.forecast_ledger.signing_guard(intent.condition_id)
         try:
             with guard:
-                if shadow_execution is None:
-                    store.record_decision(intent.intent_id, decision)
-                else:
-                    store.record_decision(
-                        intent.intent_id, decision, shadow_execution=shadow_execution
-                    )
+                decision_options = {}
+                if shadow_execution is not None:
+                    decision_options["shadow_execution"] = shadow_execution
+                if accept_journal is not None:
+                    decision_options["accept_journal"] = accept_journal
+                store.record_decision(intent.intent_id, decision, **decision_options)
                 if decision.verdict == "ACCEPT":
                     signer.place(intent, decision)
                     portfolio = _fold(portfolio, trade_intent, decision)
@@ -159,7 +179,7 @@ def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Dec
                         signer.place_gtd_bracket(
                             position, exit_price=bracket.exit_price, expiry=bracket.expiry
                         )
-                    if fill_sink is not None:
+                    if fill_sink is not None and accept_journal is None:
                         # Durable INTERNAL leg of the S4.5 reconcile: record the just-folded
                         # position. fill_sink=None (the default) => no fills row => byte-for-byte
                         # today's behavior.

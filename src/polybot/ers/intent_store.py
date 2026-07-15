@@ -9,6 +9,7 @@ is deliberately separate from the append-only Market-Memory EventStore.
 """
 
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -48,6 +49,40 @@ class PendingIntent:
     decision_stake_usd: Decimal | None = None
     decision_price_exec: Decimal | None = None
     decision_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AcceptJournalRecord:
+    """Restart and rolling-flow authority committed with one paper ACCEPT."""
+
+    token_id: str
+    condition_id: str
+    event_id: str
+    shares: Decimal
+    price_exec: Decimal
+    worst_case_risk: Decimal
+    wall_at: float
+
+    def __post_init__(self):
+        for name in ("token_id", "condition_id", "event_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("shares", "price_exec", "worst_case_risk"):
+            if not isinstance(getattr(self, name), Decimal):
+                raise TypeError(f"{name} must be a Decimal")
+        if not self.shares.is_finite() or self.shares <= 0:
+            raise ValueError("shares must be finite and > 0")
+        if (not self.price_exec.is_finite()
+                or not (Decimal(0) < self.price_exec < Decimal(1))):
+            raise ValueError("price_exec must be finite and in (0, 1)")
+        if not self.worst_case_risk.is_finite() or self.worst_case_risk <= 0:
+            raise ValueError("worst_case_risk must be finite and > 0")
+        if self.shares != self.worst_case_risk / self.price_exec:
+            raise ValueError("shares must equal worst_case_risk / price_exec")
+        if (type(self.wall_at) not in (int, float)
+                or not math.isfinite(self.wall_at) or self.wall_at < 0):
+            raise ValueError("wall_at must be finite and >= 0")
 
 
 @dataclass(frozen=True)
@@ -261,7 +296,8 @@ class IntentStore:
         self._conn.commit()
         return cur.rowcount > 0
 
-    def record_decision(self, intent_id, decision, *, shadow_execution=None):
+    def record_decision(self, intent_id, decision, *, shadow_execution=None,
+                        accept_journal=None):
         """ERS-ONLY (never exposed to Hermes): transition the intent's status per the
         Decision verdict, store the decision, and append an immutable audit row. When a
         canonical filled shadow execution is supplied for ACCEPT, its two-role delivery
@@ -277,6 +313,14 @@ class IntentStore:
                 raise ValueError("only ACCEPT may persist a shadow execution")
             if shadow_execution.execution_id != intent_id:
                 raise ValueError("shadow execution ID must equal intent ID")
+        if accept_journal is not None:
+            if not isinstance(accept_journal, AcceptJournalRecord):
+                raise TypeError("accept_journal must be an AcceptJournalRecord")
+            if decision.verdict != "ACCEPT":
+                raise ValueError("only ACCEPT may persist an accept journal")
+            if (accept_journal.worst_case_risk != decision.stake_usd
+                    or accept_journal.price_exec != decision.price_exec):
+                raise ValueError("accept journal economics contradict decision")
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             intent_row = self._conn.execute(
@@ -290,6 +334,11 @@ class IntentStore:
                     or intent_row[2] != shadow_execution.condition_id
                     or intent_row[3] != shadow_execution.event_id):
                 raise ValueError("shadow execution identity contradicts intent")
+            if accept_journal is not None and (
+                    intent_row[1] != accept_journal.token_id
+                    or intent_row[2] != accept_journal.condition_id
+                    or intent_row[3] != accept_journal.event_id):
+                raise ValueError("accept journal identity contradicts intent")
             self._conn.execute(
                 "UPDATE pending_intents SET status=?, decided_at=?, decision_verdict=?, "
                 "decision_stake_usd=?, decision_price_exec=?, decision_reason=? WHERE intent_id=?",
@@ -300,6 +349,21 @@ class IntentStore:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (intent_id, at, decision.verdict, stake, price, decision.reason),
             )
+            if accept_journal is not None:
+                journal = accept_journal
+                self._conn.execute(
+                    "INSERT INTO fills (at, intent_id, token_id, condition_id, event_id, side, "
+                    "shares, price_exec, worst_case_risk) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (at, intent_id, journal.token_id, journal.condition_id, journal.event_id,
+                     "BUY", str(journal.shares), str(journal.price_exec),
+                     str(journal.worst_case_risk)),
+                )
+                self._conn.execute(
+                    "INSERT INTO flow_journal (at, wall_at, kind, token_id, amount) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (at, journal.wall_at, "accept", journal.token_id,
+                     str(journal.worst_case_risk)),
+                )
             if shadow_execution is not None:
                 execution = shadow_execution
                 sibling_json = json.dumps(

@@ -69,10 +69,16 @@ class OutboxRecord:
             raise ValueError("outbox role is invalid")
 
 
+@dataclass(frozen=True)
+class ResolutionRuntimeState:
+    terminal_condition_ids: tuple[str, ...]
+    frozen_condition_ids: tuple[str, ...]
+
+
 class ResolutionStore:
-    def __init__(self, path, stamper):
+    def __init__(self, path, stamper, *, check_same_thread=True):
         self._stamper = stamper
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, check_same_thread=check_same_thread)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -304,6 +310,40 @@ class ResolutionStore:
         if terminal.subject.condition_id != condition_id:
             raise SettlementConflict("terminal payload condition contradicts its authority row")
         return terminal
+
+    def runtime_state(self):
+        """Authenticate durable terminal/finalized-unknown state for restart risk."""
+        self.require_healthy()
+        self._validate_outbox_integrity()
+        terminal_ids = []
+        for condition_id, terminal_id, payload in self._conn.execute(
+                "SELECT condition_id, terminal_id, payload FROM resolution_terminals "
+                "ORDER BY condition_id").fetchall():
+            terminal = _decode_terminal(terminal_id, payload)
+            if terminal.subject.condition_id != condition_id:
+                raise SettlementConflict(
+                    "terminal payload condition contradicts runtime state"
+                )
+            terminal_ids.append(condition_id)
+
+        frozen_ids = []
+        rows = self._conn.execute(
+            "SELECT condition_id FROM resolution_assessments "
+            "WHERE phase=? AND dispute=? ORDER BY condition_id",
+            (LifecyclePhase.FINALIZED.value, DisputeState.UNKNOWN.value),
+        ).fetchall()
+        for (condition_id,) in rows:
+            assessment = self.assessment_for(condition_id)
+            if (assessment is None
+                    or assessment.phase is not LifecyclePhase.FINALIZED
+                    or assessment.dispute is not DisputeState.UNKNOWN):
+                raise SettlementConflict(
+                    "finalized unknown assessment contradicts runtime state"
+                )
+            frozen_ids.append(condition_id)
+        if set(terminal_ids) & set(frozen_ids):
+            raise SettlementConflict("terminal and frozen runtime state overlap")
+        return ResolutionRuntimeState(tuple(terminal_ids), tuple(frozen_ids))
 
     def pending_terminals(self):
         self._validate_outbox_integrity()

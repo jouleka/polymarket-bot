@@ -7,6 +7,7 @@ import asyncio
 import logging
 import signal
 import sys
+from dataclasses import dataclass
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.heartbeat import Heartbeat
@@ -81,12 +82,27 @@ def _supervised(name, factory):
     return run
 
 
-def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
-                            data_fetch=None, stamper=None) -> IngestionRuntime:
-    """Live wiring: discover the universe, then run the sharded WS collector in-memory while one
-    QueuedEventWriter(EventStore) is fed by the midpoint snapshotter (+ the full Data API /trades poller when
-    enabled). Injectable seams default to the real transport factories."""
+@dataclass(frozen=True)
+class IngestionAssembly:
+    services: tuple
+    writer: object
+    collector: object
+    token_ids: tuple[str, ...]
+    stamper: object
+    health_stamper: object
+    heartbeat: object | None
+
+    def book_for(self, token_id):
+        return self.collector.book_for(token_id)
+
+
+def build_ingestion_assembly(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
+                             data_fetch=None, stamper=None,
+                             health_stamper=None) -> IngestionAssembly:
+    """Construct D4a once while exposing its live collector to the POL-17 root."""
     stamper = stamper or MonotonicStamper()
+    if health_stamper is None:
+        health_stamper = stamper
     gamma_fetch = gamma_fetch or make_gamma_fetch(config.gamma_url)
     ws_connect = ws_connect or open_market_ws
     data_fetch = data_fetch or make_httpx_fetch(DATA_API_URL)
@@ -94,7 +110,7 @@ def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_con
     token_ids = discover_universe(gamma_fetch, config)
     writer = QueuedEventWriter(EventStore(config.db_path, check_same_thread=False))
 
-    ws = ShardedMarketCollector(ws_connect, stamper, token_ids, sink=None,
+    ws = ShardedMarketCollector(ws_connect, health_stamper, token_ids, sink=None,
                                 max_assets_per_shard=config.max_assets_per_shard,
                                 reconnect_on=WS_RECONNECT_ON)
     snapshotter = MidpointSnapshotter(
@@ -115,7 +131,22 @@ def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_con
             "/trades", params={"limit": config.data_api_limit}, interval=config.data_api_interval_seconds)))
 
     heartbeat = Heartbeat(config.heartbeat_path) if config.heartbeat_path else None
-    return IngestionRuntime(services=services, writer=writer, heartbeat=heartbeat,
+    return IngestionAssembly(
+        services=tuple(services), writer=writer, collector=ws,
+        token_ids=tuple(token_ids), stamper=stamper,
+        health_stamper=health_stamper, heartbeat=heartbeat,
+    )
+
+
+def build_ingestion_runtime(config: IngestionConfig, *, gamma_fetch=None, ws_connect=None,
+                            data_fetch=None, stamper=None) -> IngestionRuntime:
+    """Backward-compatible D4a runtime built from the shared live assembly."""
+    assembly = build_ingestion_assembly(
+        config, gamma_fetch=gamma_fetch, ws_connect=ws_connect,
+        data_fetch=data_fetch, stamper=stamper,
+    )
+    return IngestionRuntime(services=assembly.services, writer=assembly.writer,
+                            heartbeat=assembly.heartbeat,
                             heartbeat_interval_seconds=config.heartbeat_interval_seconds)
 
 

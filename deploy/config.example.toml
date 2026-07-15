@@ -1,5 +1,6 @@
-# polymarket-bot ingestion runtime config (Phase-0 shadow deploy).
-# Copy to /srv/polybot/app/config.toml and adjust; read by polybot.runtime.config.load_config.
+# polymarket-bot composite paper-shadow runtime config.
+# Copy to /srv/polybot/app/config.toml and adjust; read by
+# polybot.runtime.shadow_config.load_shadow_config.
 # Any field can be overridden by an env var POLYBOT_INGEST_<FIELD_UPPERCASE>
 #   (e.g. POLYBOT_INGEST_UNIVERSE_MAX_MARKETS=400), which the systemd .env (EnvironmentFile) can carry.
 
@@ -13,3 +14,28 @@ data_api_limit = 500                  # /trades page size
 heartbeat_path = "/srv/polybot/app/data/heartbeat"   # liveness file (out-of-process readable)
 heartbeat_interval_seconds = 5.0
 log_level = "INFO"
+
+[shadow]
+intents_db_path = "/srv/polybot/app/data/intents.db"
+forecasts_db_path = "/srv/polybot/app/data/forecasts.db"
+components_db_path = "/srv/polybot/app/data/components.db"
+maker_db_path = "/srv/polybot/app/data/maker.db"
+shadow_db_path = "/srv/polybot/app/data/shadow.db"
+resolution_db_path = "/srv/polybot/app/data/resolution.db"
+cycle_interval_seconds = 1.0
+registry_refresh_seconds = 300.0
+registry_max_age_seconds = 900.0
+resolution_poll_seconds = 60.0
+news_poll_seconds = 60.0
+rpc_timeout_seconds = 15.0
+readiness_timeout_seconds = 60.0
+outbox_batch_limit = 100
+status_path = "/run/polybot/shadow-status.json"
+
+[[shadow.polygon_providers]]
+provider_id = "polygon-publicnode"
+url = "https://polygon-bor-rpc.publicnode.com"
+
+[[shadow.polygon_providers]]
+provider_id = "polygon-drpc"
+url = "https://polygon.drpc.org"
