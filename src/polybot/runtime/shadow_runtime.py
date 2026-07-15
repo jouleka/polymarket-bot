@@ -23,10 +23,11 @@ class ShadowRuntime:
                  drain_resolution, drain_execution, collector,
                  apply_initial_resolution_state, controller, readiness,
                  run_cycle, cycle_interval_seconds, readiness_timeout_seconds,
-                 closers=()):
+                 closers=(), lock_acquired=False):
         self._services = tuple(services)
         self._writer = writer
         self._lock = lock
+        self._lock_acquired = lock_acquired
         self._recover_resolution = recover_resolution
         self._drain_resolution = drain_resolution
         self._drain_execution = drain_execution
@@ -47,9 +48,9 @@ class ShadowRuntime:
             self._stop.set()
 
     async def run(self):
-        acquired = False
-        self._lock.acquire()
-        acquired = True
+        if not self._lock_acquired:
+            self._lock.acquire()
+            self._lock_acquired = True
         self._stop = asyncio.Event()
         try:
             try:
@@ -64,12 +65,19 @@ class ShadowRuntime:
             try:
                 self._close_resources()
             finally:
-                if acquired:
-                    self._lock.release()
+                self._release_lock()
 
     def close_unstarted(self):
         """Release a constructed-but-never-run assembly (tests/failed activation)."""
-        self._close_resources()
+        try:
+            self._close_resources()
+        finally:
+            self._release_lock()
+
+    def _release_lock(self):
+        if self._lock_acquired:
+            self._lock_acquired = False
+            self._lock.release()
 
     def _close_resources(self):
         if self._closed:
