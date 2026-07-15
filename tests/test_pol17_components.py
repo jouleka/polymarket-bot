@@ -107,6 +107,10 @@ def test_component_factory_wires_real_paper_safety_and_authority_types(tmp_path)
         assert isinstance(components.resolution_feed, ResolutionFeed)
         assert isinstance(components.resolution_dispatcher, ResolutionDispatcher)
         assert isinstance(components.execution_dispatcher, ShadowExecutionDispatcher)
+        assert callable(components.maker_mark_for)
+        assert callable(components.shadow_mark_for)
+        assert components.maker_mark_for("unknown-token") is None
+        assert components.shadow_mark_for("unknown-token") is None
         assert components.controller._anomaly is not None
         assert components.controller._lossbreakers is not None
         assert components.controller._reconciler is not None

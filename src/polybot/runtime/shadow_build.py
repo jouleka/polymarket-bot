@@ -26,6 +26,7 @@ from polybot.fusion.component_log import ComponentLog
 from polybot.fusion.engine import FusionConfig
 from polybot.harness.execution import (
     ShadowExecutionDispatcher,
+    make_mark_for,
     make_shadow_execution_planner,
 )
 from polybot.harness.ledger import ShadowLedger
@@ -67,6 +68,8 @@ class ShadowComponents:
     resolution_feed: ResolutionFeed
     resolution_dispatcher: ResolutionDispatcher
     execution_dispatcher: ShadowExecutionDispatcher
+    maker_mark_for: object
+    shadow_mark_for: object
     market_registry: CurrentMarketRegistry
     _closers: tuple = field(repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
@@ -189,6 +192,8 @@ def build_shadow_components(config, *, ingestion, registry_provider,
     execution_dispatcher = ShadowExecutionDispatcher(
         intent_store, maker_ledger, shadow_ledger
     )
+    maker_mark_for = make_mark_for(maker_ledger, book_for=ingestion.book_for)
+    shadow_mark_for = make_mark_for(shadow_ledger, book_for=ingestion.book_for)
     return ShadowComponents(
         event_reader=event_reader,
         intent_store=intent_store,
@@ -203,6 +208,8 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         resolution_feed=resolution_feed,
         resolution_dispatcher=resolution_dispatcher,
         execution_dispatcher=execution_dispatcher,
+        maker_mark_for=maker_mark_for,
+        shadow_mark_for=shadow_mark_for,
         market_registry=market_registry,
         _closers=closers,
     )
