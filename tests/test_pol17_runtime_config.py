@@ -1,6 +1,7 @@
 """POL-17 composite runtime configuration."""
 
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,10 @@ def test_shadow_runtime_config_pins_paper_only_distinct_persistence_and_provider
         {"polygon_providers": (
             ReadOnlyPolygonProviderConfig("a", "https://same.example"),
             ReadOnlyPolygonProviderConfig("b", "https://same.example"),
+        )},
+        {"polygon_providers": (
+            ReadOnlyPolygonProviderConfig("a", "https://same.example"),
+            ReadOnlyPolygonProviderConfig("b", "https://SAME.example:443/"),
         )},
         {"polygon_providers": lambda: (
             ReadOnlyPolygonProviderConfig("a", "http://polygon-a.example"),
@@ -141,3 +146,24 @@ def test_deploy_example_is_a_complete_paper_shadow_configuration():
     assert config.paper_only is True
     assert len(set(config.database_paths)) == 7
     assert len(config.polygon_providers) == 2
+
+
+def test_shadow_config_rejects_normalized_symlink_and_hardlink_database_aliases(tmp_path):
+    target = tmp_path / "role.db"
+    target.touch()
+    symlink = tmp_path / "role-symlink.db"
+    symlink.symlink_to(target)
+    hardlink = tmp_path / "role-hardlink.db"
+    os.link(target, hardlink)
+    aliases = (
+        str(tmp_path) + "/./role.db",
+        str(symlink),
+        str(hardlink),
+    )
+
+    for alias in aliases:
+        with pytest.raises(ValueError, match="distinct database"):
+            _config(
+                maker_db_path=str(target),
+                shadow_db_path=alias,
+            )
