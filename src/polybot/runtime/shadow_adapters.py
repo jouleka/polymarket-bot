@@ -2,11 +2,70 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
+import socket
+
 import httpx
 
 from polybot.ingestion.gamma import normalize_market
 from polybot.resolution.rpc import JsonRpcClient, JsonRpcResolutionProvider
 from polybot.runtime.discovery import discover_universe
+
+
+class SingletonLock:
+    """Process-lifetime nonblocking advisory lock."""
+
+    def __init__(self, path):
+        self._path = path
+        self._fd = None
+
+    def acquire(self):
+        if self._fd is not None:
+            raise RuntimeError("shadow runtime lock is already acquired")
+        fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o640)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise RuntimeError("shadow runtime is already running") from exc
+        self._fd = fd
+
+    def release(self):
+        if self._fd is None:
+            return
+        fd, self._fd = self._fd, None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+class SystemdReadiness:
+    """Minimal sd_notify client; absence of systemd is a deliberate no-op."""
+
+    def __init__(self, *, environ=None, socket_factory=socket.socket):
+        environ = os.environ if environ is None else environ
+        self._address = environ.get("NOTIFY_SOCKET")
+        self._socket_factory = socket_factory
+
+    def ready(self):
+        self._notify(b"READY=1")
+
+    def stopping(self):
+        self._notify(b"STOPPING=1")
+
+    def _notify(self, payload):
+        if not self._address:
+            return
+        address = self._address
+        if address.startswith("@"):
+            address = "\0" + address[1:]
+        elif not address.startswith("/"):
+            raise ValueError("NOTIFY_SOCKET must be an absolute or abstract Unix socket")
+        with self._socket_factory(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(address)
+            sock.sendall(payload)
 
 
 class _GammaSnapshotFetcher:
