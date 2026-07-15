@@ -84,6 +84,10 @@ class ERSController:
         from polybot.ers.validator import Portfolio
         return Portfolio(nav=self._caps.nav)
 
+    def current_portfolio(self):
+        """Return the immutable portfolio snapshot owned by this controller."""
+        return self._portfolio
+
     def apply_resolution_state(self, *, terminal_condition_ids=(),
                                frozen_condition_ids=()):
         """Tighten the working portfolio from canonical resolution state.
