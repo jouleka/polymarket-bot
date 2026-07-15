@@ -1,7 +1,14 @@
 import json
 
 from polybot.runtime.config import IngestionConfig
-from polybot.runtime.shadow_adapters import make_gamma_snapshot_fetch
+from polybot.runtime.shadow_adapters import (
+    make_gamma_snapshot_fetch,
+    make_resolution_providers,
+)
+from polybot.runtime.shadow_config import (
+    ReadOnlyPolygonProviderConfig,
+    ShadowRuntimeConfig,
+)
 
 
 def _market(condition_id, tokens, event_id, volume):
@@ -67,3 +74,41 @@ def test_gamma_snapshot_fetcher_freezes_selected_condition_ids_on_refresh():
     assert [call[0] for call in calls] == [
         "/markets", "/events", "/markets", "/events",
     ]
+
+
+def test_resolution_provider_factory_owns_exactly_two_timed_read_only_clients():
+    made = []
+
+    class Client:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+            self.closed = False
+            made.append(self)
+
+        def post(self, *_args, **_kwargs):
+            raise AssertionError("construction must not call Polygon")
+
+        def close(self):
+            self.closed = True
+
+    config = ShadowRuntimeConfig(
+        ingestion=IngestionConfig(db_path="/data/events.db"),
+        intents_db_path="/data/intents.db",
+        forecasts_db_path="/data/forecasts.db",
+        components_db_path="/data/components.db",
+        maker_db_path="/data/maker.db",
+        shadow_db_path="/data/shadow.db",
+        resolution_db_path="/data/resolution.db",
+        polygon_providers=(
+            ReadOnlyPolygonProviderConfig("a", "https://a.example"),
+            ReadOnlyPolygonProviderConfig("b", "https://b.example"),
+        ),
+        rpc_timeout_seconds=7.5,
+    )
+
+    providers, close = make_resolution_providers(config, client_factory=Client)
+
+    assert [provider.provider_id for provider in providers] == ["a", "b"]
+    assert [client.timeout for client in made] == [7.5, 7.5]
+    close()
+    assert all(client.closed for client in made)

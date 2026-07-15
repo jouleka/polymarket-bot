@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from polybot.ingestion.gamma import normalize_market
+from polybot.resolution.rpc import JsonRpcClient, JsonRpcResolutionProvider
 from polybot.runtime.discovery import discover_universe
 
 
@@ -72,3 +73,27 @@ def make_gamma_snapshot_fetch(config, *, client=None, timeout=30.0):
             headers={"user-agent": "polybot/0.1"},
         )
     return _GammaSnapshotFetcher(config, client, owned=owned)
+
+
+def make_resolution_providers(config, *, client_factory=httpx.Client):
+    """Build two independently owned, timeout-bounded read-only RPC providers."""
+    clients = []
+    try:
+        providers = []
+        for provider_config in config.polygon_providers:
+            client = client_factory(timeout=config.rpc_timeout_seconds)
+            clients.append(client)
+            providers.append(JsonRpcResolutionProvider(
+                provider_config.provider_id,
+                JsonRpcClient(provider_config.url, client),
+            ))
+    except Exception:
+        for client in reversed(clients):
+            client.close()
+        raise
+
+    def close():
+        for client in reversed(clients):
+            client.close()
+
+    return tuple(providers), close
