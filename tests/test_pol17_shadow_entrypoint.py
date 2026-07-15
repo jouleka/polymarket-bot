@@ -13,6 +13,7 @@ def test_production_builder_wires_paper_root_and_transfers_adapter_ownership():
     config = SimpleNamespace(
         ingestion=SimpleNamespace(db_path="/data/events.db"),
         rpc_timeout_seconds=5,
+        database_paths=("/data/events.db",),
     )
 
     def root_builder(received, **kwargs):
@@ -56,6 +57,7 @@ def test_production_builder_acquires_singleton_before_any_adapter_or_store():
     config = SimpleNamespace(
         ingestion=SimpleNamespace(db_path="/data/events.db"),
         rpc_timeout_seconds=5,
+        database_paths=("/data/events.db",),
     )
 
     built = shadow.build_production_runtime(
