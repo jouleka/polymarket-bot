@@ -10,6 +10,7 @@ import httpx
 
 from polybot.ingestion.gamma import normalize_market
 from polybot.resolution.rpc import JsonRpcClient, JsonRpcResolutionProvider
+from polybot.resolution.errors import ResolutionUnavailable
 from polybot.runtime.discovery import discover_universe
 from polybot.runtime.registry_provider import RegistryRefreshUnavailable
 
@@ -67,6 +68,35 @@ class SystemdReadiness:
         with self._socket_factory(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.connect(address)
             sock.sendall(payload)
+
+
+class StopAwareResolutionProvider:
+    """Prevent a serialized resolution worker from starting RPCs after shutdown."""
+
+    def __init__(self, provider, should_stop):
+        self.provider_id = provider.provider_id
+        self._provider = provider
+        self._should_stop = should_stop
+
+    def _call(self, name, *args):
+        if self._should_stop():
+            raise ResolutionUnavailable("resolution runtime is stopping")
+        return getattr(self._provider, name)(*args)
+
+    def chain_id(self):
+        return self._call("chain_id")
+
+    def latest_block(self):
+        return self._call("latest_block")
+
+    def block_hash(self, block_number):
+        return self._call("block_hash", block_number)
+
+    def observe(self, subject, block_number):
+        return self._call("observe", subject, block_number)
+
+    def verify_terminal(self, terminal):
+        return self._call("verify_terminal", terminal)
 
 
 class _GammaSnapshotFetcher:

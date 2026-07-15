@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,7 +9,9 @@ from polybot.runtime.shadow_adapters import (
     make_resolution_providers,
     SingletonLock,
     SystemdReadiness,
+    StopAwareResolutionProvider,
 )
+from polybot.resolution.errors import ResolutionUnavailable
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
     ShadowRuntimeConfig,
@@ -160,3 +163,21 @@ def test_systemd_readiness_sends_native_abstract_socket_notifications():
         ("connect", "\0polybot"), ("send", b"READY=1"),
         ("connect", "\0polybot"), ("send", b"STOPPING=1"),
     ]
+
+
+def test_stop_aware_provider_never_starts_another_rpc_after_shutdown():
+    calls = []
+    stopped = [False]
+    provider = SimpleNamespace(
+        provider_id="a",
+        chain_id=lambda: calls.append("chain") or 137,
+        latest_block=lambda: calls.append("head") or 100,
+    )
+    wrapped = StopAwareResolutionProvider(provider, lambda: stopped[0])
+
+    assert wrapped.chain_id() == 137
+    stopped[0] = True
+    with pytest.raises(ResolutionUnavailable, match="stopping"):
+        wrapped.latest_block()
+
+    assert calls == ["chain"]

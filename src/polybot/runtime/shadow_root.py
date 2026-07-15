@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+import threading
 import time
 
 from polybot.ers.heartbeat import Heartbeat
@@ -16,6 +17,7 @@ from polybot.runtime.harness_runtime import HarnessEvidenceRuntime
 from polybot.runtime.ingestion import build_ingestion_assembly
 from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
 from polybot.runtime.shadow_build import build_shadow_components
+from polybot.runtime.shadow_adapters import StopAwareResolutionProvider
 from polybot.runtime.shadow_cycle import (
     ShadowCycleCoordinator,
     make_resolution_batch,
@@ -53,6 +55,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         health_stamper=health_stamper,
     )
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pol17-blocking")
+    worker_stop = threading.Event()
 
     async def run_blocking(call, *args):
         loop = asyncio.get_running_loop()
@@ -62,7 +65,10 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         config,
         ingestion=ingestion,
         registry_provider=registry_provider,
-        resolution_providers=resolution_providers,
+        resolution_providers=tuple(
+            StopAwareResolutionProvider(provider, worker_stop.is_set)
+            for provider in resolution_providers
+        ),
         wall_clock=time.time,
         health_clock_seconds=time.monotonic,
         health_clock_ns=time.monotonic_ns,
@@ -146,9 +152,10 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         cycle_interval_seconds=config.cycle_interval_seconds,
         readiness_timeout_seconds=config.readiness_timeout_seconds,
         closers=tuple(extra_closers) + (
-            components.close, lambda: executor.shutdown(wait=True),
+            components.close, lambda: executor.shutdown(wait=True), worker_stop.set,
         ),
         lock_acquired=lock_acquired,
+        stop_requested=worker_stop.set,
     )
     # Introspection is intentional for review/tests; none of these grants mutation
     # authority to Hermes or changes the runtime's public lifecycle surface.
