@@ -4,7 +4,9 @@ from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.caps import RiskCaps
+from polybot.ers.controller import ERSController
 from polybot.ers.intent_store import IntentStore
+from polybot.ers.safety import RUNNING, SafetyController
 from polybot.ers.service import PaperSigner, process_pending
 from polybot.ers.validator import Portfolio
 from polybot.ingestion.orderbook import LocalBook
@@ -68,3 +70,29 @@ def test_explicit_eligibility_defers_intent_without_any_ers_side_effect(tmp_path
         assert [order["intent_id"] for order in signer.placed] == ["eligible"]
         assert [position.token_id for position in final.positions] == ["eligible-token"]
         assert [row["intent_id"] for row in store.audit_log()] == ["eligible"]
+
+
+def test_controller_threads_an_empty_confirmed_eligibility_set(tmp_path):
+    with IntentStore(str(tmp_path / "intents.db"), MonotonicStamper()) as store:
+        store.propose_trade(
+            "deferred",
+            **_proposal("deferred-token", "deferred-condition", "deferred-event"),
+        )
+        caps = RiskCaps()
+        safety = SafetyController(caps=caps, store=store, clock=lambda: 1)
+        safety.set_state(RUNNING, reason="test_reconcile")
+        book_calls = []
+        controller = ERSController(
+            store=store,
+            book_for=lambda token_id: book_calls.append(token_id) or _book(),
+            caps=caps,
+            signer=PaperSigner(),
+            controller=safety,
+            clock=lambda: 1,
+        )
+
+        controller.run_cycle(eligible_intent_ids=frozenset())
+
+        assert store.get("deferred").status == "PROPOSED"
+        assert book_calls == []
+        assert store.audit_log() == []
