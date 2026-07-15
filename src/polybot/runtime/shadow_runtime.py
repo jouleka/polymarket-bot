@@ -40,6 +40,7 @@ class ShadowRuntime:
         self._closers = tuple(closers)
         self._stop = None
         self._ready = False
+        self._closed = False
 
     def request_stop(self):
         if self._stop is not None:
@@ -60,13 +61,23 @@ class ShadowRuntime:
             except* _StopRequested:
                 pass
         finally:
-            if self._ready:
-                self._readiness.stopping()
-            self._writer.close()
-            for close in reversed(self._closers):
-                close()
+            self._close_resources()
             if acquired:
                 self._lock.release()
+
+    def close_unstarted(self):
+        """Release a constructed-but-never-run assembly (tests/failed activation)."""
+        self._close_resources()
+
+    def _close_resources(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._ready:
+            self._readiness.stopping()
+        self._writer.close()
+        for close in reversed(self._closers):
+            close()
 
     async def _main_loop(self):
         await self._recover_resolution()

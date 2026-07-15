@@ -48,6 +48,7 @@ class FixedUniverseRegistryProvider:
         self._registry = None
         self._identity = None
         self._token_ids = ()
+        self._market_rows = ()
         self._loaded_at = None
 
     def load(self):
@@ -85,6 +86,7 @@ class FixedUniverseRegistryProvider:
         if initial:
             self._identity = identity
             self._token_ids = token_ids
+            self._market_rows = tuple(market_rows)
         self._loaded_at = self._age_clock()
         return candidate
 
@@ -101,3 +103,9 @@ class FixedUniverseRegistryProvider:
     @property
     def token_ids(self):
         return self._token_ids
+
+    @property
+    def market_rows(self):
+        if self._registry is None:
+            raise RuntimeError("fixed universe registry is not loaded")
+        return self._market_rows
