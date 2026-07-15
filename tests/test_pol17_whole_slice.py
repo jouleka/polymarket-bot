@@ -176,6 +176,12 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
         assert first.intent_store.get("intent-1").status == "ACCEPTED"
         assert len(first.intent_store.fills_log()) == 1
         assert len(first.intent_store.flow_log()) == 1
+        assert first.signer.gtd_exits == [{
+            "token_id": "101",
+            "exit_price": Decimal("0.1040"),
+            "expiry": 1_750_086_400,
+            "size": Decimal("12"),
+        }]
         assert [row.role for row in first.intent_store.pending_shadow_executions(10)] == [
             "MAKER", "SHADOW",
         ]

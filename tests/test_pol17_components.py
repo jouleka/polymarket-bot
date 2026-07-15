@@ -23,6 +23,7 @@ from polybot.resolution.dispatcher import ResolutionDispatcher
 from polybot.resolution.feed import ResolutionFeed
 from polybot.resolution.store import ResolutionStore
 from polybot.runtime.config import IngestionConfig
+import polybot.runtime.shadow_build as shadow_build
 from polybot.runtime.shadow_build import ShadowComponents, build_shadow_components
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
@@ -71,7 +72,15 @@ def _registry():
     )
 
 
-def test_component_factory_wires_real_paper_safety_and_authority_types(tmp_path):
+def test_component_factory_wires_real_paper_safety_and_authority_types(
+        tmp_path, monkeypatch):
+    startup_checks = []
+    monkeypatch.setattr(
+        shadow_build,
+        "verify_or_refuse",
+        lambda caps, **kwargs: startup_checks.append((caps, kwargs)),
+        raising=False,
+    )
     config = _config(tmp_path)
     with EventStore(config.ingestion.db_path):
         pass
@@ -120,6 +129,10 @@ def test_component_factory_wires_real_paper_safety_and_authority_types(tmp_path)
         assert components.controller._reconciler is not None
         assert components.controller._accept_wall_clock is not None
         assert components.controller._controller._flow_gate is not None
+        assert len(startup_checks) == 1
+        assert startup_checks[0][1]["expected_caps_hash"] == (
+            "9c5265736b4930c1d8270788e3543c1d9144454cf4e99407520da4862c7b03ab"
+        )
         assert "signer" not in inspect.signature(build_shadow_components).parameters
         assert "private_key" not in inspect.signature(build_shadow_components).parameters
     finally:

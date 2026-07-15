@@ -16,12 +16,14 @@ from polybot.ers.breaker import DrawdownBreaker
 from polybot.ers.caps import RiskCaps
 from polybot.ers.controller import ERSController
 from polybot.ers.flow import make_flow_gate
+from polybot.ers.gtd import derive_bracket
 from polybot.ers.intent_store import IntentStore
 from polybot.ers.lossbreaker import LossBreakers
 from polybot.ers.reconcile import ThreeWayReconciler, make_recon_provider
 from polybot.ers.restart import RestartReconciler
 from polybot.ers.safety import SafetyController
 from polybot.ers.service import HermesPipeline, PaperSigner
+from polybot.ers.startup_selftest import verify_or_refuse
 from polybot.fusion.component_log import ComponentLog
 from polybot.fusion.engine import FusionConfig
 from polybot.harness.execution import (
@@ -41,6 +43,11 @@ from polybot.resolution.feed import ResolutionFeed
 from polybot.resolution.store import ResolutionStore
 from polybot.storage.market_memory import ReadOnlyEventStore
 from polybot.truthgate.gate import TruthGateConfig
+
+
+EXPECTED_RISK_CAPS_HASH = (
+    "9c5265736b4930c1d8270788e3543c1d9144454cf4e99407520da4862c7b03ab"
+)
 
 
 class CurrentMarketRegistry:
@@ -103,6 +110,8 @@ def build_shadow_components(config, *, ingestion, registry_provider,
 
     There is deliberately no signer, wallet, key, or order-client injection surface.
     """
+    caps = RiskCaps()
+    verify_or_refuse(caps, expected_caps_hash=EXPECTED_RISK_CAPS_HASH)
     stamper = ingestion.stamper
     event_reader = ReadOnlyEventStore(config.ingestion.db_path)
     intent_store = IntentStore(config.intents_db_path, stamper)
@@ -150,7 +159,6 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         stamper=stamper,
     )
 
-    caps = RiskCaps()
     safety = SafetyController(
         caps=caps, store=intent_store, clock=health_clock_seconds
     )
@@ -192,6 +200,18 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         maker_config=maker_config,
     )
     signer = PaperSigner()
+
+    def gtd_for(decision, position, *, caps, standing_exit_total):
+        # Paper-only passive backstop. The fixed 24-hour horizon is renewed per
+        # accepted entry and carries no live venue/order authority.
+        return derive_bracket(
+            decision,
+            position,
+            caps=caps,
+            expiry=int(wall_clock()) + 86_400,
+            standing_exit_total=standing_exit_total,
+        )
+
     controller = ERSController(
         store=intent_store,
         book_for=ingestion.book_for,
@@ -200,6 +220,7 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         controller=safety,
         breaker=DrawdownBreaker(caps, clock=health_clock_seconds),
         pipeline=pipeline,
+        gtd_for=gtd_for,
         anomaly=anomaly,
         lossbreakers=lossbreakers,
         reconciler=restart,

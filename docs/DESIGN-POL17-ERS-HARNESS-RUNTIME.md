@@ -249,16 +249,18 @@ request timeout 15 seconds; readiness timeout 60 seconds.
 ## 8. Safety invariants
 
 1. `PaperSigner` is the only signer instance and has no network or key material.
-2. Hermes remains propose-only and cannot size, price, sign, settle, operate, or stop the runtime.
-3. ERS reads the live book on validation and POL-16 re-fetches it after ACCEPT before execution.
-4. Persisted midpoint batches are evidence only and never an execution authority.
-5. Terminal authority is exclusively POL-15; terminal fanout precedes new ERS work each cycle.
-6. ACCEPT durability is atomic across audit, fill, flow, canonical execution, and outbox.
-7. Both outboxes remain target-commit-before-ack, idempotent, ordered, and restart-replayable.
-8. Terminal conditions retire risk; disputed/manual/finalized-unknown conditions freeze it.
-9. Exact `Decimal` storage and conservative failure behavior are preserved.
-10. Existing `evaluate_intent`, `ProposeOnlyFacade`, caps, signer protocol, and terminal models are unchanged.
-11. Production stores zero raw CLOB websocket rows and retains the deduplicated trade tape.
+2. The pinned RiskCaps content hash and canonical pUSD address self-test run before stores open;
+   every paper ACCEPT stages the established deterministic GTD backstop with a 24-hour expiry.
+3. Hermes remains propose-only and cannot size, price, sign, settle, operate, or stop the runtime.
+4. ERS reads the live book on validation and POL-16 re-fetches it after ACCEPT before execution.
+5. Persisted midpoint batches are evidence only and never an execution authority.
+6. Terminal authority is exclusively POL-15; terminal fanout precedes new ERS work each cycle.
+7. ACCEPT durability is atomic across audit, fill, flow, canonical execution, and outbox.
+8. Both outboxes remain target-commit-before-ack, idempotent, ordered, and restart-replayable.
+9. Terminal conditions retire risk; disputed/manual/finalized-unknown conditions freeze it.
+10. Exact `Decimal` storage and conservative failure behavior are preserved.
+11. Existing `evaluate_intent`, `ProposeOnlyFacade`, caps, signer protocol, and terminal models are unchanged.
+12. Production stores zero raw CLOB websocket rows and retains the deduplicated trade tape.
 12. No POL-17 code signs, submits, cancels, redeems, uses a wallet, or writes to Polygon.
 
 ## 9. Acceptance criteria
