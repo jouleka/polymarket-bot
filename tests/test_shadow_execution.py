@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from decimal import Decimal
+from fractions import Fraction
 
 import pytest
 
@@ -147,6 +148,22 @@ def test_planner_uses_fresh_best_bid_forced_buy_and_ers_approved_notional():
     assert execution.event_id == "event-1"
     assert execution.outcome_slot == 0
     assert execution.sibling_token_ids == ("101", "202")
+
+
+def test_planner_never_rounds_shares_above_approved_notional():
+    planner = make_shadow_execution_planner(
+        book_for=lambda token_id: _book(bid="0.11", ask="0.12"),
+        subject_for=lambda intent: _subject(),
+        maker_config=_config(),
+    )
+
+    execution = planner(
+        _intent(),
+        Decision("ACCEPT", Decimal("12"), Decimal("0.12"), "per_trade_cap"),
+    )
+
+    assert execution is not None
+    assert Fraction(execution.shares) * Fraction(execution.price_exec) <= Fraction(12)
 
 
 @pytest.mark.parametrize(

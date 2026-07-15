@@ -6,7 +6,7 @@ book, joins the best bid as a BUY of the selected outcome token, and sizes share
 the deterministic ERS-approved stake.
 """
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, localcontext
 
 from polybot.ers.intent_store import ShadowExecutionRecord
 from polybot.ers.market_meta import ResolutionSubjectMetadata
@@ -43,7 +43,9 @@ def make_shadow_execution_planner(*, book_for, subject_for, maker_config):
                 or not (Decimal(0) < resting_price < Decimal(1))):
             return None
 
-        shares = stake / resting_price
+        with localcontext() as context:
+            context.rounding = ROUND_DOWN
+            shares = stake / resting_price
         fill = simulate_fill(
             token_id=intent.token_id,
             condition_id=intent.condition_id,
