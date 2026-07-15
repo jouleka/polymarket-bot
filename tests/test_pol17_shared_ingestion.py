@@ -60,3 +60,60 @@ def test_shared_ingestion_assembly_exposes_the_snapshotters_live_collector(
         assert assembly.book_for("t1") == ("live", "t1")
     finally:
         assembly.writer.close()
+
+
+def test_pol17_can_separate_live_health_from_persisted_history_clocks(
+        tmp_path, monkeypatch):
+    from polybot.runtime import ingestion
+
+    captured = {}
+
+    class Collector:
+        def __init__(self, _connect, stamper, _token_ids, *, sink, **_kwargs):
+            captured["collector_stamper"] = stamper
+            assert sink is None
+
+        def book_for(self, _token_id):
+            return None
+
+        async def run(self, max_connections=None):
+            raise AssertionError("not run")
+
+    class Snapshotter:
+        def __init__(self, **kwargs):
+            captured["snapshot_stamper"] = kwargs["stamper"]
+
+        async def run(self):
+            raise AssertionError("not run")
+
+    monkeypatch.setattr(ingestion, "ShardedMarketCollector", Collector)
+    monkeypatch.setattr(ingestion, "MidpointSnapshotter", Snapshotter)
+    history_stamper = object()
+    health_stamper = object()
+    config = IngestionConfig(
+        db_path=str(tmp_path / "market_memory.db"),
+        data_api_enabled=False,
+    )
+
+    assembly = build_ingestion_assembly(
+        config,
+        gamma_fetch=lambda _params: [{
+            "conditionId": "c1", "acceptingOrders": True, "volume24hr": 10,
+            "active": True, "closed": False,
+            "clobTokenIds": '["t1", "t2"]', "outcomes": '["Yes", "No"]',
+            "outcomePrices": '["0.5", "0.5"]',
+        }],
+        ws_connect=object(),
+        data_fetch=object(),
+        stamper=history_stamper,
+        health_stamper=health_stamper,
+    )
+    try:
+        assert captured == {
+            "collector_stamper": health_stamper,
+            "snapshot_stamper": history_stamper,
+        }
+        assert assembly.stamper is history_stamper
+        assert assembly.health_stamper is health_stamper
+    finally:
+        assembly.writer.close()
