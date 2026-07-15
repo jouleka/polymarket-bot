@@ -99,6 +99,40 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         )
 
 
+@pytest.mark.parametrize(("section", "field", "unsafe_value"), [
+    ("approvals", "mode", "auto"),
+    ("approvals", "cron_mode", "allow"),
+    ("approvals", "mcp_reload_confirm", False),
+    ("security", "allow_private_urls", True),
+    ("security", "redact_secrets", False),
+    ("security", "tirith_enabled", False),
+    ("security", "tirith_fail_open", True),
+    ("security", "allow_lazy_installs", True),
+    (None, "hooks_auto_accept", True),
+])
+def test_effective_contract_rejects_each_unsafe_approval_and_security_setting(
+        section, field, unsafe_value):
+    from polybot.hermes.profile_verify import verify_effective_contract
+
+    config = json.loads(PROFILE.read_text(encoding="utf-8"))
+    if section is None:
+        config[field] = unsafe_value
+    else:
+        config[section][field] = unsafe_value
+    platform_toolsets = {
+        platform: {"polymarket"} for platform in config["platform_toolsets"]
+    }
+
+    with pytest.raises(RuntimeError, match="approvals|security"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools={"polymarket": sorted(APPROVED)},
+        )
+
+
 def test_cron_contract_requires_one_exact_job_and_exact_model_visible_tools():
     from polybot.hermes.profile_verify import verify_cron_contract
 
