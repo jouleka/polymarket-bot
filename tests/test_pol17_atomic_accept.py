@@ -1,6 +1,9 @@
 """POL-17 atomic paper-ACCEPT durability."""
 
 from decimal import Decimal
+import math
+
+import pytest
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.intent_store import (
@@ -9,6 +12,20 @@ from polybot.ers.intent_store import (
     ShadowExecutionRecord,
 )
 from polybot.ers.validator import Decision
+
+
+def _journal(**overrides):
+    values = dict(
+        token_id="101",
+        condition_id="0x" + "11" * 32,
+        event_id="event-1",
+        shares=Decimal("23.07692307692307692307692308"),
+        price_exec=Decimal("0.52"),
+        worst_case_risk=Decimal("12"),
+        wall_at=1_750_000_000.25,
+    )
+    values.update(overrides)
+    return AcceptJournalRecord(**values)
 
 
 def test_accept_atomically_persists_restart_flow_and_execution_authority(tmp_path):
@@ -28,15 +45,7 @@ def test_accept_atomically_persists_restart_flow_and_execution_authority(tmp_pat
         fill_mid=Decimal("0.51"),
         reward_accrued=Decimal("1.25"),
     )
-    journal = AcceptJournalRecord(
-        token_id="101",
-        condition_id=condition_id,
-        event_id="event-1",
-        shares=Decimal("23.07692307692307692307692308"),
-        price_exec=Decimal("0.52"),
-        worst_case_risk=Decimal("12"),
-        wall_at=1_750_000_000.25,
-    )
+    journal = _journal()
 
     with IntentStore(path, MonotonicStamper()) as store:
         store.propose_trade(
@@ -92,3 +101,24 @@ def test_accept_atomically_persists_restart_flow_and_execution_authority(tmp_pat
             record.execution == execution
             for record in reopened.pending_shadow_executions(10)
         )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"token_id": ""},
+        {"condition_id": 1},
+        {"event_id": ""},
+        {"shares": Decimal("0")},
+        {"shares": Decimal("NaN")},
+        {"shares": Decimal("1")},
+        {"price_exec": Decimal("0")},
+        {"price_exec": Decimal("Infinity")},
+        {"worst_case_risk": Decimal("-1")},
+        {"wall_at": math.inf},
+        {"wall_at": True},
+    ],
+)
+def test_accept_journal_rejects_noncanonical_or_inconsistent_values(overrides):
+    with pytest.raises((TypeError, ValueError)):
+        _journal(**overrides)
