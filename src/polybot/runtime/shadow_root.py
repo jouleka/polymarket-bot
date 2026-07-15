@@ -8,6 +8,8 @@ from functools import partial
 import time
 
 from polybot.ers.heartbeat import Heartbeat
+from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+from polybot.ingestion.news import NewsPoller
 from polybot.runtime.ingestion import build_ingestion_assembly
 from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
 from polybot.runtime.shadow_build import build_shadow_components
@@ -29,7 +31,7 @@ def _drain_fully(dispatcher, limit):
 
 def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
                          ws_connect=None, data_fetch=None, history_stamper,
-                         health_stamper, lock, readiness):
+                         health_stamper, news_fetch, lock, readiness):
     """Construct the real paper runtime from one Gamma generation and one collector."""
     registry_provider = FixedUniverseRegistryProvider(
         fetch_snapshot=gamma_snapshot_fetch,
@@ -65,6 +67,15 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         Heartbeat(config.ingestion.heartbeat_path).beat
         if config.ingestion.heartbeat_path else (lambda: None)
     )
+    news_poller = NewsPoller(
+        news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST
+    )
+
+    async def poll_news():
+        while True:
+            await news_poller.poll_all()
+            await asyncio.sleep(config.news_poll_seconds)
+
     cycle = ShadowCycleCoordinator(
         heartbeat=heartbeat,
         registry_provider=registry_provider,
@@ -95,7 +106,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         )
 
     runtime = ShadowRuntime(
-        services=ingestion.services,
+        services=ingestion.services + (poll_news,),
         writer=ingestion.writer,
         lock=lock,
         recover_resolution=recover_resolution,
@@ -121,4 +132,5 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     runtime._registry_provider = registry_provider
     runtime._cycle = cycle
     runtime._collector = ingestion.collector
+    runtime._news_poller = news_poller
     return runtime

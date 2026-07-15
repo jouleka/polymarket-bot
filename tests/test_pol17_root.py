@@ -5,6 +5,7 @@ import time
 from types import SimpleNamespace
 
 from polybot.core.clock import MonotonicStamper
+from polybot.ingestion.news import NewsPoller
 from polybot.runtime.config import IngestionConfig
 from polybot.runtime.shadow_config import (
     ReadOnlyPolygonProviderConfig,
@@ -76,6 +77,9 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
     history_stamper = MonotonicStamper(clock=lambda: time.time_ns())
     health_stamper = MonotonicStamper(clock=lambda: time.monotonic_ns())
 
+    async def news_fetch(_url):
+        return "<rss><channel></channel></rss>"
+
     runtime = build_shadow_runtime(
         _config(tmp_path),
         gamma_snapshot_fetch=gamma_snapshot_fetch,
@@ -84,6 +88,7 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         data_fetch=object(),
         history_stamper=history_stamper,
         health_stamper=health_stamper,
+        news_fetch=news_fetch,
         lock=noop,
         readiness=readiness,
     )
@@ -94,5 +99,7 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert runtime._components.controller._book_for.__self__ is runtime._ingestion
         assert runtime._components.pipeline.market_meta is runtime._components.market_registry
         assert runtime._ingestion.token_ids == ("101", "202")
+        assert isinstance(runtime._news_poller, NewsPoller)
+        assert runtime._components.intent_store.pending() == []
     finally:
         runtime.close_unstarted()
