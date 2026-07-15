@@ -8,6 +8,12 @@ import pytest
 from polybot.runtime.shadow_runtime import ShadowRuntime
 
 
+def _leaf_errors(error):
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for child in error.exceptions for leaf in _leaf_errors(child)]
+    return [error]
+
+
 def test_shadow_runtime_enforces_recovery_readiness_and_reverse_shutdown_order():
     trace = []
     service_started = asyncio.Event()
@@ -145,3 +151,76 @@ def test_shutdown_attempts_every_close_and_releases_lock_after_close_failures():
     assert trace == [
         "lock", "stopping", "writer", "close_first", "unlock",
     ]
+
+
+def test_supervisor_treats_a_normally_returning_service_as_fatal():
+    trace = []
+
+    async def returned_service():
+        trace.append("returned")
+
+    runtime = ShadowRuntime(
+        services=(returned_service,),
+        writer=SimpleNamespace(close=lambda: trace.append("writer")),
+        lock=SimpleNamespace(
+            acquire=lambda: trace.append("lock"),
+            release=lambda: trace.append("unlock"),
+        ),
+        recover_resolution=lambda: asyncio.sleep(0),
+        drain_resolution=lambda: None,
+        drain_execution=lambda: None,
+        collector=SimpleNamespace(last_frame_at=lambda: 1),
+        apply_initial_resolution_state=lambda: None,
+        controller=SimpleNamespace(boot=lambda: None),
+        readiness=SimpleNamespace(ready=lambda: None, stopping=lambda: None),
+        run_cycle=lambda: asyncio.Event().wait(),
+        cycle_interval_seconds=1,
+        readiness_timeout_seconds=1,
+    )
+
+    with pytest.raises(ExceptionGroup) as caught:
+        asyncio.run(runtime.run())
+
+    leaves = _leaf_errors(caught.value)
+    assert len(leaves) == 1
+    assert isinstance(leaves[0], RuntimeError)
+    assert "returned unexpectedly" in str(leaves[0])
+    assert trace == ["lock", "returned", "writer", "unlock"]
+
+
+def test_live_book_readiness_timeout_is_fatal_and_never_announces_ready():
+    trace = []
+
+    async def service():
+        await asyncio.Event().wait()
+
+    runtime = ShadowRuntime(
+        services=(service,),
+        writer=SimpleNamespace(close=lambda: trace.append("writer")),
+        lock=SimpleNamespace(
+            acquire=lambda: trace.append("lock"),
+            release=lambda: trace.append("unlock"),
+        ),
+        recover_resolution=lambda: asyncio.sleep(0),
+        drain_resolution=lambda: None,
+        drain_execution=lambda: None,
+        collector=SimpleNamespace(last_frame_at=lambda: None),
+        apply_initial_resolution_state=lambda: None,
+        controller=SimpleNamespace(boot=lambda: None),
+        readiness=SimpleNamespace(
+            ready=lambda: trace.append("ready"),
+            stopping=lambda: trace.append("stopping"),
+        ),
+        run_cycle=lambda: asyncio.sleep(0),
+        cycle_interval_seconds=1,
+        readiness_timeout_seconds=0,
+    )
+
+    with pytest.raises(ExceptionGroup) as caught:
+        asyncio.run(runtime.run())
+
+    leaves = _leaf_errors(caught.value)
+    assert len(leaves) == 1
+    assert isinstance(leaves[0], TimeoutError)
+    assert str(leaves[0]) == "live-book readiness timed out"
+    assert trace == ["lock", "writer", "unlock"]

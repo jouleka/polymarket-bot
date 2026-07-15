@@ -3,7 +3,10 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from polybot.ers.market_meta import ResolutionSubjectMetadata
+from polybot.ers.market_meta import MarketSnapshotError
 from polybot.resolution.feed import PollDisposition
 from polybot.runtime.shadow_cycle import (
     ResolutionBatch,
@@ -231,3 +234,137 @@ def test_transient_registry_refresh_uses_only_a_still_fresh_generation():
     asyncio.run(coordinator.run_cycle())
 
     assert trace == ["last_good", ("ers", frozenset())]
+
+
+@pytest.mark.parametrize(
+    ("disposition", "eligible", "terminal", "frozen"),
+    [
+        (PollDisposition.UNRESOLVED, frozenset({"intent-1"}), (), ()),
+        (PollDisposition.UNKNOWN, frozenset(), (), ("condition-1",)),
+        (PollDisposition.UNAVAILABLE, frozenset(), (), ()),
+        (PollDisposition.ACCEPTED, frozenset(), ("condition-1",), ()),
+        (PollDisposition.ALREADY_TERMINAL, frozenset(), ("condition-1",), ()),
+    ],
+)
+def test_every_resolution_disposition_maps_to_exact_ers_authority(
+        disposition, eligible, terminal, frozen):
+    observed = {}
+
+    class Controller:
+        def apply_resolution_state(self, **state):
+            observed["state"] = state
+
+        def run_cycle(self, *, eligible_intent_ids):
+            observed["eligible"] = eligible_intent_ids
+
+    async def run_blocking(call, *args):
+        return call(*args)
+
+    coordinator = ShadowCycleCoordinator(
+        heartbeat=lambda: None,
+        registry_provider=SimpleNamespace(
+            refresh=lambda: None, require_fresh=lambda: object()
+        ),
+        subjects_for=lambda _registry: ResolutionBatch(
+            ("subject",), {"condition-1": frozenset({"intent-1"})}
+        ),
+        resolution_feed=SimpleNamespace(poll=lambda _subjects: (
+            SimpleNamespace(condition_id="condition-1", disposition=disposition),
+        )),
+        resolution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        controller=Controller(),
+        execution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        evidence_update=lambda: None,
+        status_update=lambda: None,
+        run_blocking=run_blocking,
+        clock=lambda: 100.0,
+        registry_refresh_seconds=300.0,
+        resolution_poll_seconds=60.0,
+        outbox_batch_limit=2,
+    )
+
+    asyncio.run(coordinator.run_cycle())
+
+    assert observed == {
+        "state": {
+            "terminal_condition_ids": terminal,
+            "frozen_condition_ids": frozen,
+        },
+        "eligible": eligible,
+    }
+
+
+def test_transient_refresh_cannot_rescue_an_expired_registry_generation():
+    class Registry:
+        def refresh(self):
+            raise RegistryRefreshUnavailable("Gamma unavailable")
+
+        def require_fresh(self):
+            raise MarketSnapshotError("Gamma registry is stale")
+
+    async def run_blocking(call, *args):
+        return call(*args)
+
+    coordinator = ShadowCycleCoordinator(
+        heartbeat=lambda: None,
+        registry_provider=Registry(),
+        subjects_for=lambda _registry: ResolutionBatch((), {}),
+        resolution_feed=SimpleNamespace(poll=lambda _subjects: ()),
+        resolution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        controller=SimpleNamespace(
+            apply_resolution_state=lambda **_state: None,
+            run_cycle=lambda **_kwargs: None,
+        ),
+        execution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        evidence_update=lambda: None, status_update=lambda: None,
+        run_blocking=run_blocking, clock=lambda: 100.0,
+        registry_refresh_seconds=300.0, resolution_poll_seconds=60.0,
+        outbox_batch_limit=2,
+    )
+
+    with pytest.raises(MarketSnapshotError, match="stale"):
+        asyncio.run(coordinator.run_cycle())
+
+    assert coordinator.last_registry_error == "Gamma unavailable"
+
+
+def test_cycle_drains_every_execution_outbox_batch_before_evidence():
+    trace = []
+
+    class ExecutionDispatcher:
+        def __init__(self):
+            self._counts = iter((2, 2, 1))
+
+        def drain(self, limit):
+            trace.append(("execution", limit))
+            return next(self._counts)
+
+    async def run_blocking(call, *args):
+        return call(*args)
+
+    coordinator = ShadowCycleCoordinator(
+        heartbeat=lambda: None,
+        registry_provider=SimpleNamespace(
+            refresh=lambda: None, require_fresh=lambda: object(),
+        ),
+        subjects_for=lambda _registry: ResolutionBatch((), {}),
+        resolution_feed=SimpleNamespace(poll=lambda _subjects: ()),
+        resolution_dispatcher=SimpleNamespace(drain=lambda _limit: 0),
+        controller=SimpleNamespace(
+            apply_resolution_state=lambda **_state: None,
+            run_cycle=lambda **_kwargs: trace.append("ers"),
+        ),
+        execution_dispatcher=ExecutionDispatcher(),
+        evidence_update=lambda: trace.append("evidence"),
+        status_update=lambda: trace.append("status"),
+        run_blocking=run_blocking, clock=lambda: 100.0,
+        registry_refresh_seconds=300.0, resolution_poll_seconds=60.0,
+        outbox_batch_limit=2,
+    )
+
+    asyncio.run(coordinator.run_cycle())
+
+    assert trace == [
+        "ers", ("execution", 2), ("execution", 2), ("execution", 2),
+        "evidence", "status",
+    ]
