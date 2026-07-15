@@ -32,7 +32,9 @@ def test_production_builder_wires_paper_root_and_transfers_adapter_ownership():
         history_stamper_factory=lambda _path: SimpleNamespace(stamp=lambda: 10),
         health_stamper_factory=lambda: SimpleNamespace(stamp=lambda: 20),
         news_fetch_factory=lambda **_kwargs: object(),
-        lock_factory=lambda _path: object(),
+        lock_factory=lambda _path: SimpleNamespace(
+            acquire=lambda: None, release=lambda: None,
+        ),
         readiness_factory=lambda: object(),
         root_builder=root_builder,
     )
@@ -41,3 +43,38 @@ def test_production_builder_wires_paper_root_and_transfers_adapter_ownership():
     assert trace == ["build"]
     assert not ({"signer", "wallet", "key", "order_client"}
                 & set(inspect.signature(shadow.build_production_runtime).parameters))
+
+
+def test_production_builder_acquires_singleton_before_any_adapter_or_store():
+    trace = []
+    lock = SimpleNamespace(
+        acquire=lambda: trace.append("lock"),
+        release=lambda: trace.append("unlock"),
+    )
+    gamma = SimpleNamespace(close=lambda: trace.append("gamma_close"))
+    runtime = object()
+    config = SimpleNamespace(
+        ingestion=SimpleNamespace(db_path="/data/events.db"),
+        rpc_timeout_seconds=5,
+    )
+
+    built = shadow.build_production_runtime(
+        config,
+        gamma_factory=lambda _config: trace.append("gamma") or gamma,
+        provider_factory=lambda _config: (
+            trace.append("providers") or (object(), object()),
+            lambda: trace.append("providers_close"),
+        ),
+        history_stamper_factory=lambda _path: trace.append("history") or object(),
+        health_stamper_factory=lambda: object(),
+        news_fetch_factory=lambda **_kwargs: object(),
+        lock_factory=lambda _path: lock,
+        readiness_factory=lambda: object(),
+        root_builder=lambda _config, **kwargs: (
+            trace.append("stores") or runtime
+            if kwargs["lock_acquired"] is True else None
+        ),
+    )
+
+    assert built is runtime
+    assert trace[:5] == ["lock", "gamma", "providers", "history", "stores"]

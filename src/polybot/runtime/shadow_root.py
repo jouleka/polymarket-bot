@@ -35,7 +35,7 @@ def _drain_fully(dispatcher, limit):
 def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
                          ws_connect=None, data_fetch=None, history_stamper,
                          health_stamper, news_fetch, lock, readiness,
-                         extra_closers=()):
+                         extra_closers=(), lock_acquired=False):
     """Construct the real paper runtime from one Gamma generation and one collector."""
     registry_provider = FixedUniverseRegistryProvider(
         fetch_snapshot=gamma_snapshot_fetch,
@@ -147,6 +147,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         closers=tuple(extra_closers) + (
             lambda: executor.shutdown(wait=True), components.close,
         ),
+        lock_acquired=lock_acquired,
     )
     # Introspection is intentional for review/tests; none of these grants mutation
     # authority to Hermes or changes the runtime's public lifecycle surface.

@@ -38,26 +38,36 @@ def build_production_runtime(
             runtime_config.ingestion,
             timeout=runtime_config.rpc_timeout_seconds,
         )
-    gamma = gamma_factory(config)
+    lock = lock_factory(LOCK_PATH)
+    lock.acquire()
+    lock_owned = True
+    gamma = None
     providers = None
     provider_close = None
     try:
+        gamma = gamma_factory(config)
         providers, provider_close = provider_factory(config)
-        return root_builder(
+        runtime = root_builder(
             config,
             gamma_snapshot_fetch=gamma,
             resolution_providers=providers,
             history_stamper=history_stamper_factory(config.ingestion.db_path),
             health_stamper=health_stamper_factory(),
             news_fetch=news_fetch_factory(timeout=config.rpc_timeout_seconds),
-            lock=lock_factory(LOCK_PATH),
+            lock=lock,
             readiness=readiness_factory(),
             extra_closers=(gamma.close, provider_close),
+            lock_acquired=True,
         )
+        lock_owned = False
+        return runtime
     except Exception:
         if provider_close is not None:
             provider_close()
-        gamma.close()
+        if gamma is not None:
+            gamma.close()
+        if lock_owned:
+            lock.release()
         raise
 
 
