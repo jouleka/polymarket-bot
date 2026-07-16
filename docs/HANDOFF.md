@@ -550,8 +550,17 @@ its removal, and it did not reappear. Existing root profile directories/static c
 unchanged. Both units remain inactive/disabled and no DB/runtime artifact was created. Evidence is
 in [`VERIFICATION-POL13-HERMES-PROFILE.md`](VERIFICATION-POL13-HERMES-PROFILE.md).
 
-**Next work:** owner-selected model/provider authentication is the next separately approved stopped
-gate. After that come exact-five preflight, cron, first-start, and enablement gates, followed by the
+**UPDATE 2026-07-16 — POL-13 Hermes model selected and preflighted while stopped.** The isolated
+profile now pins `gpt-5.6-terra` through `openai-codex` at `high` reasoning effort. Installed Hermes
+0.18.2 recognizes the exact model, and the installed-profile preflight passes with exactly the five
+approved propose-only MCP tools and no cron job. An isolated device-login attempt was cancelled
+without browser approval; no credential store or profile `.env` exists, and no other profile's
+credentials were copied. Both services remain inactive/disabled; no production DB, socket, status,
+cron, start, enablement, or activation occurred. Evidence is in
+[`VERIFICATION-POL13-HERMES-MODEL.md`](VERIFICATION-POL13-HERMES-MODEL.md).
+
+**Next work:** isolated `polybot-hermes` provider authentication is the next separately approved
+stopped gate. After that come cron, first-start, and enablement gates, followed by the
 ≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
