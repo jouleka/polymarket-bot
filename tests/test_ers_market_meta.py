@@ -344,6 +344,10 @@ def test_registry_quarantines_one_market_with_unavailable_deadline(deadline):
         registry.resolution_subject_for(
             _intent(condition_id="bad", token_id="b1", event_id="e2")
         )
+    with pytest.raises(MarketMetadataUnavailable, match="token.*unavailable"):
+        registry.metadata_for(
+            _intent(condition_id="good", token_id="b1", event_id="e1")
+        )
 
 
 def test_registry_with_only_unavailable_deadlines_still_fails_loudly():
