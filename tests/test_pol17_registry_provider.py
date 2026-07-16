@@ -181,8 +181,10 @@ def test_registry_refresh_does_not_mask_token_contradiction_as_an_omission():
 def test_registry_market_identity_conflict_is_fatal_without_event_relationship():
     snapshots = iter([
         (
-            [_market(), _market("c2", ("t3", "t4"), "e2")],
-            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+            [_market(), _market("c2", ("t3", "t4"), "e2"),
+             _market("c3", ("t5", "t6"), "e3")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21"),
+             _event("e3", "c3", ("t5", "t6"), "21")],
         ),
         (
             [_market(tokens=("changed-1", "changed-2")),
