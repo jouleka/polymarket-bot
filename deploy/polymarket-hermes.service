@@ -9,15 +9,15 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=polybot-hermes
-Group=polybot-hermes
+User=root
+Group=root
 SupplementaryGroups=polybot-proposal
-WorkingDirectory=/var/lib/polybot-hermes
-Environment=HOME=/var/lib/polybot-hermes
+WorkingDirectory=/root/.hermes/profiles/polymarket
+Environment=HOME=/root
 Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock
-ExecStartPre=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_verify --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket
+ExecStartPre=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_verify --profile-home /root/.hermes/profiles/polymarket
 ExecStart=/usr/local/bin/hermes --profile polymarket gateway run --replace
 Restart=on-failure
 RestartSec=5
@@ -31,7 +31,18 @@ PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent /usr/local/bin/hermes
-ReadWritePaths=/var/lib/polybot-hermes
+ReadWritePaths=/root/.hermes/profiles/polymarket
+ReadWritePaths=/root/.hermes/auth.json
+ReadWritePaths=-/root/.hermes/auth.lock
+InaccessiblePaths=-/root/.ssh
+InaccessiblePaths=-/root/.aws
+InaccessiblePaths=-/root/.codex
+InaccessiblePaths=-/root/.config
+InaccessiblePaths=-/root/.gnupg
+InaccessiblePaths=-/root/.kube
+InaccessiblePaths=-/root/.hermes/profiles/coder
+InaccessiblePaths=-/root/.hermes/profiles/memecoin-trader
+InaccessiblePaths=-/root/.hermes/profiles/optionsbot
 InaccessiblePaths=-/opt/polymarket-bot/config.toml
 InaccessiblePaths=-/opt/polymarket-bot/.env
 InaccessiblePaths=-/opt/polymarket-bot/data

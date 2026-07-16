@@ -12,6 +12,14 @@ APPROVED = {
 MODEL_VISIBLE = {f"mcp__polymarket__{name}" for name in APPROVED}
 
 
+def test_profile_verifier_targets_native_existing_hermes_profile():
+    from polybot.hermes import profile_verify
+
+    assert profile_verify._PROFILE_HOME == Path(
+        "/root/.hermes/profiles/polymarket"
+    )
+
+
 def test_profile_template_grants_only_one_exact_five_tool_mcp_server():
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
 

@@ -32,7 +32,7 @@ _MODEL_VISIBLE_METHODS = {
 }
 _CRON_NAME = "polymarket-propose-only"
 _CRON_SCHEDULE = {"kind": "interval", "minutes": 5, "display": "every 5m"}
-_PROFILE_HOME = Path("/var/lib/polybot-hermes/.hermes/profiles/polymarket")
+_PROFILE_HOME = Path("/root/.hermes/profiles/polymarket")
 _BRIDGE_GROUP = "polybot-proposal"
 _CRON_PROMPT = Path(
     "/opt/polymarket-bot/deploy/hermes/polymarket-profile/cron-prompt.md"
