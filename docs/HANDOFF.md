@@ -595,14 +595,15 @@ The approved non-enabled first start reached readiness, then halted because its 
 cycle received only Gamma's default 20 rows for a frozen 100-market filtered query. An explicit
 bulk limit corrected that truncation; live replay then proved Gamma can still purely omit one
 requested active condition (99/100) without changing or adding any returned identity. Checkpoints
-`a556d65`, `8bc7a47`, and `ef16a66` now request the complete frozen market/event sets, retain the last
-coherent registry under its existing TTL only for a strict-subset response whose returned token
-identities all match, and perform that check before candidate metadata construction. Expansion or
-any token contradiction remains fatal. The suite passes 2,281 tests and the isolated 5/5 mutation
+`a556d65`, `8bc7a47`, `ef16a66`, and `daf7df6` now request the complete frozen market/event sets,
+retain the last coherent registry under its existing TTL only for a strict-subset response whose
+returned market and event token identities all match, perform that check before candidate metadata
+construction, and never renew the TTL from an incomplete response. Expansion or any token
+contradiction remains fatal. The suite passes 2,283 tests and the isolated 7/7 mutation
 gate has zero survivors. Both services are stopped and disabled, Hermes has
 never started, and all seven created paper databases plus the prior raw evidence are preserved.
-The corrected candidate `ef16a66` still requires publication, stopped installation, and a fresh
-first-start observation before the gate can pass.
+The corrected candidate `daf7df6` still requires closing PR review/merge, stopped installation,
+and a fresh first-start observation before the gate can pass.
 
 **Next work:** POL-17 first start without enablement is the next explicit gate. After its readiness,
 compact-persistence, provider, recovery, and memory observation passes, POL-18 first start and later

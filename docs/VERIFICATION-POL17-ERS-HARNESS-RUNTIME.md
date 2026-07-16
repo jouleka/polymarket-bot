@@ -225,19 +225,27 @@ because the request omitted `limit`. After adding the exact frozen-set limit, a 
 99/100: Gamma omitted one requested, still-active esports condition even when queried alone. No
 returned condition changed token identity and no extra condition appeared.
 
-Three serial RED/GREEN checkpoints close that operational gap without weakening fixed-universe
+Four serial RED/GREEN checkpoints close that operational gap without weakening fixed-universe
 authority:
 
 - `a556d65` requires exact market and event limits on filtered bulk requests;
 - `8bc7a47` classifies only a strict-subset response whose returned token identities all still match
   as `RegistryRefreshUnavailable`, retaining the prior coherent generation under the existing TTL;
 - `ef16a66` performs that completeness/identity decision before candidate metadata construction, so
-  quarantined metadata in the partial response cannot preempt last-good retention.
+  quarantined metadata in the partial response cannot preempt last-good retention;
+- `daf7df6` closes independent-review findings by validating returned event token identity before
+  omission fallback and pinning that incomplete responses never renew the last-good age budget.
 
 Expansion, replacement, duplicate/malformed identity, and omission combined with a token change
-remain fatal `MarketSnapshotError` paths. The focused suites pass 13 tests; the complete suite passes
-2,281 tests on tmpfs. An isolated 5/5 mutation battery killed removal of the market limit, removal
+remain fatal `MarketSnapshotError` paths. The focused suites pass 15 tests; the complete suite passes
+2,283 tests on tmpfs. An isolated 7/7 mutation battery killed removal of the market limit, removal
 of the event limit, re-fatalizing a pure omission, masking a token contradiction as an omission,
-and constructing quarantined candidate metadata before detecting the omission.
+constructing quarantined candidate metadata before detecting the omission, skipping event-identity
+validation, and renewing the last-good TTL on an incomplete response.
+
+The first independent specification/security review rejected the draft because omission fallback
+ran before cross-snapshot event-token validation, and because TTL non-renewal lacked a regression
+pin. Both findings were reproduced, fixed through the RED/GREEN checkpoint above, and mutation-
+verified before the closing review.
 Both production services remained stopped and disabled throughout diagnosis and verification;
 Hermes was never started, and no database or raw evidence was deleted or reset.
