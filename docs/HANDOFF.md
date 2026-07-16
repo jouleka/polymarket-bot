@@ -702,10 +702,13 @@ caps with zero pressure/OOM events. The earlier pure-omission policy made a perm
 condition expire the whole runtime. Checkpoints `5a22e8b`, `d22837a`, and `424d6a1` instead publish
 only a coherent current subset while retaining the frozen collector identity: omitted or metadata-
 quarantined tokens disappear from ERS metadata, Hermes flags/market/book reads, and proposal
-eligibility; exact identities may later reappear. Expansion, any returned market/event identity
+eligibility; exact identities may later reappear. Flags and `get_book` derive authority from one
+returned immutable registry generation, so refresh cannot expose a split-generation token cache.
+Expansion, any returned market/event identity
 contradiction (including an omitted frozen condition), zero usable replacement, and true TTL
 expiry remain fatal. The first independent reviews found and closed the omitted-event and
-remembered-`get_book` gaps. The focused 251 and canonical 2,309-test suites pass; final re-review,
+remembered-`get_book` gaps plus re-review's split-publication race. The focused 253 and canonical
+2,311-test suites pass; final re-review,
 expanded mutation closure, landing, installation, and controlled restart remain. Evidence is in
 [`VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md`](VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md).
 

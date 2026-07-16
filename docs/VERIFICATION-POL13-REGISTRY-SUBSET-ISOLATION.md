@@ -46,12 +46,14 @@ The implementation was built as serial RED/GREEN checkpoints:
 - `5a22e8b` publishes only coherent subset metadata and intersects Hermes-advertised live books
   with the current usable registry;
 - `d22837a` pins exact-identity reappearance without shrinking the frozen universe;
-- `424d6a1` closes independent-review findings by validating omitted frozen event identities and
-  gating `get_book` on the same fresh current-registry authority as flags/market reads.
+- `424d6a1` closes the first independent-review findings by validating omitted frozen event
+  identities and gating `get_book` on current-registry authority;
+- `a297588` closes re-review's publication-race finding by deriving flags and book authorization
+  from the same returned immutable registry generation, with no separately published token cache.
 
 Each intended RED was observed before the minimum implementation. The closing focused run passes
-251 registry, MarketRegistry, cycle, root, whole-slice, Hermes read/RPC, and resolution-adjacent
-tests. The canonical tmpfs suite passes **2,309 tests**. `git diff --check` passes.
+253 registry, MarketRegistry, cycle, root, whole-slice, Hermes read/RPC, and resolution-adjacent
+tests. The canonical tmpfs suite passes **2,311 tests**. `git diff --check` passes.
 
 ## Independent review and adversarial mutation
 
@@ -63,7 +65,9 @@ The first independent specification/security reviews rejected `5a22e8b` for two 
    removed current authority.
 
 Both findings now have direct regressions, including omitted, metadata-quarantined, and restored
-conditions. Closing re-review is required at the final documentation head before landing.
+conditions. Re-review then found a concurrent publication gap between the immutable registry and a
+separate token cache; `a297588` removes that cache from authority decisions and pins the exact
+interleaving. Closing re-review is required at the final documentation head before landing.
 
 An isolated disposable-worktree mutation battery killed 8/8 changes: admit universe expansion;
 skip returned identity comparison; advertise frozen instead of current tokens; advertise collector
