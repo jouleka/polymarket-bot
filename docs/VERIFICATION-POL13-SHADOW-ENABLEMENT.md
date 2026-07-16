@@ -179,6 +179,6 @@ exact PID/start-time wait. The market page skips only rows whose event identity 
 metadata is unavailable; an exact selector for that bad row raises `ReadViewUnavailable`, an exact
 healthy row still succeeds, and registry freshness plus Gamma normalization remain outside the
 isolation catch. A stopped probe returns 99 usable markets and the requested first 10. Closing
-focused results are 48 tests and the canonical suite passes 2,305 tests. An isolated 9/9 mutation
+focused results are 48 tests and the canonical suite passes 2,305 tests. An isolated 10/10 mutation
 battery kills loss of gateway identity/profile tokens, page-wide row failures, fail-open exact
 condition/token lookups, unrelated-row impact, and swallowed freshness/normalization failures.

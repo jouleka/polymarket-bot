@@ -669,7 +669,7 @@ metadata-unavailable Gamma row aborted every market page, and the bootstrap OS a
 recognized by Hermes's planned-stop PID verifier. Both units are again inactive/disabled with no
 surviving process and healthy stores/evidence. Checkpoints `a391868`/`7a3b0b9` preserve supervised
 gateway identity and isolate only unusable page rows while exact bad lookups still fail closed.
-The 2,305-test suite and isolated 9/9 mutations pass; independent closing re-review, landing,
+The 2,305-test suite and isolated 10/10 mutations pass; independent closing re-review, landing,
 stopped install, and another retry remain.
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
