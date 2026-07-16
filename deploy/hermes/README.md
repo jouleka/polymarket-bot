@@ -173,6 +173,12 @@ Automatic cron execution begins only when the profile gateway is separately acti
 POL-17 activation and POL-18 activation are distinct approvals. Start without enabling first:
 
 ```sh
+systemctl show polymarket-ingestion.service \
+  -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy
+systemctl show polymarket-hermes.service \
+  -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy
+# required hard ceilings: ingestion 768 MiB; Hermes 512 MiB; swap 128 MiB each
+
 systemctl start polymarket-ingestion.service
 systemctl is-active polymarket-ingestion.service
 stat -c '%A %U %G %n' /run/polybot-proposal /run/polybot-proposal/proposal.sock
@@ -181,6 +187,11 @@ cat /run/polybot/shadow-status.json
 systemctl start polymarket-hermes.service
 systemctl is-active polymarket-hermes.service
 journalctl -u polymarket-hermes.service --since=-5m --no-pager
+systemctl show polymarket-ingestion.service polymarket-hermes.service \
+  -p MemoryCurrent -p MemoryPeak -p MemoryHigh -p MemoryMax \
+  -p MemorySwapCurrent -p MemorySwapMax
+cat /sys/fs/cgroup/system.slice/polymarket-ingestion.service/memory.events
+cat /sys/fs/cgroup/system.slice/polymarket-hermes.service/memory.events
 ```
 
 `Requisite=` makes a brain start fail unless POL-17 is already active and does not pull-start it;
@@ -197,7 +208,9 @@ Required before leaving it running:
 - the first cron run either emits no proposal or at most one genuine evidence-backed `PROPOSED`
   row; no fake proposal is injected for testing;
 - any proposal is independently processed by ERS with fresh-book re-fetch, PaperSigner only, and
-  the existing atomic/restart-safe shadow path.
+  the existing atomic/restart-safe shadow path;
+- both cgroups stay below their soft ceilings without `oom`/`oom_kill` events or a repeatedly
+  increasing `high` counter. Stop on memory pressure; never raise limits merely to keep them alive.
 
 Enable either unit only after a further explicit enablement approval:
 

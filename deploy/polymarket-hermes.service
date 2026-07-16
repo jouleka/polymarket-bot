@@ -22,6 +22,13 @@ ExecStart=/usr/local/bin/hermes --profile polymarket gateway run --replace
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=60
+# The brain is subordinate to other VPS workloads. Its existing ~250 MiB peer footprint fits below
+# this ceiling; pressure reclaims it before the host and bounded swap avoids disk-contention spill.
+MemoryAccounting=true
+MemoryHigh=320M
+MemoryMax=512M
+MemorySwapMax=128M
+OOMPolicy=stop
 KillSignal=SIGTERM
 TimeoutStopSec=60
 UMask=0077

@@ -190,6 +190,16 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "ExecStartPre=/usr/bin/chgrp polybot-proposal /run/polybot-proposal" in text
 
 
+def test_ingestion_unit_has_fail_closed_memory_ceiling():
+    text = UNIT.read_text()
+
+    assert "MemoryAccounting=true" in text
+    assert "MemoryHigh=512M" in text
+    assert "MemoryMax=768M" in text
+    assert "MemorySwapMax=128M" in text
+    assert "OOMPolicy=stop" in text
+
+
 def test_runbook_requires_nonempty_old_database_evidence():
     text = RUNBOOK.read_text()
     source_check = "test -s /opt/polymarket-bot/data/market_memory.db"

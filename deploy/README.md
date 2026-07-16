@@ -208,10 +208,19 @@ and must not start or enable the unit.
 
 ## Start/enable — separate explicit approval required
 
-Only after the owner separately approves activation:
+Before any activation, confirm the installed cgroup ceilings. Polymarket must never run with an
+unbounded value:
 
 ```sh
-systemctl enable --now polymarket-ingestion.service
+systemctl show polymarket-ingestion.service \
+  -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy
+# required: 536870912, 805306368, 134217728, stop
+```
+
+Only after the owner separately approves first start, start without enabling:
+
+```sh
+systemctl start polymarket-ingestion.service
 journalctl -u polymarket-ingestion.service -f
 ```
 
@@ -219,6 +228,9 @@ journalctl -u polymarket-ingestion.service -f
 
 ```sh
 systemctl status polymarket-ingestion.service
+systemctl show polymarket-ingestion.service \
+  -p MemoryCurrent -p MemoryPeak -p MemoryHigh -p MemoryMax -p MemorySwapCurrent -p MemorySwapMax
+cat /sys/fs/cgroup/system.slice/polymarket-ingestion.service/memory.events
 cat /opt/polymarket-bot/data/heartbeat
 cat /run/polybot/shadow-status.json
 sudo -u polybot /opt/polymarket-bot/.venv/bin/python - <<'PY'
@@ -241,9 +253,20 @@ Before POL-18, `pending_intents` and `execution_outbox` must remain zero; do not
 production proposals to make them move. Confirm the journal contains one `READY=1` transition and
 no wrong-chain, registry-stale, database-integrity, or supervised-service halt.
 
+`MemoryHigh=512M` begins reclaim before the hard `MemoryMax=768M`; swap is capped at 128 MiB.
+Any `oom`/`oom_kill` event, repeated growth of the `high` counter, or peak close to the hard limit is
+a failed activation gate: stop the unit and reduce universe/concurrency only through a reviewed
+configuration change. Never raise the ceiling merely to keep the process alive.
+
 Also record DB+WAL+SHM size at two timestamps to confirm observed growth remains bounded. A stale heartbeat, any raw
 row, malformed midpoint batch, missing source, collector/writer HALT, or rate above the ceiling is a failure: stop
 and disable the unit; do not relax the gate.
+
+Enable only after a separately approved, clean first-start observation:
+
+```sh
+systemctl enable polymarket-ingestion.service
+```
 
 ## Stop / rollback
 
