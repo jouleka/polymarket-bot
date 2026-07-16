@@ -83,6 +83,27 @@ def test_market_reader_rejects_noncanonical_selectors_instead_of_returning_empty
             reader(**kwargs)
 
 
+def test_market_reader_page_isolates_one_row_without_registry_metadata():
+    from polybot.hermes.read_views import MarketReadView, ReadViewUnavailable
+
+    provider, condition_id = _registry_provider()
+    malformed = dict(provider.market_rows[0])
+    malformed.update({
+        "conditionId": "0x" + "cd" * 32,
+        "clobTokenIds": json.dumps(["33", "44"]),
+        "events": [{"id": "9"}],
+    })
+    provider._market_rows = (malformed, *provider.market_rows)
+
+    result = MarketReadView(provider)(offset=0, limit=25)
+
+    assert result["total"] == 1
+    assert [row["condition_id"] for row in result["markets"]] == [condition_id]
+    with pytest.raises(
+            ReadViewUnavailable, match="registry metadata is unavailable"):
+        MarketReadView(provider)(condition_id=malformed["conditionId"])
+
+
 def test_book_reader_returns_exact_live_local_book_projection():
     from polybot.hermes.read_views import BookReadView
     from polybot.ingestion.orderbook import LocalBook
