@@ -86,6 +86,28 @@ def test_registry_refresh_retains_last_good_generation_when_gamma_omits_a_market
     assert provider.market_rows[0]["question"] == "Will X?"
 
 
+def test_registry_omission_is_detected_before_candidate_metadata_quarantine():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([{**_market(), "endDate": None}], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    first = provider.load()
+
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    assert provider.registry is first
+
+
 def test_registry_refresh_does_not_mask_token_contradiction_as_an_omission():
     snapshots = iter([
         (
