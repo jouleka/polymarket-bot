@@ -603,8 +603,9 @@ containers before fallback. Expansion or any token contradiction remains fatal. 
 2,285 tests and the isolated 9/9 mutation
 gate has zero survivors. Both services are stopped and disabled, Hermes has
 never started, and all seven created paper databases plus the prior raw evidence are preserved.
-The corrected candidate `8e8e677` still requires closing PR review/merge, stopped installation,
-and a fresh first-start observation before the gate can pass.
+Final independent re-review passes exact PR head `f879e63`; executable candidate `8e8e677` still
+requires PR merge, stopped installation, and a fresh first-start observation before the gate can
+pass.
 
 **Next work:** POL-17 first start without enablement is the next explicit gate. After its readiness,
 compact-persistence, provider, recovery, and memory observation passes, POL-18 first start and later

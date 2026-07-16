@@ -251,5 +251,8 @@ ran before cross-snapshot event-token validation, and because TTL non-renewal la
 pin. Both findings were reproduced, fixed through the RED/GREEN checkpoint above, and mutation-
 verified. The next re-review confirmed those closures but found the iterable-container parser gap;
 that finding was likewise reproduced, fixed, and killed by separate market/event mutations.
+The final independent closing review passed exact PR head `f879e63`: all three findings remain
+closed, 38 focused registry/runtime/whole-slice tests pass, and no signing, authority, lifecycle,
+or documentation regression was found. The independently reviewed executable head is `8e8e677`.
 Both production services remained stopped and disabled throughout diagnosis and verification;
 Hermes was never started, and no database or raw evidence was deleted or reset.
