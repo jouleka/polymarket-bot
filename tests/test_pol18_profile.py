@@ -272,9 +272,14 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     executable, argv = build_gateway_command()
     assert executable == "/usr/local/lib/hermes-agent/venv/bin/python"
     assert argv == [
-        executable,
+        "/usr/local/lib/hermes-agent/venv/bin/hermes",
         "-m",
         "polybot.hermes.profile_bootstrap",
+        "--profile",
+        "polymarket",
+        "gateway",
+        "run",
+        "--replace",
     ]
 
     calls = []
@@ -336,7 +341,11 @@ def test_installed_profile_launch_execs_reviewed_bootstrap(monkeypatch, tmp_path
     python = "/usr/local/lib/hermes-agent/venv/bin/python"
     assert execs == [(
         python,
-        [python, "-m", "polybot.hermes.profile_bootstrap"],
+        [
+            "/usr/local/lib/hermes-agent/venv/bin/hermes",
+            "-m", "polybot.hermes.profile_bootstrap",
+            "--profile", "polymarket", "gateway", "run", "--replace",
+        ],
         {
             "HOME": "/root",
             "HERMES_HOME": str(home),
