@@ -17,9 +17,11 @@ SUPPORTED_MCP_VERSION = "1.26.0"
 MCP_SERVER_NAME = "polymarket"
 PROFILE_PLATFORMS = frozenset({
     "api_server", "bluebubbles", "cli", "cron", "dingtalk", "discord",
-    "email", "feishu", "homeassistant", "matrix", "mattermost", "qqbot",
-    "signal", "slack", "telegram", "webhook", "wecom", "wecom_callback",
-    "weixin", "whatsapp", "whatsapp_cloud", "yuanbao",
+    "email", "feishu", "google_chat", "homeassistant", "irc", "line",
+    "matrix", "mattermost", "msgraph_webhook", "ntfy", "photon", "qqbot",
+    "raft", "relay", "signal", "simplex", "slack", "sms", "teams",
+    "telegram", "webhook", "wecom", "wecom_callback", "weixin", "whatsapp",
+    "whatsapp_cloud", "yuanbao",
 })
 GATEWAY_PLATFORMS = PROFILE_PLATFORMS - {"cli", "cron"}
 _BRIDGE_COMMAND = "/opt/polymarket-bot/.venv/bin/python"
@@ -171,6 +173,15 @@ def verify_cron_contract(jobs, expected_prompt, model_visible_tool_names):
     return True
 
 
+def verify_effective_gateway_contract(platforms):
+    """Require the pinned Hermes gateway inventory to contain zero adapters."""
+    if (not isinstance(platforms, dict)
+            or set(platforms) != GATEWAY_PLATFORMS
+            or any(value is not False for value in platforms.values())):
+        raise RuntimeError("effective Hermes gateway is not cron-only")
+    return True
+
+
 def _verify_model_visible_tools(names):
     names = list(names)
     if len(names) != len(set(names)) or set(names) != _MODEL_VISIBLE_METHODS:
@@ -197,6 +208,12 @@ def _verify_profile_filesystem(home):
     effective_groups = set(os.getgroups()) | {os.getegid()}
     if effective_groups != {os.getegid(), bridge_gid}:
         raise RuntimeError("Hermes process group membership is unsafe")
+    _verify_no_local_profile_secrets(home)
+
+
+def _verify_no_local_profile_secrets(home):
+    if any((home / name).exists() for name in (".env", ".op.env", "auth.json")):
+        raise RuntimeError("Hermes profile must use only the native root auth store")
 
 
 def verify_model_selection(config):
@@ -223,6 +240,7 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
     from hermes_cli.config import read_raw_config
     from hermes_cli.tools_config import _get_platform_tools
     from cron.jobs import list_jobs
+    from gateway.config import load_gateway_config
     from model_tools import get_tool_definitions
     from tools.mcp_tool import (
         discover_mcp_tools, probe_mcp_server_tools, shutdown_mcp_servers,
@@ -241,6 +259,11 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
         platform_toolsets=platform_toolsets,
         discovered_mcp_tools=probe_mcp_server_tools(),
     )
+    gateway = load_gateway_config()
+    verify_effective_gateway_contract({
+        platform.value: item.enabled
+        for platform, item in gateway.platforms.items()
+    })
     jobs = list_jobs(include_disabled=True)
     if expect_no_cron:
         if jobs:

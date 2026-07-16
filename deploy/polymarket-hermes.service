@@ -19,7 +19,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HERMES_KANBAN_DISPATCH_IN_GATEWAY=0
 ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock
 ExecStartPre=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_verify --profile-home /root/.hermes/profiles/polymarket
-ExecStart=/usr/local/bin/hermes --profile polymarket gateway run --replace
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_gateway --profile-home /root/.hermes/profiles/polymarket
 ExecStop=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_stop --profile-home /root/.hermes/profiles/polymarket
 Restart=on-failure
 RestartSec=5
@@ -49,12 +49,17 @@ InaccessiblePaths=-/root/.codex
 InaccessiblePaths=-/root/.config
 InaccessiblePaths=-/root/.gnupg
 InaccessiblePaths=-/root/.kube
+InaccessiblePaths=-/root/.hermes/.env
+InaccessiblePaths=-/root/.hermes/config.yaml
+InaccessiblePaths=-/root/.hermes/gateway.json
 InaccessiblePaths=-/root/.hermes/profiles/coder
 InaccessiblePaths=-/root/.hermes/profiles/memecoin-trader
 InaccessiblePaths=-/root/.hermes/profiles/optionsbot
 InaccessiblePaths=-/opt/polymarket-bot/config.toml
 InaccessiblePaths=-/opt/polymarket-bot/.env
 InaccessiblePaths=-/opt/polymarket-bot/data
+InaccessiblePaths=-/etc/hermes
+InaccessiblePaths=-/usr/local/lib/hermes-agent/.env
 RestrictSUIDSGID=true
 LockPersonality=true
 
