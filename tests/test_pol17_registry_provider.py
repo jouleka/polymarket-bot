@@ -5,7 +5,10 @@ import json
 import pytest
 
 from polybot.ers.market_meta import MarketSnapshotError
-from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
+from polybot.runtime.registry_provider import (
+    FixedUniverseRegistryProvider,
+    RegistryRefreshUnavailable,
+)
 
 
 def _market(condition_id="c1", tokens=("t1", "t2"), event_id="e1", question="Will X?"):
@@ -56,6 +59,53 @@ def test_registry_refresh_cannot_expand_the_collector_universe():
     assert provider.registry is first
     assert provider.condition_ids == frozenset({"c1"})
     assert provider.token_ids == ("t1", "t2")
+
+
+def test_registry_refresh_retains_last_good_generation_when_gamma_omits_a_market():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market(question="Updated question")], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+
+    first = provider.load()
+
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    assert provider.registry is first
+    assert provider.condition_ids == frozenset({"c1", "c2"})
+    assert provider.market_rows[0]["question"] == "Will X?"
+
+
+def test_registry_refresh_does_not_mask_token_contradiction_as_an_omission():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market(tokens=("changed-1", "changed-2"))], [
+            _event(tokens=("changed-1", "changed-2")),
+        ]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="changed"):
+        provider.refresh()
 
 
 def test_registry_refresh_replaces_market_rows_for_read_only_consumers():
