@@ -95,7 +95,6 @@ class FixedUniverseRegistryProvider:
         self._registry = None
         self._identity = None
         self._token_ids = ()
-        self._available_token_ids = ()
         self._market_rows = ()
         self._loaded_at = None
 
@@ -139,7 +138,6 @@ class FixedUniverseRegistryProvider:
         if initial:
             self._identity = identity
             self._token_ids = token_ids
-        self._available_token_ids = candidate.available_token_ids
         self._market_rows = tuple(market_rows)
         self._loaded_at = self._age_clock()
         return candidate
@@ -161,7 +159,7 @@ class FixedUniverseRegistryProvider:
     @property
     def available_token_ids(self):
         """Tokens backed by the current fresh registry generation."""
-        return self._available_token_ids
+        return self.require_fresh().available_token_ids
 
     @property
     def market_rows(self):
