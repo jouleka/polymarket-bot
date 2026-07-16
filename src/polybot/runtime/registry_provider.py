@@ -13,6 +13,20 @@ class RegistryRefreshUnavailable(RuntimeError):
     """A transient Gamma transport/server failure with no new snapshot authority."""
 
 
+def _identity_tokens(raw, message):
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MarketSnapshotError(message) from exc
+    if (not isinstance(values, list)
+            or len(values) != 2
+            or any(not isinstance(token, str) or not token
+                   or token != token.strip() for token in values)
+            or values[0] == values[1]):
+        raise MarketSnapshotError(message)
+    return values[0], values[1]
+
+
 def _snapshot_identity(market_rows):
     identities = {}
     token_order = []
@@ -20,14 +34,13 @@ def _snapshot_identity(market_rows):
         try:
             condition_id = row["conditionId"]
             raw_tokens = row["clobTokenIds"]
-            tokens = json.loads(raw_tokens) if isinstance(raw_tokens, str) else raw_tokens
-            tokens = tuple(tokens)
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, TypeError) as exc:
             raise MarketSnapshotError("Gamma fixed universe identity is malformed") from exc
+        tokens = _identity_tokens(
+            raw_tokens, "Gamma fixed universe identity is malformed"
+        )
         if (not isinstance(condition_id, str) or not condition_id
-                or len(tokens) != 2
-                or any(not isinstance(token, str) or not token for token in tokens)
-                or tokens[0] == tokens[1]):
+                or condition_id != condition_id.strip()):
             raise MarketSnapshotError("Gamma fixed universe identity is malformed")
         previous = identities.get(condition_id)
         if previous is not None and previous != tokens:
@@ -57,12 +70,13 @@ def _assert_event_token_identity(event_rows, market_identity):
                 continue
             try:
                 raw_tokens = embedded["clobTokenIds"]
-                tokens = json.loads(raw_tokens) if isinstance(raw_tokens, str) else raw_tokens
-                tokens = tuple(tokens)
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError) as exc:
                 raise MarketSnapshotError(
                     "Gamma event snapshot identity is malformed"
                 ) from exc
+            tokens = _identity_tokens(
+                raw_tokens, "Gamma event snapshot identity is malformed"
+            )
             if tokens != expected:
                 raise MarketSnapshotError("Gamma event token identity conflict")
 
