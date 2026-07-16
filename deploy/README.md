@@ -161,6 +161,7 @@ HTTPS providers:
 
 ```toml
 snapshot_interval_seconds = 60.0
+max_assets_per_shard = 25
 
 [shadow]
 intents_db_path = "/opt/polymarket-bot/data/intents.db"
@@ -191,6 +192,7 @@ from polybot.runtime.shadow_config import load_shadow_config
 
 c = load_shadow_config("/opt/polymarket-bot/config.toml")
 assert c.ingestion.snapshot_interval_seconds == 60.0
+assert c.ingestion.max_assets_per_shard == 25
 assert len(c.database_paths) == 7
 assert len(set(c.database_paths)) == 7
 assert len(c.polygon_providers) == 2
