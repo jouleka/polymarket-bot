@@ -108,8 +108,11 @@ clock for in-memory frame stamps cannot break durable replay ordering.
 ### One runtime cycle
 
 1. Honor shutdown and write the runtime heartbeat/status.
-2. If due, fetch a complete fixed-universe registry replacement off-loop. Keep the last good
-   generation only within its maximum age; beyond that, halt new intent processing.
+2. If due, fetch a complete fixed-universe registry replacement off-loop. Every filtered Gamma
+   request carries an explicit limit for the already-frozen market/event set. A response that
+   purely omits one or more frozen conditions is incomplete, so retain the last good generation
+   only within its maximum age; an extra condition or any token-identity change is contradictory
+   and fatal. Beyond the age budget, halt new intent processing.
 3. Form unique canonical resolution subjects from unresolved forecasts plus the current PROPOSED
    intent snapshot using the active registry.
 4. Poll both Polygon providers off-loop at one common acceptance coordinate.
@@ -152,6 +155,8 @@ The deployment contract uses `Type=notify`, `After/Wants=network-online.target`,
 - one selected market's missing or malformed market-owned deadline, provided at least one other
   market remains usable; no event-level deadline fallback is permitted;
 - one condition's provider observation unavailable or finalized with unknown authority;
+- a Gamma refresh that purely omits one or more conditions from the frozen universe, while the
+  last coherent generation remains inside its configured age budget;
 - malformed/untrusted proposal and existing per-intent pipeline failures;
 - an unfilled maker simulation;
 - one allowlisted news source fetch/parse failure (the other allowlisted sources continue).
@@ -166,7 +171,8 @@ temporarily unavailable; deterministic invalid proposals retain existing audited
 - database alias, corruption, outbox orphan, acknowledgement mismatch, or contradictory identity;
 - `SettlementConflict`, persistent resolution integrity halt, or target projection contradiction;
 - loss of both configured provider identities, wrong chain, or malformed durable terminal data;
-- an initial registry with no usable market, a contradictory refresh, or last-good registry
+- an initial registry with no usable market, a refresh that expands or contradicts fixed token
+  identity, or last-good registry
   exceeding max age;
 - evidence corruption or an unexpected orchestration exception outside a per-market boundary.
 
