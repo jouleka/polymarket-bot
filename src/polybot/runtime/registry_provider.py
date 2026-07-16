@@ -95,6 +95,7 @@ class FixedUniverseRegistryProvider:
         self._registry = None
         self._identity = None
         self._token_ids = ()
+        self._available_token_ids = ()
         self._market_rows = ()
         self._loaded_at = None
 
@@ -126,12 +127,9 @@ class FixedUniverseRegistryProvider:
         identity, token_ids = _snapshot_identity(market_rows)
         _assert_event_token_identity(event_rows, identity)
         if not initial and identity != self._identity:
-            if (set(identity) < set(self._identity)
-                    and all(identity[key] == self._identity[key] for key in identity)):
-                raise RegistryRefreshUnavailable(
-                    "Gamma refresh returned an incomplete fixed universe"
-                )
-            raise MarketSnapshotError("Gamma refresh changed the fixed universe")
+            if (not set(identity) < set(self._identity)
+                    or any(identity[key] != self._identity[key] for key in identity)):
+                raise MarketSnapshotError("Gamma refresh changed the fixed universe")
         candidate = MarketRegistry.from_gamma_snapshots(
             market_rows, event_rows, clock=self._wall_clock
         )
@@ -139,6 +137,7 @@ class FixedUniverseRegistryProvider:
         if initial:
             self._identity = identity
             self._token_ids = token_ids
+        self._available_token_ids = candidate.available_token_ids
         self._market_rows = tuple(market_rows)
         self._loaded_at = self._age_clock()
         return candidate
@@ -156,6 +155,11 @@ class FixedUniverseRegistryProvider:
     @property
     def token_ids(self):
         return self._token_ids
+
+    @property
+    def available_token_ids(self):
+        """Tokens backed by the current fresh registry generation."""
+        return self._available_token_ids
 
     @property
     def market_rows(self):
