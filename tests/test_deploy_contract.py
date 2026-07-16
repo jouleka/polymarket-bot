@@ -186,8 +186,10 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "Wants=network-online.target" in text
     assert "RuntimeDirectory=polybot polybot-proposal" in text
     assert "RuntimeDirectoryMode=0750" in text
-    assert "SupplementaryGroups=polybot-proposal" in text
-    assert "ExecStartPre=/usr/bin/chgrp polybot-proposal /run/polybot-proposal" in text
+    assert "User=polybot" in text
+    assert "Group=polybot-proposal" in text
+    assert "SupplementaryGroups=polybot" in text
+    assert "ExecStartPre=/usr/bin/chgrp" not in text
 
 
 def test_ingestion_unit_has_fail_closed_memory_ceiling():

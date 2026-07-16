@@ -11,7 +11,8 @@ StartLimitBurst=5
 Type=notify
 NotifyAccess=main
 User=polybot
-SupplementaryGroups=polybot-proposal
+Group=polybot-proposal
+SupplementaryGroups=polybot
 RuntimeDirectory=polybot polybot-proposal
 RuntimeDirectoryMode=0750
 WorkingDirectory=/opt/polymarket-bot
@@ -19,7 +20,6 @@ Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=-/opt/polymarket-bot/.env
-ExecStartPre=/usr/bin/chgrp polybot-proposal /run/polybot-proposal
 ExecStart=/opt/polymarket-bot/.venv/bin/python -m polybot.runtime.shadow --config /opt/polymarket-bot/config.toml
 # on-failure (not always): a clean SIGTERM stop is not restarted; a HALT (exit!=0) restarts up to the limit above.
 Restart=on-failure
