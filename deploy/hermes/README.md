@@ -1,19 +1,20 @@
 # POL-18 stopped deployment and activation runbook
 
-This runbook installs the dedicated propose-only Hermes brain beside the composite POL-17 paper
+This runbook installs the propose-only Hermes brain as a normal named profile in the existing
+root-owned Hermes installation beside the composite POL-17 paper
 runtime. It never grants wallet/trading keys, database access, a shell, or tools beyond the exact
 five-tool MCP surface. The existing root-owned default, coder, memecoin, and optionsbot profiles
 must not be cloned, edited, stopped, or restarted.
 
-Code/identity installation, profile creation, model authentication, cron creation, POL-17 activation,
+Code/unit installation, profile creation/model selection, cron creation, POL-17 activation,
 POL-18 activation, and enablement are separate owner gates. Running one section does not authorize
 the next. The repository build and tests do not perform any of these operations.
 
-## 1. Code and isolated-identity installation while both services remain stopped
+## 1. Code and unit installation while both services remain stopped
 
-Requires explicit code/identity-installation approval. This single stopped-host gate includes
-creation or validation of the two nologin users and socket-only group; it is never run under the
-reviewed-build approval alone:
+Requires explicit stopped-installation approval. The installer validates the existing `polybot`
+runtime user and creates only the socket group if absent. It does not install another Hermes copy,
+create another Hermes home, or create a second Hermes user:
 
 ```sh
 systemctl disable --now polymarket-hermes.service polymarket-ingestion.service
@@ -25,26 +26,20 @@ systemctl is-active polymarket-hermes.service     # inactive
 systemctl is-enabled polymarket-hermes.service    # disabled
 ```
 
-The installer creates only the two nologin identities and the socket-only shared group. It does
-not create a Hermes profile, write cron state, start a gateway, or open production databases.
-Verify the host boundary:
+It does not create a Hermes profile, write cron state, start a gateway, or open production
+databases. Verify the host boundary:
 
 ```sh
-getent passwd polybot polybot-hermes
+getent passwd polybot
 getent group polybot-proposal
 id -nG polybot
-id -nG polybot-hermes
-test "$(getent passwd polybot-hermes | cut -d: -f7)" = /usr/sbin/nologin
-! id -nG polybot-hermes | tr ' ' '\n' | grep -Fx polybot
-! sudo -u polybot-hermes test -r /opt/polymarket-bot/config.toml
-! sudo -u polybot-hermes test -r /opt/polymarket-bot/.env
-! sudo -u polybot-hermes test -x /opt/polymarket-bot/data
 ```
 
-Both users must belong to `polybot-proposal`. `polybot-hermes` must not belong to `polybot`; it
-must not be able to read `/opt/polymarket-bot/config.toml` or any database under
-`/opt/polymarket-bot/data`. The `polybot` service creates `/run/polybot-proposal`, changes only that
-runtime directory/socket to the shared group, and publishes the socket at mode `0660`.
+The `polybot` service belongs to `polybot-proposal`, creates `/run/polybot-proposal`, changes only
+that runtime directory/socket to the shared group, and publishes the socket at mode `0660`. The
+Hermes unit joins that socket group through systemd while retaining the existing root Hermes
+profile/auth scope. Its systemd sandbox hides production config/data, root SSH/Codex/config homes,
+and every unrelated named profile.
 
 Reconcile the stopped composite config with `deploy/config.example.toml`. Preserve all existing
 POL-17 database paths and provider values, and add exactly:
@@ -70,22 +65,21 @@ print("POL-18 stopped composite config: PASS")
 PY
 ```
 
-## 2. Isolated profile creation while stopped
+## 2. Native profile creation and model selection while stopped
 
 Requires separate profile-installation approval. Do not use `--clone`, `--clone-all`, or
 `--clone-from`:
 
 ```sh
-sudo -u polybot-hermes env HOME=/var/lib/polybot-hermes \
-  /usr/local/bin/hermes profile create polymarket \
+/usr/local/bin/hermes profile create polymarket \
   --no-alias --no-skills \
   --description "Isolated propose-only Polymarket paper analyst"
 
-PROFILE=/var/lib/polybot-hermes/.hermes/profiles/polymarket
-install -o polybot-hermes -g polybot-hermes -m 0600 \
+PROFILE=/root/.hermes/profiles/polymarket
+install -o root -g root -m 0600 \
   /opt/polymarket-bot/deploy/hermes/polymarket-profile/config.yaml \
   "$PROFILE/config.yaml"
-install -o polybot-hermes -g polybot-hermes -m 0600 \
+install -o root -g root -m 0600 \
   /opt/polymarket-bot/deploy/hermes/polymarket-profile/SOUL.md \
   "$PROFILE/SOUL.md"
 test ! -e "$PROFILE/.env"
@@ -93,21 +87,28 @@ systemctl is-active polymarket-hermes.service   # inactive
 systemctl is-enabled polymarket-hermes.service # disabled
 ```
 
-Profile creation must produce its own memory, sessions, skills, and cron directories under the
-dedicated home. It must not create files under `/root/.hermes` or another profile. Compare the
+Profile creation must produce its own memory, sessions, skills, and cron directories under
+`/root/.hermes/profiles/polymarket`. It must not clone or modify another profile. Compare the
 existing profile list/state before and after and stop if any unrelated profile changed.
 
-## 3. Owner-selected model authentication while stopped
+The reviewed production selection is `gpt-5.6-terra`, provider `openai-codex`, base URL
+`https://chatgpt.com/backend-api/codex`, and reasoning effort `high`.
 
-The template deliberately contains `OWNER_CONFIG_REQUIRED`; preflight refuses it. This gate
-requires an owner-approved model/provider and its isolated model credential. A model credential is
-not a wallet/trading key and must never be copied into POL-17's `.env`, config, source, prompt,
-SOUL, skill, memory, or cron text.
+## 3. Existing Hermes authentication proof while stopped
 
-Run Hermes model setup explicitly as `polybot-hermes` with `HOME=/var/lib/polybot-hermes`, select
-the approved model, then inspect only non-secret config fields. Do not clone auth from root or any
-other profile. Confirm that the profile still contains exactly one MCP server and no messaging
-platform tokens.
+Native named profiles inherit the existing root Hermes provider store when they have no local
+provider override. Do not run another device login and do not copy tokens into the profile. Verify
+only provider names/credential counts—never token values:
+
+```sh
+/usr/local/bin/hermes --profile polymarket auth list
+test ! -e /root/.hermes/profiles/polymarket/auth.json
+test ! -e /root/.hermes/profiles/polymarket/.env
+```
+
+The output must include the existing `openai-codex` credential. A model credential is not a
+wallet/trading key and must never be copied into POL-17 config, source, prompt, SOUL, skill, memory,
+or cron text.
 
 ## 4. Exact effective-inventory preflight while stopped
 
@@ -115,12 +116,12 @@ The preflight runs in the pinned Hermes 0.18.2 environment, starts only the loca
 for tool discovery, and does not need POL-17 or its socket to be active:
 
 ```sh
-sudo -u polybot-hermes env \
-  HOME=/var/lib/polybot-hermes \
+setpriv --reuid=0 --regid=0 --groups="$(getent group polybot-proposal | cut -d: -f3)" env \
+  HOME=/root \
   PYTHONPATH=/opt/polymarket-bot/src \
   /usr/local/lib/hermes-agent/venv/bin/python \
   -m polybot.hermes.profile_verify \
-  --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket \
+  --profile-home /root/.hermes/profiles/polymarket \
   --expect-no-cron
 ```
 
@@ -134,9 +135,9 @@ Requires separate cron-state approval. Use the reviewed prompt verbatim and do n
 scripts, workdirs, delivery platforms, or additional tools:
 
 ```sh
-sudo -u polybot-hermes env \
-  HOME=/var/lib/polybot-hermes \
-  HERMES_HOME=/var/lib/polybot-hermes/.hermes/profiles/polymarket \
+env \
+  HOME=/root \
+  HERMES_HOME=/root/.hermes/profiles/polymarket \
   /usr/local/lib/hermes-agent/venv/bin/python - <<'PY'
 from pathlib import Path
 from cron.jobs import create_job
@@ -153,14 +154,13 @@ create_job(
     enabled_toolsets=["polymarket"],
 )
 PY
-sudo -u polybot-hermes env HOME=/var/lib/polybot-hermes \
-  /usr/local/bin/hermes --profile polymarket cron list
-sudo -u polybot-hermes env \
-  HOME=/var/lib/polybot-hermes \
+/usr/local/bin/hermes --profile polymarket cron list
+setpriv --reuid=0 --regid=0 --groups="$(getent group polybot-proposal | cut -d: -f3)" env \
+  HOME=/root \
   PYTHONPATH=/opt/polymarket-bot/src \
   /usr/local/lib/hermes-agent/venv/bin/python \
   -m polybot.hermes.profile_verify \
-  --profile-home /var/lib/polybot-hermes/.hermes/profiles/polymarket
+  --profile-home /root/.hermes/profiles/polymarket
 systemctl is-active polymarket-hermes.service   # inactive
 systemctl is-enabled polymarket-hermes.service # disabled
 ```

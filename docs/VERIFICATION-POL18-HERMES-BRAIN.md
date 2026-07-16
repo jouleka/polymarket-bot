@@ -56,8 +56,11 @@ raw-firehose evidence, and existing Hermes profiles were not changed.
 - The exact cron contract is one enabled five-minute `polymarket-propose-only` job with only the
   `polymarket` toolset. Model/provider placeholders fail activation; the owner must select both in
   a later stopped profile gate.
-- Deployment artifacts use dedicated `polybot-hermes` and socket-only `polybot-proposal`
-  identities. `Requisite` refuses brain startup unless POL-17 is already active without
+- The 2026-07-16 stopped-deployment correction replaces the originally reviewed separate
+  `polybot-hermes` home with a normal `/root/.hermes/profiles/polymarket` profile in the existing
+  Hermes installation. It uses native root-provider fallback with no profile credential copy; the
+  exact-five verifier and systemd path restrictions preserve the authority boundary.
+  `Requisite` refuses brain startup unless POL-17 is already active without
   pull-starting it; `PartOf` propagates explicit POL-17 stop/restart operations.
 - The installer is idempotent but stopped-only. Before any mutation it requires ingestion
   `ActiveState=inactive, LoadState=loaded`; Hermes must be inactive and either loaded for a stopped
