@@ -20,6 +20,7 @@ GATEWAY_PLATFORMS = {
     "simplex", "slack", "sms", "teams", "telegram", "webhook", "wecom",
     "wecom_callback", "weixin", "whatsapp", "whatsapp_cloud", "yuanbao",
 }
+DISABLED_GATEWAY = {name: False for name in GATEWAY_PLATFORMS}
 
 
 def test_profile_verifier_targets_native_existing_hermes_profile():
@@ -77,7 +78,18 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         mcp_version="1.26.0",
         platform_toolsets=platform_toolsets,
         discovered_mcp_tools=discovered,
+        effective_gateway_platforms=DISABLED_GATEWAY,
     )
+
+    with pytest.raises(RuntimeError, match="gateway is not cron-only"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY | {"telegram": True},
+        )
 
     with pytest.raises(RuntimeError, match="effective MCP tools"):
         verify_effective_contract(
@@ -86,6 +98,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED | {"terminal"})},
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
     with pytest.raises(RuntimeError, match="effective MCP tools"):
         verify_effective_contract(
@@ -94,6 +107,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED - {"get_flags"})},
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
     with pytest.raises(RuntimeError, match="platform toolsets"):
         verify_effective_contract(
@@ -102,6 +116,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets | {"cron": {"polymarket", "terminal"}},
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
     config["agent"]["disabled_toolsets"] = []
@@ -112,6 +127,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -123,6 +139,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -134,6 +151,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -145,6 +163,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
@@ -156,6 +175,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
 
@@ -328,6 +348,7 @@ def test_effective_contract_rejects_each_unsafe_approval_and_security_setting(
             mcp_version="1.26.0",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED)},
+            effective_gateway_platforms=DISABLED_GATEWAY,
         )
 
 

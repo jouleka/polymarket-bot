@@ -43,7 +43,8 @@ _CRON_PROMPT = Path(
 
 
 def verify_effective_contract(config, *, hermes_version, mcp_version,
-                              platform_toolsets, discovered_mcp_tools):
+                              platform_toolsets, discovered_mcp_tools,
+                              effective_gateway_platforms):
     """Verify authored config plus the toolsets/tools observed by Hermes itself."""
     if hermes_version != SUPPORTED_HERMES_VERSION:
         raise RuntimeError("unsupported Hermes version")
@@ -100,6 +101,7 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
         raise RuntimeError("authored disabled toolsets violate the reviewed contract")
     if config.get("kanban") != {"dispatch_in_gateway": False}:
         raise RuntimeError("profile kanban dispatcher must be disabled")
+    verify_effective_gateway_contract(effective_gateway_platforms)
     if config.get("skills") != {
             "external_dirs": [], "inline_shell": False, "write_approval": False,
     }:
@@ -252,18 +254,19 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
         platform: _get_platform_tools(config, platform)
         for platform in PROFILE_PLATFORMS
     }
+    gateway = load_gateway_config()
+    effective_gateway_platforms = {
+        platform.value: item.enabled
+        for platform, item in gateway.platforms.items()
+    }
     verify_effective_contract(
         config,
         hermes_version=importlib.metadata.version("hermes-agent"),
         mcp_version=importlib.metadata.version("mcp"),
         platform_toolsets=platform_toolsets,
         discovered_mcp_tools=probe_mcp_server_tools(),
+        effective_gateway_platforms=effective_gateway_platforms,
     )
-    gateway = load_gateway_config()
-    verify_effective_gateway_contract({
-        platform.value: item.enabled
-        for platform, item in gateway.platforms.items()
-    })
     jobs = list_jobs(include_disabled=True)
     if expect_no_cron:
         if jobs:
