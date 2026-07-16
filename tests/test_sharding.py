@@ -238,6 +238,15 @@ def test_sharded_collector_chunk_boundaries():
     assert one_over.shard_count == 2  # [a,b] + [c]
 
 
+def test_sharded_collector_default_limits_divergence_blast_radius():
+    stamper = MonotonicStamper(clock=lambda: 1)
+    assets = [f"asset-{index}" for index in range(26)]
+
+    collector = ShardedMarketCollector(_connect_from([]), stamper, assets)
+
+    assert collector.shard_count == 2
+
+
 def test_sharded_collector_rejects_empty_asset_ids():
     # A collector that streams nothing returns from run() immediately, which a 24/7
     # supervisor can't distinguish from a clean shutdown -> almost certainly a config

@@ -148,6 +148,18 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         portfolio_for=components.controller.current_portfolio,
     ))
 
+    def live_book_tokens():
+        available = []
+        for token_id in ingestion.token_ids:
+            book = ingestion.book_for(token_id)
+            if (book is not None and not book.is_stale()
+                    and book.midpoint() is not None):
+                available.append(token_id)
+        return tuple(available)
+
+    def live_book_ready():
+        return bool(live_book_tokens())
+
     proposal_server = None
     proposal_facade = None
     if config.proposal_socket_path is not None:
@@ -157,15 +169,6 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             except MarketSnapshotError:
                 return False
             return True
-
-        def live_book_tokens():
-            available = []
-            for token_id in ingestion.token_ids:
-                book = ingestion.book_for(token_id)
-                if (book is not None and not book.is_stale()
-                        and book.midpoint() is not None):
-                    available.append(token_id)
-            return tuple(available)
 
         proposal_facade = guarded(lambda: ProposeOnlyFacade(
             components.intent_store,
@@ -291,6 +294,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         set_proposal_admission=(
             set_proposal_admission if proposal_server is not None else None
         ),
+        live_book_ready=live_book_ready,
     ))
     construction_closers.clear()  # ownership transferred to ShadowRuntime
     # Introspection is intentional for review/tests; none of these grants mutation

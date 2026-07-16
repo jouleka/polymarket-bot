@@ -18,7 +18,7 @@ _LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 class IngestionConfig:
     db_path: str
     universe_max_markets: int = 400
-    max_assets_per_shard: int = 500
+    max_assets_per_shard: int = 25
     data_api_enabled: bool = True
     data_api_interval_seconds: float = 2.0
     snapshot_interval_seconds: float = 60.0
