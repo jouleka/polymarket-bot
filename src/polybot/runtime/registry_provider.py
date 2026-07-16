@@ -80,9 +80,6 @@ class FixedUniverseRegistryProvider:
 
     def _replace(self, *, initial):
         market_rows, event_rows = self._fetch_snapshot()
-        candidate = MarketRegistry.from_gamma_snapshots(
-            market_rows, event_rows, clock=self._wall_clock
-        )
         identity, token_ids = _snapshot_identity(market_rows)
         if not initial and identity != self._identity:
             if (set(identity) < set(self._identity)
@@ -91,6 +88,9 @@ class FixedUniverseRegistryProvider:
                     "Gamma refresh returned an incomplete fixed universe"
                 )
             raise MarketSnapshotError("Gamma refresh changed the fixed universe")
+        candidate = MarketRegistry.from_gamma_snapshots(
+            market_rows, event_rows, clock=self._wall_clock
+        )
         self._registry = candidate
         if initial:
             self._identity = identity
