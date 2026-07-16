@@ -581,9 +581,19 @@ the ceiling merely to keep the process alive. The canonical suite passes 2,276 t
 remain inactive/disabled with no cron or runtime artifacts. Evidence is in
 [`VERIFICATION-POL13-MEMORY-GUARDRAILS.md`](VERIFICATION-POL13-MEMORY-GUARDRAILS.md).
 
-**Next work:** cron creation is the next separately approved stopped gate. After that come
-first-start and enablement gates, followed by the
-≤2-week paper/shadow run. The shadow
+**UPDATE 2026-07-16 — exact Hermes cron installed and preflighted while stopped.** The native
+`polymarket` profile now contains exactly one active `polymarket-propose-only` job every five
+minutes, with the reviewed prompt, local delivery, no skills/scripts/workdir/alternate model, and
+only the `polymarket` toolset. The full installed verifier passed the exact authored, discovered,
+cron, and model-visible five-tool inventories. Because the gateway remains stopped, the job has not
+executed and no proposal was manufactured. Both services remain inactive/disabled with memory caps
+intact and no runtime artifacts. Evidence is in
+[`VERIFICATION-POL13-HERMES-CRON.md`](VERIFICATION-POL13-HERMES-CRON.md).
+
+**Next work:** POL-17 first start without enablement is the next explicit gate. After its readiness,
+compact-persistence, provider, recovery, and memory observation passes, POL-18 first start and later
+enablement remain separate gates, followed by the
+≤2-week local shadow-simulation run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
