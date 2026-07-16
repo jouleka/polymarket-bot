@@ -85,6 +85,11 @@ class FixedUniverseRegistryProvider:
         )
         identity, token_ids = _snapshot_identity(market_rows)
         if not initial and identity != self._identity:
+            if (set(identity) < set(self._identity)
+                    and all(identity[key] == self._identity[key] for key in identity)):
+                raise RegistryRefreshUnavailable(
+                    "Gamma refresh returned an incomplete fixed universe"
+                )
             raise MarketSnapshotError("Gamma refresh changed the fixed universe")
         self._registry = candidate
         if initial:
