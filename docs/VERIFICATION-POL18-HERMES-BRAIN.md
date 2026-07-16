@@ -1,8 +1,7 @@
 # POL-18 isolated propose-only Hermes brain verification evidence
 
-Status: landed on `main`; independent specification/security review passed; no installation,
-profile creation, model/provider selection, cron creation, service start/enable, or deployment
-authorized or performed
+Status: landed on `main`; independent specification/security review passed; stopped installation
+and the non-enabled first-start observation passed; both services are stopped and disabled
 
 Base: `8deee0459a61754bc33da4733d4efea6f59e764f`
 
@@ -237,6 +236,45 @@ Independent closing re-review returned PASS at exact clean head `6f7e62e`: the r
 the 26 focused and 2,293 complete tests, the installed 31-adapter/33-surface inventory, hostile-env
 rejection, native root `openai-codex` auth visibility, identity-aware bounded stop, systemd unit
 verification, and absence of any signer/runtime/sacred-surface change.
+
+Publication landed through [PR #24](https://github.com/jouleka/polymarket-bot/pull/24) as merge
+`efead032d97f6ceae159fe743e7d6fd077a56db7` after explicit approval. The stopped service checkout
+was then fast-forwarded to that merge, the idempotent installer ran, and the existing native
+`polymarket` profile received the reviewed isolation template while retaining only its owner-selected
+`gpt-5.6-terra` / `openai-codex` / ChatGPT Codex base URL and `high` reasoning values. No profile,
+credential, cron, user, database, or Hermes installation was created. Stopped preflight again
+reported `exact five; PASS`; all 31 installed adapters resolved disabled and all 33 surfaces resolved
+to the sole `polymarket` MCP.
+
+## 2026-07-16 hardened first-start observation
+
+The separately approved retry ran without enablement. POL-17 started at 14:55:13 UTC, reached
+`controller=RUNNING`, exposed the proposal socket as `polybot:polybot-proposal 0660`, and retained
+healthy registry, resolution, execution-outbox, controller, and two-provider seams. Hermes started
+at 14:55:36 after its installed exact-five preflight. Its gateway reported that no messaging
+platforms were enabled; there was no messaging connection, token collision, invalid platform
+toolset warning, kanban dispatcher/database access, profile migration, extra MCP server, or
+credential/config error.
+
+The automatic catch-up cron turn completed `ok` at 14:56:05 without a proposal. Three attempted
+`get_book` calls used arguments that POL-17 rejected, after which Hermes's MCP circuit breaker
+failed later calls closed; there was no alternate tool or authority path. This is an honest
+no-proposal result, not a synthetic test input. The production stores remained at zero pending
+intents, fills, Maker/Shadow rows, executions, execution/resolution outboxes, assessments,
+terminals, and receipts.
+
+Hermes peaked at 278,609,920 bytes (265.7 MiB), below `MemoryHigh=320M`; POL-17 peaked at
+106,127,360 bytes (101.2 MiB), below `MemoryHigh=512M`. Both cgroups recorded zero swap, `high`,
+`max`, `oom`, and `oom_kill` events and zero restarts. Hermes stopped first through the reviewed
+marker → SIGTERM → exact-identity wait path in about two seconds; POL-17 then stopped gracefully.
+Both units finished `Result=success`, `NRestarts=0`, inactive/dead/disabled, with no surviving
+profile gateway or MCP process.
+
+All seven production databases returned `PRAGMA integrity_check=ok`. Persistence remained compact:
+five `clob-midpoint` rows, zero raw `clob-ws` rows, and the full deduplicated `data-api` trade tape.
+Every historical raw-firehose checksum still matches. Final stopped profile preflight again passed
+exact-five, and the single cron record now truthfully records its last run as `ok`. This observation
+authorizes neither enablement nor a live-money path.
 
 ## Deployment boundary
 

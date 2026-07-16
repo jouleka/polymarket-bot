@@ -616,8 +616,21 @@ events. It then stopped gracefully; both services are inactive/dead/disabled and
 started. Raw-firehose checksums still pass. Exact evidence is in
 [`VERIFICATION-POL13-FIRST-START.md`](VERIFICATION-POL13-FIRST-START.md).
 
-**Next work:** POL-18/Hermes first start is the next separate explicit gate and requires POL-17 to
-be running without enablement. Later enablement remains separate, followed by the
+**UPDATE 2026-07-16 — hardened POL-18 first-start gate PASS; both services stopped.** PR #24
+landed the independently reviewed gateway/environment/kanban/shutdown hardening as merge `efead03`
+with 2,293 tests and a 22/22 mutation gate. The existing native `polymarket` profile retained
+`gpt-5.6-terra`, `openai-codex`, ChatGPT Codex authentication, high reasoning, and its single
+five-minute cron; no second profile or Hermes installation was created. Installed exact-five
+preflight passed. POL-17 reached `RUNNING`, then Hermes completed one automatic cron turn `ok` with
+an honest zero-proposal result. Rejected `get_book` arguments failed closed through the MCP circuit
+breaker without fallback authority. There were zero intents, fills, executions, outboxes,
+settlements, or terminal rows. Hermes peaked at 265.7 MiB and POL-17 at 101.2 MiB, with zero swap,
+pressure, OOM, or restarts. Ordered shutdown returned `Result=success` for both; both units are
+inactive/dead/disabled. All seven databases and historical raw-firehose checksums pass, persistence
+contains zero raw `clob-ws` rows, and no gateway/MCP process survives. Exact evidence is in
+[`VERIFICATION-POL18-HERMES-BRAIN.md`](VERIFICATION-POL18-HERMES-BRAIN.md).
+
+**Next work:** enablement is the next separate explicit operational gate, followed by the
 ≤2-week local shadow-simulation run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
