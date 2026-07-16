@@ -213,3 +213,40 @@ POL-17 Python environment. Independent specification and security reviews pass w
 the security review additionally verifies the interpreter ownership chain, installed watchdog and
 child-spawn behavior, unchanged `/proc` identity, auth suppression, and fail-closed missing-path
 behavior. Landing, stopped install, and retry remain.
+
+## Successful reviewed enablement
+
+PR #30 landed the pinned helper-interpreter fix as merge `f07ee06`. Both units were inactive and
+disabled while the service checkout fast-forwarded and the installer ran. Exact-five inventory,
+absence of profile-local auth/env files, all seven database integrity checks, historical evidence
+checksums, loaded configuration, file modes, systemd verification, and cgroup limits passed again.
+
+The approved activation started POL-17 at 16:46:20 UTC. It reached `RUNNING` with a fresh registry,
+109 live-book tokens, a successful ten-market page, and a fresh book read before Hermes started at
+16:46:32. The live child tree proved the repaired composition: the native Hermes/profile/gateway
+OS identity, the MCP watchdog under `/usr/local/lib/hermes-agent/venv/bin/python`, and the exact
+POL-17 bridge under `/opt/polymarket-bot/.venv/bin/python`. Exactly five tools registered.
+
+The catch-up turn used `gpt-5.6-terra` through `openai-codex`, successfully called `get_flags`,
+`get_market`, `get_book`, and `get_ledger`, then returned SILENT without calling `propose_trade`.
+After more than 60 seconds, no profile-local auth/env file existed and a new midpoint batch held
+128 books. An explicit Hermes-only stop logged a planned gateway stop, exited in 0.02 seconds with
+`Result=success`, zero restarts, and no survivor while POL-17 remained active. Hermes restarted with
+the same five-tool child tree. The next regular turn began at 16:53:22, read flags, a market page,
+two live books, and the ledger, then completed successfully and returned SILENT with no write call.
+
+The 16:54:32 closing audit left both units active and enabled, `Result=success`, and `NRestarts=0`.
+POL-17 reported `RUNNING`, a fresh registry/runtime, `trading_permission=false`, 172 live tokens,
+zero pending intents, and zero resolution/execution outbox depth. The latest midpoint batch held
+172 books; persisted sources contained 24 midpoint batches, 6,500 deduplicated Data API trades,
+and exactly zero `clob-ws` rows. All economic, forecast, component, Maker/Shadow, execution,
+resolution, outbox, terminal, and receipt tables remained zero. The native root auth checksum
+remained `50df4b431bb07151f2c09b043191e86258dbd4479dc8a48277343c8a744f829b`, and every historical
+raw-firehose checksum passed.
+
+Observed peaks were 133,017,600 bytes for POL-17 and 263,729,152 bytes for Hermes, below the
+512/320 MiB soft ceilings and 768/512 MiB hard ceilings. Both cgroups recorded zero swap, `high`,
+`max`, `oom`, and `oom_kill`. No HALT, wrong-chain, registry-stale, integrity, MCP registration,
+adapter collision, kanban, or fatal error appeared in the activation journals. This satisfies the
+reviewed enablement gate without creating a paper account, fake proposal, or any signing/live-money
+authority. The services remain enabled for the POL-13 shadow observation window.
