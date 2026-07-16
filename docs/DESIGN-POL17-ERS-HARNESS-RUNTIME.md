@@ -149,6 +149,8 @@ The deployment contract uses `Type=notify`, `After/Wants=network-online.target`,
 
 - missing, stale, crossed, one-sided, or degenerate `LocalBook`;
 - registry metadata unavailable for one condition in an otherwise coherent generation;
+- one selected market's missing or malformed market-owned deadline, provided at least one other
+  market remains usable; no event-level deadline fallback is permitted;
 - one condition's provider observation unavailable or finalized with unknown authority;
 - malformed/untrusted proposal and existing per-intent pipeline failures;
 - an unfilled maker simulation;
@@ -164,7 +166,8 @@ temporarily unavailable; deterministic invalid proposals retain existing audited
 - database alias, corruption, outbox orphan, acknowledgement mismatch, or contradictory identity;
 - `SettlementConflict`, persistent resolution integrity halt, or target projection contradiction;
 - loss of both configured provider identities, wrong chain, or malformed durable terminal data;
-- initial registry failure, a contradictory refresh, or last-good registry exceeding max age;
+- an initial registry with no usable market, a contradictory refresh, or last-good registry
+  exceeding max age;
 - evidence corruption or an unexpected orchestration exception outside a per-market boundary.
 
 Transient full-provider outage yields per-condition `UNAVAILABLE` and zero eligible proposals for

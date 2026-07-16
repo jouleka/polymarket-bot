@@ -187,7 +187,7 @@ class _MarketDefinition:
     event_id: str
     category: str | None
     question_text: str
-    end_epoch: float
+    end_epoch: float | None
 
 
 @dataclass(frozen=True)
@@ -326,7 +326,13 @@ class MarketRegistry:
             question = _required_string(row, "question", f"market {condition_id}")
             tokens = _parse_tokens(row.get("clobTokenIds"), condition_id)
             event_id = _event_id_for_market(row, condition_id)
-            deadline = _parse_deadline(row.get("endDate"), condition_id)
+            try:
+                deadline = _parse_deadline(row.get("endDate"), condition_id)
+            except MarketSnapshotError:
+                # A missing/malformed market deadline carries no timing authority, but it does
+                # not corrupt another condition's independently coherent identity. Retain the
+                # exact identity only so lookups can fail as explicitly unavailable.
+                deadline = None
             definition = _MarketDefinition(
                 condition_id=condition_id,
                 token_ids=tokens,
@@ -431,19 +437,19 @@ class MarketRegistry:
         by_condition = {
             condition_id: definition
             for condition_id, definition in all_by_condition.items()
-            if definition.category is not None
+            if definition.category is not None and definition.end_epoch is not None
         }
         if not by_condition:
             raise MarketSnapshotError("Gamma snapshots contain no usable categorized market")
         by_token = {
             token_id: definition
             for token_id, definition in all_by_token.items()
-            if definition.category is not None
+            if definition.category is not None and definition.end_epoch is not None
         }
         unavailable_conditions = frozenset(set(all_by_condition) - set(by_condition))
         unavailable_tokens = frozenset(
             token_id for token_id, definition in all_by_token.items()
-            if definition.category is None
+            if definition.category is None or definition.end_epoch is None
         )
         return cls(
             MappingProxyType(dict(by_condition)),

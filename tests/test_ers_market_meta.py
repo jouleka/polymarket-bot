@@ -306,17 +306,69 @@ def test_registry_rejects_bad_token_wire_shapes(wire):
     ("question", None),
     ("question", "   "),
     ("question", 123),
-    ("endDate", None),
-    ("endDate", "2030-01-01T00:00:00"),
-    ("endDate", "2030-01-01X00:00:00+00:00"),
-    ("endDate", "2030-01-01🙂00:00:00+00:00"),
-    ("endDate", "not-a-date"),
 ])
 def test_registry_rejects_missing_or_malformed_market_fields(field, value):
     row = _market()
     row[field] = value
     with pytest.raises(MarketSnapshotError, match=field):
         _registry(markets=[row])
+
+
+@pytest.mark.parametrize("deadline", [
+    None,
+    "2030-01-01T00:00:00",
+    "2030-01-01X00:00:00+00:00",
+    "2030-01-01🙂00:00:00+00:00",
+    "not-a-date",
+])
+def test_registry_quarantines_one_market_with_unavailable_deadline(deadline):
+    bad = _market("bad", ("b1", "b2"), event_id="e2")
+    bad["endDate"] = deadline
+    registry = _registry(
+        markets=[_market("good", ("g1", "g2")), bad],
+        events=[
+            _event("e1", condition_id="good", tokens=("g1", "g2")),
+            _event("e2", condition_id="bad", tokens=("b1", "b2")),
+        ],
+    )
+
+    assert len(registry) == 1
+    assert registry.metadata_for(
+        _intent(condition_id="good", token_id="g1", event_id="e1")
+    ).question_text == "Will X happen?"
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.metadata_for(
+            _intent(condition_id="bad", token_id="b1", event_id="e2")
+        )
+    with pytest.raises(MarketMetadataUnavailable, match="unavailable"):
+        registry.resolution_subject_for(
+            _intent(condition_id="bad", token_id="b1", event_id="e2")
+        )
+    with pytest.raises(MarketMetadataUnavailable, match="token.*unavailable"):
+        registry.metadata_for(
+            _intent(condition_id="good", token_id="b1", event_id="e1")
+        )
+
+
+def test_registry_with_only_unavailable_deadlines_still_fails_loudly():
+    row = _market()
+    row["endDate"] = None
+
+    with pytest.raises(MarketSnapshotError, match="no usable"):
+        _registry(markets=[row])
+
+
+def test_quarantined_deadline_never_hides_token_identity_corruption_or_uses_event_time():
+    bad = _market("bad", ("b1", "b2"), event_id="e2")
+    bad["endDate"] = None
+    event = _event("e2", condition_id="bad", tokens=("b1", "wrong"))
+    event["endDate"] = "2035-01-01T00:00:00Z"
+
+    with pytest.raises(MarketSnapshotError, match="token identity conflict"):
+        _registry(
+            markets=[_market("good", ("g1", "g2")), bad],
+            events=[_event("e1", condition_id="good", tokens=("g1", "g2")), event],
+        )
 
 
 @pytest.mark.parametrize("events_field", [None, [], [{"id": "e1"}, {"id": "e2"}], ["e1"], [{"id": 1}]])
