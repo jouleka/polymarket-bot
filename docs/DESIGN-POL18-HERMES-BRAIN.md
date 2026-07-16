@@ -1,6 +1,7 @@
 # DESIGN — POL-18: isolated propose-only Hermes brain
 
-**Date:** 2026-07-15 · **Ticket:** POL-18 · **Status:** owner-approved contract
+**Date:** 2026-07-15 · **Ticket:** POL-18 · **Status:** owner-approved contract; native-profile
+correction 2026-07-16
 
 ## 1. Goal and boundary
 
@@ -21,15 +22,15 @@ service, opening production databases, and activation are separate owner gates.
 | Runtime ownership | POL-17 remains the sole `IntentStore` writer and sole live-book owner. Hermes never opens SQLite and never starts a collector. |
 | Inter-process boundary | A bounded Unix-domain request server runs inside the supervised POL-17 process. A separate stdio MCP bridge owns only a client capability to that socket. |
 | Facade | The server composes the unchanged `ProposeOnlyFacade`; exactly five RPC/MCP names are exported: `propose_trade`, `get_market`, `get_book`, `get_ledger`, `get_flags`. |
-| Host isolation | Hermes runs as dedicated unprivileged `polybot-hermes`; `polybot` and `polybot-hermes` share only a proposal-socket group. Hermes is not a member of the database/config owner group. |
-| Profile isolation | A dedicated `polymarket` profile owns its config, model state, memory, sessions, skills, and cron. Existing default, coder, memecoin, and options profiles are neither cloned nor modified. |
+| Host integration | `polymarket` is a normal named profile in the existing root Hermes installation. The custom stopped unit joins only the proposal-socket group and uses systemd path restrictions to hide production config/data, root SSH/Codex/config homes, and unrelated profiles. No second Hermes home, user, install, or login is created. |
+| Profile isolation | `/root/.hermes/profiles/polymarket` owns its config, memory, sessions, skills, and cron. It uses Hermes's native read-only fallback to the existing root provider store. Existing default, coder, memecoin, and options profiles are neither cloned nor modified. |
 | MCP implementation | Use the official Python MCP SDK at the version reviewed with installed Hermes 0.18.2. The bridge has no server-side store imports. |
 | Tool enforcement | Configure only the dynamic `mcp-polymarket` toolset for the cron platform, disable MCP resources/prompts, and refuse startup unless an effective-inventory probe observes exactly the five names. |
-| Model | Code and profile templates remain model-agnostic. The model/provider is selected and verified only at the separately approved stopped-install gate. |
+| Model | The stopped production profile pins `gpt-5.6-terra`, `openai-codex`, and `high` reasoning. It reuses the existing root Hermes authentication through native profile fallback. |
 | Schedule | Proposed default is one non-overlapping brain run every five minutes. Before profile/cron activation, the system remains genuinely idle; no fake production proposals are synthesized. |
 
 ```text
-dedicated polybot-hermes user                    one POL-17 process (polybot)
+existing root Hermes installation               one POL-17 process (polybot)
 
 Hermes polymarket profile
   cron agent, exact five tools
@@ -131,11 +132,12 @@ profile's effective cron tool inventory. Any missing, extra, renamed, utility, o
 refuses installation/activation. The same probe is an `ExecStartPre` condition for the brain unit.
 Profile cron state is owned by its Hermes home, but the model receives no `cronjob` management tool.
 
-The dedicated user owns only its Hermes home. It receives no `.env` from POL-17, no supplementary
-`polybot` membership, no writable project source, no data-directory permissions, and no shell. A
-dedicated shared group grants connect permission only to the Unix socket. The bridge command reads
-root-owned/world-readable installed code and executes the project venv, but its module imports only
-the MCP SDK, JSON/schema code, and socket client.
+The native profile contains no `.env` or local `auth.json`; Hermes reads the existing root provider
+store through its built-in named-profile fallback. No credential is copied into the profile or
+POL-17. The stopped custom unit hides POL-17 config/data, root SSH/Codex/config homes, and every
+unrelated profile, while `polybot-proposal` grants the expected Unix-socket route. The bridge
+command executes the project venv, but its module imports only the MCP SDK, JSON/schema code, and
+socket client. The exact-five effective inventory remains the primary authority boundary.
 
 ## 6. Failure policy
 

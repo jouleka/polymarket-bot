@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UNIT = ROOT / "deploy" / "polymarket-hermes.service"
 INSTALLER = ROOT / "deploy" / "install.sh"
 CONFIG = ROOT / "deploy" / "config.example.toml"
+RUNBOOK = ROOT / "deploy" / "hermes" / "README.md"
 
 
 def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol17():
@@ -74,3 +75,13 @@ def test_composite_example_configures_only_the_group_scoped_local_endpoint():
     assert "proposal_request_timeout_seconds = 2.0" in text
     assert "proposal_http" not in text
     assert "proposal_tcp" not in text
+
+
+def test_runbook_uses_native_profile_and_existing_auth_without_another_login():
+    text = RUNBOOK.read_text(encoding="utf-8")
+
+    assert "/root/.hermes/profiles/polymarket" in text
+    assert "Native named profiles inherit the existing root Hermes provider store" in text
+    assert "Do not run another device login" in text
+    assert "/var/lib/polybot-hermes" not in text
+    assert "sudo -u polybot-hermes" not in text

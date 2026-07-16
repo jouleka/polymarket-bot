@@ -55,13 +55,14 @@ Baseline: `8deee0459a61754bc33da4733d4efea6f59e764f`, 2,208 tests passing. Branc
 
 ## Task 5 — Stopped deployment artifacts
 
-1. RED: installer creates/validates dedicated nologin identity and socket-only group, never grants
-   `polybot` group membership, leaves both services stopped/disabled, and never creates profile or
-   production DB during a code-only install.
+1. RED: installer uses the existing root Hermes installation, creates no second Hermes identity or
+   home, validates the socket-only group, leaves both services stopped/disabled, and never creates
+   profile or production DB during a code-only install.
 2. GREEN: additive brain unit/template and runbook with explicit stopped profile/config/model/cron
    gates and separate activation commands.
-3. RED/GREEN: systemd ordering, restart/timeouts, no keys/env inheritance, read-only code, writable
-   isolated Hermes home, proposal socket permissions, exact preflight, and rollback preservation.
+3. RED/GREEN: systemd ordering, restart/timeouts, native root provider fallback without profile
+   credential copies, restricted root/profile paths, proposal socket permissions, exact preflight,
+   and rollback preservation.
 4. Full deployment-contract suite and checkpoint. Do not run the installer.
 
 ## Task 6 — Whole-slice and restart evidence
