@@ -393,6 +393,14 @@ def test_cron_contract_requires_one_exact_job_and_exact_model_visible_tools():
         )
 
 
+def test_cron_prompt_uses_only_tokens_advertised_as_fresh_live_books():
+    prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
+              "cron-prompt.md").read_text(encoding="utf-8")
+
+    assert "If `live_book_tokens` is empty, stop without proposing" in prompt
+    assert "token_id is present in `live_book_tokens`" in prompt
+
+
 def test_activation_requires_nonempty_owner_selected_model_and_provider():
     from polybot.hermes.profile_verify import verify_model_selection
 
