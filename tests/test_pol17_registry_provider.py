@@ -107,6 +107,33 @@ def test_registry_available_tokens_exclude_quarantined_metadata_rows():
     assert provider.available_token_ids == ("t1", "t2")
 
 
+def test_registry_condition_can_reappear_without_expanding_frozen_universe():
+    complete = (
+        [_market(), _market("c2", ("t3", "t4"), "e2")],
+        [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+    )
+    snapshots = iter([
+        complete,
+        ([_market()], [_event()]),
+        complete,
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 100.0,
+        max_age_seconds=900.0,
+    )
+
+    provider.load()
+    subset = provider.refresh()
+    restored = provider.refresh()
+
+    assert len(subset) == 1
+    assert len(restored) == 2
+    assert provider.condition_ids == frozenset({"c1", "c2"})
+    assert provider.available_token_ids == ("t1", "t2", "t3", "t4")
+
+
 def test_registry_subset_with_no_usable_market_halts_without_replacing_authority():
     snapshots = iter([
         (
