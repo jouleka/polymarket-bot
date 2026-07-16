@@ -11,7 +11,7 @@ def test_valid_config_defaults():
     c = IngestionConfig(db_path="/data/m.db")
     assert c.db_path == "/data/m.db"
     assert c.universe_max_markets == 400
-    assert c.max_assets_per_shard == 500
+    assert c.max_assets_per_shard == 25
     assert c.data_api_enabled is True
     assert c.data_api_interval_seconds == 2.0
     assert c.snapshot_interval_seconds == 60.0
@@ -65,7 +65,7 @@ def test_load_config_toml_then_env(tmp_path):
     assert cfg.universe_max_markets == 77      # env overrode toml
     assert cfg.data_api_enabled is False       # env-coerced bool
     assert cfg.snapshot_interval_seconds == 30.5  # fractional env float overrode TOML 120
-    assert cfg.max_assets_per_shard == 500     # default
+    assert cfg.max_assets_per_shard == 25      # default
 
 
 def test_load_config_honors_fractional_toml_snapshot_override_without_env(tmp_path):
@@ -99,15 +99,17 @@ def test_config_has_only_the_approved_fields_and_no_persistence_escape_hatch():
     assert set(inspect.signature(IngestionConfig).parameters) == approved
 
 
-def test_deploy_example_explicitly_configures_snapshot_cadence():
+def test_deploy_example_explicitly_configures_safe_ingestion_cadence_and_shards():
     from polybot.runtime.config import load_config
 
     path = Path(__file__).parents[1] / "deploy" / "config.example.toml"
     raw = tomllib.loads(path.read_text())
     assert raw["snapshot_interval_seconds"] == 60.0
+    assert raw["max_assets_per_shard"] == 25
 
     cfg = load_config(str(path), env={})
     assert cfg.snapshot_interval_seconds == 60.0
+    assert cfg.max_assets_per_shard == 25
 
 
 def test_load_config_env_only():

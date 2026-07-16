@@ -640,6 +640,19 @@ tests and the 2,294-test canonical suite; it has not triggered another productio
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
+**UPDATE 2026-07-16 — first enablement attempt failed closed on empty live books.** The owner
+approved enablement and both units started in order, but six minute batches contained empty book
+maps and both Hermes turns correctly stopped after `get_flags.live_book_tokens=[]`. No proposal or
+economic row was created. The units were stopped and disabled with zero restarts, swap, pressure,
+or OOM; all stores and raw evidence remain healthy. Bounded live probes isolated the cause: the
+200-token single shard left all 200 books stale, while eight 25-token shards left zero stale and
+162 usable. Checkpoints `3e96324`, `27f7d89`, and `b8ac430` require a usable two-sided book before
+readiness/admission and pin 25-token shards without weakening fail-closed resync. The 2,295-test
+suite, two independent reviews, and isolated 8/8 mutation battery pass at exact clean head
+`f18d48a`; no safety or authority findings remain. Landing, stopped installation/config
+reconciliation, and a fresh enablement observation remain required. Evidence is in
+[`VERIFICATION-POL13-SHADOW-ENABLEMENT.md`](VERIFICATION-POL13-SHADOW-ENABLEMENT.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
