@@ -120,9 +120,17 @@ with a no-op, then executes the unchanged `--profile polymarket gateway run --re
 launcher still strips inherited authority variables and now supplies only the exact root-owned
 repository `PYTHONPATH`. It does not create a profile, credential, cron, model configuration, tool,
 or runtime authority. Focused tests pass 6/6, the canonical suite passes 2,296 tests, and an
-installed-Hermes probe confirms the exact 0.18.2 entry point is disabled. An isolated 4/4 mutation
+installed-Hermes probe confirms the exact 0.18.2 entry point is disabled. An isolated 5/5 mutation
 battery killed restoration of the keepalive, bypass of the bootstrap, loss of its exact source
-path, and loss of the exact named-profile command.
+path, loss of the exact named-profile command, and a production `os.execve` bypass of the reviewed
+command builder.
+
+The first specification re-review found that the initial test exercised command construction and
+bootstrap behavior separately, so a direct-exec bypass at the production launcher could survive.
+The closing regression invokes `launch_installed_profile`, intercepts `os.execve`, and pins the
+Python bootstrap argv plus exact scrubbed environment; the proposed bypass now fails. It also pins
+the incident-specific stopped cleanup commands below. Closing results are 29 focused cases and the
+2,297-test canonical suite.
 
 The services remain inactive and disabled. Before retry, this follow-up must pass independent
 review and land; the service checkout must fast-forward while stopped; the generated forbidden

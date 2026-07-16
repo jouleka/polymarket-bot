@@ -658,7 +658,8 @@ production shard value are installed at 25. The exact-five preflight then caught
 Nous credential that Hermes's unselected 60-second global keepalive had created during the failed
 run. Both units stayed stopped/disabled. Strict-TDD follow-up `369b477` disables only that
 unselected maintenance thread before launching the same native profile; 2,296 tests, an installed
-0.18.2 probe, and isolated 4/4 mutations pass. Independent review, landing, stopped cleanup of that
+0.18.2 probe, and isolated 5/5 mutations pass. The production-launch regression raises the closing
+suite to 2,297 tests. Independent re-review, landing, stopped cleanup of that
 generated duplicate, exact-five preflight, and the enablement retry remain required.
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
