@@ -13,6 +13,7 @@ _HERMES_ARGV = [
     "run",
     "--replace",
 ]
+_HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
 
 
 def _disable_unselected_auth_maintenance() -> None:
@@ -27,6 +28,12 @@ def _disable_unselected_auth_maintenance() -> None:
 
 def main() -> int:
     _disable_unselected_auth_maintenance()
+    # The supervised process deliberately uses the Hermes CLI path as argv[0]
+    # so its native planned-stop verifier can identify the gateway.  CPython
+    # consequently reports that script as sys.executable; restore the actual
+    # pinned interpreter before Hermes spawns Python helpers such as the MCP
+    # stdio watchdog.
+    sys.executable = _HERMES_PYTHON
     sys.argv = list(_HERMES_ARGV)
 
     from hermes_cli.main import main as hermes_main
