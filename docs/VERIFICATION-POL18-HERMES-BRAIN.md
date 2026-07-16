@@ -233,6 +233,11 @@ sandbox source exposure, launcher bypass, missing synchronous wait, PID/start-ti
 timeout headroom, and omission of the effective-gateway check from the installed preflight. This
 addendum does not itself authorize installation, retry, enablement, or continued operation.
 
+Independent closing re-review returned PASS at exact clean head `6f7e62e`: the reviewer reproduced
+the 26 focused and 2,293 complete tests, the installed 31-adapter/33-surface inventory, hostile-env
+rejection, native root `openai-codex` auth visibility, identity-aware bounded stop, systemd unit
+verification, and absence of any signer/runtime/sacred-surface change.
+
 ## Deployment boundary
 
 [`deploy/hermes/README.md`](../deploy/hermes/README.md) separates code/identity installation,
