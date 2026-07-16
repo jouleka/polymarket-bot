@@ -254,6 +254,27 @@ def test_root_advertises_only_live_books_with_current_registry_authority(tmp_pat
         runtime.close_unstarted()
 
 
+def test_hermes_book_authority_uses_one_immutable_registry_generation():
+    class Book:
+        def is_stale(self):
+            return False
+
+        def midpoint(self):
+            return object()
+
+    current = SimpleNamespace(available_token_ids=("101",))
+    provider = SimpleNamespace(
+        require_fresh=lambda: current,
+        # Simulates the old separately published token cache during refresh.
+        available_token_ids=("101", "303"),
+    )
+    ingestion = SimpleNamespace(book_for=lambda _token_id: Book())
+
+    assert shadow_root._live_book_tokens(provider, ingestion) == ("101",)
+    assert shadow_root._current_registry_book_for(provider, ingestion, "101") is not None
+    assert shadow_root._current_registry_book_for(provider, ingestion, "303") is None
+
+
 def test_root_construction_unwinds_writer_and_executor_on_component_failure(
         tmp_path, monkeypatch):
     trace = []

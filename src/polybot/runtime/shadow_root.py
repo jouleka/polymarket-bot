@@ -39,6 +39,29 @@ from polybot.runtime.shadow_runtime import ShadowRuntime
 from polybot.runtime.status import RuntimeStatusReporter
 
 
+def _live_book_tokens(registry_provider, ingestion):
+    """One-generation intersection of registry authority and usable live books."""
+    try:
+        registry = registry_provider.require_fresh()
+    except MarketSnapshotError:
+        return ()
+    available = []
+    for token_id in registry.available_token_ids:
+        book = ingestion.book_for(token_id)
+        if (book is not None and not book.is_stale()
+                and book.midpoint() is not None):
+            available.append(token_id)
+    return tuple(available)
+
+
+def _current_registry_book_for(registry_provider, ingestion, token_id):
+    """Read one book only under the same immutable registry generation."""
+    registry = registry_provider.require_fresh()
+    if token_id not in registry.available_token_ids:
+        return None
+    return ingestion.book_for(token_id)
+
+
 def _drain_fully(dispatcher, limit):
     def drain():
         while True:
@@ -149,13 +172,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     ))
 
     def live_book_tokens():
-        available = []
-        for token_id in registry_provider.available_token_ids:
-            book = ingestion.book_for(token_id)
-            if (book is not None and not book.is_stale()
-                    and book.midpoint() is not None):
-                available.append(token_id)
-        return tuple(available)
+        return _live_book_tokens(registry_provider, ingestion)
 
     def live_book_ready():
         return bool(live_book_tokens())
@@ -171,10 +188,9 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             return True
 
         def registry_book_for(token_id):
-            registry_provider.require_fresh()
-            if token_id not in registry_provider.available_token_ids:
-                return None
-            return ingestion.book_for(token_id)
+            return _current_registry_book_for(
+                registry_provider, ingestion, token_id
+            )
 
         proposal_facade = guarded(lambda: ProposeOnlyFacade(
             components.intent_store,
