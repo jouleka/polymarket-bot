@@ -225,10 +225,13 @@ and the first planned-stop helper returned before systemd's main process had exi
 
 The installed Hermes resolver proof reports 31 disabled adapters and exactly the `polymarket` MCP
 on all 33 reviewed surfaces. Focused profile/deployment tests pass 26/26; the complete suite passes
-2,293 tests on tmpfs. The first isolated 12/12 adversarial battery had zero survivors across
-toolset, messaging, kanban, drain, unit, marker-before-signal, marker-failure, verifier-bypass, and
-extra-tool mutations; the review-fix battery is recorded after its closing re-review. This addendum
-does not itself authorize installation, retry, enablement, or continued operation.
+2,293 tests on tmpfs. The isolated hardening batteries killed 22/22 mutations with zero survivors:
+the initial 12 covered toolset, messaging, kanban, drain, unit, marker-before-signal,
+marker-failure, verifier-bypass, and extra-tool paths; the closing 10 covered omitted installed
+platforms, effective-adapter bypass, inherited-environment leakage, profile-local secret sources,
+sandbox source exposure, launcher bypass, missing synchronous wait, PID/start-time identity,
+timeout headroom, and omission of the effective-gateway check from the installed preflight. This
+addendum does not itself authorize installation, retry, enablement, or continued operation.
 
 ## Deployment boundary
 
