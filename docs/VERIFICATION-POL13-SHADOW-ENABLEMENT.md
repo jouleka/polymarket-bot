@@ -70,12 +70,29 @@ runtime/root cases, 14 sharding cases, and 84 configuration/build/sharding cases
 suite passes 2,295 tests on tmpfs. No validator, propose-only facade, caps, signer protocol,
 controller authority, persistence format, or live-money surface changed.
 
-## Remaining gate
+## Independent review and mutation gate
 
-Do not install or retry from these checkpoints merely because tests pass. Required sequence:
-independent specification/security review; adversarial mutations for usable-book readiness,
-optional-seam compatibility, and shard blast radius; owner-authorized GitHub landing; stopped
-service-checkout/config installation; exact preflight; then a fresh enablement observation. The
-retry must prove non-empty fresh books and non-empty midpoint batches, bounded cgroup memory,
-zero raw `clob-ws` persistence, healthy databases/outboxes, and a clean regular Hermes turn before
-the services are left enabled.
+Two independent read-only reviews passed at exact clean head
+`f18d48a64f670a5ffc89b4a7dc1c951fa53ede61` with no specification, security, deployment-boundary,
+or authority-expansion findings. The reviewers independently reproduced focused results of 61 and
+95 tests, the canonical 2,295-test suite, compile checks, clean diff checks, and systemd unit
+verification. They confirmed that absent, stale, one-sided, crossed, and locked books fail closed;
+the optional `None` seam remains backward compatible; shard failures remain bounded while systemic
+supervision failures remain fatal; raw websocket persistence stays disabled; and no sacred
+validator, facade, caps, signer, controller, execution, or resolution surface changed.
+
+The isolated adversarial battery killed 8/8 mutations with zero survivors: bypassing usable-book
+readiness, accepting a stale book, dropping production predicate wiring, restoring the collector
+default to 500, restoring the runtime-config default to 500, restoring the deployment example to
+500, making the optional seam mandatory, and accepting a one-sided book. The one-sided mutation
+initially survived; strict TDD added the missing regression at `f18d48a`, after which it was killed.
+
+## Remaining release gate
+
+The reviewed correction is not installed. The service checkout and explicit production config
+still use the prior build and `max_assets_per_shard = 500`. Required sequence: owner-authorized
+GitHub landing; stopped service-checkout/config installation; exact loaded-config and Hermes
+preflight; then a fresh enablement observation. The retry must prove non-empty fresh books and
+non-empty midpoint batches, bounded eight-shard cgroup memory under the existing limits, zero raw
+`clob-ws` persistence, healthy databases/outboxes, and a clean regular Hermes turn before the
+services are left enabled.

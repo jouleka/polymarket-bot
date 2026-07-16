@@ -648,8 +648,9 @@ or OOM; all stores and raw evidence remain healthy. Bounded live probes isolated
 200-token single shard left all 200 books stale, while eight 25-token shards left zero stale and
 162 usable. Checkpoints `3e96324`, `27f7d89`, and `b8ac430` require a usable two-sided book before
 readiness/admission and pin 25-token shards without weakening fail-closed resync. The 2,295-test
-suite passes. Independent review, mutation, landing, stopped installation, and a fresh enablement
-observation remain required. Evidence is in
+suite, two independent reviews, and isolated 8/8 mutation battery pass at exact clean head
+`f18d48a`; no safety or authority findings remain. Landing, stopped installation/config
+reconciliation, and a fresh enablement observation remain required. Evidence is in
 [`VERIFICATION-POL13-SHADOW-ENABLEMENT.md`](VERIFICATION-POL13-SHADOW-ENABLEMENT.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
