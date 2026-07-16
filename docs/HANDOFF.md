@@ -508,9 +508,9 @@ capability-minimal stdio MCP bridge. Hermes receives exactly five tools: `propos
 database writer, ERS/controller authority, and paper executor; the bridge cannot import stores,
 signers, wallets, orders, shell/file/browser tools, or service lifecycle authority.
 
-The dedicated Hermes 0.18.2 profile contract pins MCP 1.26.0, the exact authored/discovered/cron/
-model-visible inventory, conservative security and approval settings, a dedicated nologin user,
-and a socket-only shared group. Before a separately approved model/profile/cron exists, the runtime
+The Hermes 0.18.2 profile contract pins MCP 1.26.0, the exact authored/discovered/cron/
+model-visible inventory, conservative security and approval settings, a native named profile in
+the existing Hermes installation, and a socket-only shared group. Before a separately approved cron exists, the runtime
 idles with zero proposals and never synthesizes input. The whole-slice proof crosses live book →
 RPC/MCP proposal → ERS → atomic Maker/Shadow outbox → apply-before-ack crash/restart → resolution
 retry/fanout → terminal marks/evidence, while stale reads, stale validation/execution books,
@@ -559,8 +559,20 @@ credentials were copied. Both services remain inactive/disabled; no production D
 cron, start, enablement, or activation occurred. Evidence is in
 [`VERIFICATION-POL13-HERMES-MODEL.md`](VERIFICATION-POL13-HERMES-MODEL.md).
 
-**Next work:** isolated `polybot-hermes` provider authentication is the next separately approved
-stopped gate. After that come cron, first-start, and enablement gates, followed by the
+**CORRECTION 2026-07-16 — native existing-Hermes profile reconciled while stopped.** The owner
+clarified that `polymarket` is a normal named profile in the already configured Hermes installation,
+not a second Hermes home/authentication domain. PR #15 corrected the installer, unit, verifier,
+tests, design, and runbook. The host now has `/root/.hermes/profiles/polymarket`, inherits the
+existing single `openai-codex` credential without a profile `.env` or `auth.json`, and pins
+`gpt-5.6-terra` at `high` reasoning. The obsolete `polybot-hermes` user and
+`/var/lib/polybot-hermes` home were removed. Exact-five preflight and raw evidence checks pass;
+both units remain inactive/disabled with no cron, DB, socket, status, start, enablement, or
+activation. This correction supersedes the separate-home/authentication-next conclusions above.
+Evidence is in
+[`VERIFICATION-POL13-NATIVE-HERMES-PROFILE.md`](VERIFICATION-POL13-NATIVE-HERMES-PROFILE.md).
+
+**Next work:** cron creation is the next separately approved stopped gate. After that come
+first-start and enablement gates, followed by the
 ≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
