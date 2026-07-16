@@ -693,6 +693,22 @@ their existing caps. Exact evidence is in
 [`VERIFICATION-POL13-SHADOW-ENABLEMENT.md`](VERIFICATION-POL13-SHADOW-ENABLEMENT.md). Continue the
 POL-13 observation window; do not infer live-money authorization.
 
+**UPDATE 2026-07-16 — extended observation found fixed-universe restart churn; corrective build in
+review.** After the successful short enablement gate, POL-17 restarted four times between 17:16 and
+18:08 UTC: three 15-minute Gamma registry TTL expiries after strict-subset refreshes and one existing
+eight-attempt order-book resync HALT. Every exit remained fail-closed; Hermes followed cleanly via
+`PartOf=`, economic/outbox/signing activity stayed zero, and both units remained under their memory
+caps with zero pressure/OOM events. The earlier pure-omission policy made a permanently omitted
+condition expire the whole runtime. Checkpoints `5a22e8b`, `d22837a`, and `424d6a1` instead publish
+only a coherent current subset while retaining the frozen collector identity: omitted or metadata-
+quarantined tokens disappear from ERS metadata, Hermes flags/market/book reads, and proposal
+eligibility; exact identities may later reappear. Expansion, any returned market/event identity
+contradiction (including an omitted frozen condition), zero usable replacement, and true TTL
+expiry remain fatal. The first independent reviews found and closed the omitted-event and
+remembered-`get_book` gaps. The focused 251 and canonical 2,309-test suites pass; final re-review,
+expanded mutation closure, landing, installation, and controlled restart remain. Evidence is in
+[`VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md`](VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

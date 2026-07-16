@@ -108,11 +108,15 @@ clock for in-memory frame stamps cannot break durable replay ordering.
 ### One runtime cycle
 
 1. Honor shutdown and write the runtime heartbeat/status.
-2. If due, fetch a complete fixed-universe registry replacement off-loop. Every filtered Gamma
-   request carries an explicit limit for the already-frozen market/event set. A response that
-   purely omits one or more frozen conditions is incomplete, so retain the last good generation
-   only within its maximum age; an extra condition or any token-identity change is contradictory
-   and fatal. Beyond the age budget, halt new intent processing.
+2. If due, fetch a fixed-universe registry replacement off-loop. Every filtered Gamma request
+   carries an explicit limit for the already-frozen market/event set. A coherent strict subset
+   publishes a fresh registry containing only its currently usable conditions; omitted or
+   metadata-quarantined conditions lose ERS and Hermes read authority but remain harmless extra
+   websocket subscriptions. A later response may restore them only with their exact frozen
+   identities. An extra condition, any market/event token-identity change (including for an
+   omitted frozen condition embedded in an event), or a replacement with no usable market is
+   fatal. Transport/server unavailability retains the last coherent generation only inside its
+   maximum age; beyond that budget, halt new intent processing.
 3. Form unique canonical resolution subjects from unresolved forecasts plus the current PROPOSED
    intent snapshot using the active registry.
 4. Poll both Polygon providers off-loop at one common acceptance coordinate.
@@ -155,8 +159,8 @@ The deployment contract uses `Type=notify`, `After/Wants=network-online.target`,
 - one selected market's missing or malformed market-owned deadline, provided at least one other
   market remains usable; no event-level deadline fallback is permitted;
 - one condition's provider observation unavailable or finalized with unknown authority;
-- a Gamma refresh that purely omits one or more conditions from the frozen universe, while the
-  last coherent generation remains inside its configured age budget;
+- a coherent Gamma strict subset: publish only its usable conditions and stop advertising or
+  serving Hermes books for omitted/metadata-quarantined tokens;
 - malformed/untrusted proposal and existing per-intent pipeline failures;
 - an unfilled maker simulation;
 - one allowlisted news source fetch/parse failure (the other allowlisted sources continue).
@@ -171,8 +175,8 @@ temporarily unavailable; deterministic invalid proposals retain existing audited
 - database alias, corruption, outbox orphan, acknowledgement mismatch, or contradictory identity;
 - `SettlementConflict`, persistent resolution integrity halt, or target projection contradiction;
 - loss of both configured provider identities, wrong chain, or malformed durable terminal data;
-- an initial registry with no usable market, a refresh that expands or contradicts fixed token
-  identity, or last-good registry
+- an initial or replacement registry with no usable market, a refresh that expands or
+  contradicts frozen market/event token identity, or a transport-retained last-good registry
   exceeding max age;
 - evidence corruption or an unexpected orchestration exception outside a per-market boundary.
 
