@@ -1,6 +1,6 @@
 # POL-13 registry subset isolation verification
 
-Status: corrective build and closing review gates pass; owner-approved landing/install/restart pending
+Status: PASS — reviewed correction landed, installed, and restarted under the existing paper/shadow approval
 
 Date: 2026-07-16
 
@@ -12,7 +12,8 @@ restarted four times between 17:16 and 18:08 UTC. Three exits were
 `MarketSnapshotError: Gamma registry is stale`; one was the existing eight-attempt order-book
 resync HALT. Hermes stopped and restarted cleanly through its `PartOf=` relationship. There were no
 intent, execution, outbox, signing, wallet, order, cancellation, or chain-write effects and no
-memory pressure/OOM event.
+memory pressure/OOM event. A fourth registry-stale exit at 18:28 raised the pre-correction total to
+five restarts (four registry TTL expiries plus the one resync HALT).
 
 The registry restarts were deterministic. Production uses a 300-second refresh cadence and a
 900-second maximum age. Gamma can permanently omit a requested active condition from a filtered
@@ -79,11 +80,26 @@ identity so restoration fails; include quarantined metadata tokens; and publish 
 replacement; validate event relationships only against the returned subset; and authorize
 `get_book` from a separately published provider token view. Zero survivors remain.
 
-## Deployment boundary
+## Landed installation and restart evidence
 
-No code from this branch has been pushed, merged, installed, or loaded by systemd. The development
-changes do not touch `/opt/polymarket-bot`, any production database, the raw-firehose evidence,
-the native Hermes profile/authentication, or either unit's memory limits. Landing, stopped
-installation, and a controlled service restart are separate operational steps. Activation already
-exists under the owner's earlier approval, but replacing a running executable still requires the
-normal reviewed install/restart gate.
+PR [#32](https://github.com/jouleka/polymarket-bot/pull/32) merged as
+`1c4d6cbef54fbee37af1e236951a3c42f6cef151`. Hermes stopped cleanly before POL-17;
+both units reached `inactive/dead` with `Result=success`. The service checkout then fast-forwarded
+from `100bcec` to `1c4d6cb`; its untracked production config/backup, all database files, and raw
+evidence were preserved. Installed compilation and config validation passed. The stopped Hermes
+preflight, run with its production supplementary group, reported `exact five; PASS`.
+
+POL-17 restarted at 18:41:10 UTC and reached `RUNNING`; Hermes restarted at 18:41:34 only after the
+proposal socket/readiness barrier. The first scheduled live Gamma refresh completed at 18:46:13
+without error or restart. Closing checks found both services active+enabled with `NRestarts=0` for
+the new invocations, zero swap/pressure/OOM events, approximately 126 MiB POL-17 and 261 MiB Hermes
+current memory, and unchanged hard caps. Status showed zero pending intents and zero resolution or
+execution outbox rows. The latest observed midpoint batch contained 142 books; persistence held
+zero raw `clob-ws` rows. All seven databases returned `integrity_check=ok`, every economic,
+forecast, component, Maker, Shadow, execution, resolution, terminal, receipt, and outbox table
+remained empty, and the native root auth checksum remained
+`50df4b431bb07151f2c09b043191e86258dbd4479dc8a48277343c8a744f829b`.
+
+YouTrack POL-13 remains `In Progress`; landed/restart evidence is comment `7-342`. Continued
+bounded paper/shadow observation is required. This installation grants no signer, wallet, order,
+cancellation, redemption, chain-write, or live-money authority.
