@@ -140,14 +140,19 @@ class _GammaSnapshotFetcher:
             self._condition_ids = tuple(row["conditionId"] for row in markets)
         else:
             markets = self._get_list(
-                "/markets", {"condition_ids": self._condition_ids}
+                "/markets", {
+                    "condition_ids": self._condition_ids,
+                    "limit": len(self._condition_ids),
+                }
             )
         event_ids = tuple(dict.fromkeys(
             str(event["id"])
             for market in markets
             for event in market["events"]
         ))
-        events = self._get_list("/events", {"id": event_ids})
+        events = self._get_list(
+            "/events", {"id": event_ids, "limit": len(event_ids)}
+        )
         return markets, events
 
     def _get_list(self, path, params):
