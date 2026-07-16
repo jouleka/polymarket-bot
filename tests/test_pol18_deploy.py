@@ -20,7 +20,14 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "/var/lib/polybot-hermes" not in text
     assert "EnvironmentFile=" not in text
     assert "profile_verify --profile-home" in text
-    assert "--profile polymarket gateway run --replace" in text
+    assert "profile_gateway --profile-home /root/.hermes/profiles/polymarket" in text
+    assert "Environment=HERMES_KANBAN_DISPATCH_IN_GATEWAY=0" in text
+    assert "profile_stop --profile-home /root/.hermes/profiles/polymarket" in text
+    assert "InaccessiblePaths=-/root/.hermes/.env" in text
+    assert "InaccessiblePaths=-/root/.hermes/config.yaml" in text
+    assert "InaccessiblePaths=-/root/.hermes/gateway.json" in text
+    assert "InaccessiblePaths=-/etc/hermes" in text
+    assert "InaccessiblePaths=-/usr/local/lib/hermes-agent/.env" in text
     assert "After=network-online.target polymarket-ingestion.service" in text
     assert "Requisite=polymarket-ingestion.service" in text
     assert "PartOf=polymarket-ingestion.service" in text

@@ -122,9 +122,28 @@ existing writer/store/lock closure order.
 
 The reviewed profile template contains one MCP server with absolute command/arguments, no shell
 wrapper, no environment secrets, `tools.include` equal to the five names, and both resources and
-prompts disabled. `platform_toolsets.cron` names only that MCP server/toolset. Native terminal,
-file, web, browser, memory mutation, skills mutation, delegation, code execution, cron-management,
-messaging, plugin, and future unknown toolsets must not reach the scheduled agent.
+prompts disabled. Under pinned Hermes 0.18.2, every explicit `platform_toolsets` list is empty:
+that is the supported no-native-tools selection, after which Hermes automatically layers the sole
+globally enabled `polymarket` MCP server into the effective inventory. Naming only the MCP server
+in those lists resolves the same tools but triggers Hermes's native-tool validator warning, so the
+stopped preflight rejects that authored form even though the final inventory is still checked.
+Native terminal, file, web, browser, memory mutation, skills mutation, delegation, code execution,
+cron-management, messaging, plugin, and future unknown toolsets must not reach the scheduled agent.
+
+Every built-in and registered-plugin gateway adapter in pinned Hermes 0.18.2 is authored as
+explicitly disabled, and each corresponding tool surface has an empty native-tool list. Because
+several Hermes adapters can override authored `enabled: false` from environment credentials, the
+unit does not execute Hermes directly. A reviewed launcher constructs a minimal new environment,
+retaining only locale, CA/proxy transport, and systemd metadata before `execve`; provider and
+messaging secrets cannot be inherited. The sandbox additionally hides root, project, and managed
+Hermes environment/config sources, while allowing only the existing root `auth.json` provider
+store. Profile-local `.env`, `.op.env`, and `auth.json` files refuse startup. The stopped preflight
+loads Hermes's effective `GatewayConfig` and requires all 31 pinned adapters to remain disabled.
+Thus the gateway exists only to run the profile cron scheduler, and an omitted, added, or enabled
+platform fails closed. The kanban dispatcher is disabled in both profile config and the unit
+environment so it neither opens the machine-global kanban database nor starts worker authority. A
+bounded 20-second agent drain fits inside the 60-second service stop timeout with Hermes's required
+shutdown headroom.
 
 Because Hermes may add tools/plugins across releases, configuration inspection alone is
 insufficient. A stopped preflight pins the supported Hermes version and constructs/probes the
@@ -138,6 +157,15 @@ POL-17. The stopped custom unit hides POL-17 config/data, root SSH/Codex/config 
 unrelated profile, while `polybot-proposal` grants the expected Unix-socket route. The bridge
 command executes the project venv, but its module imports only the MCP SDK, JSON/schema code, and
 socket client. The exact-five effective inventory remains the primary authority boundary.
+
+Hermes classifies a bare systemd `SIGTERM` as an unexpected failure so `Restart=on-failure` can
+revive a crashed gateway. The custom unit therefore uses a profile-scoped `ExecStop` helper that
+reads only Hermes's validated profile PID state, writes Hermes's native planned-stop marker, and
+only then sends `SIGTERM`. A missing marker refuses the signal. The helper then waits up to 50
+seconds for that exact PID/start-time identity to disappear before `ExecStop` returns, preventing
+systemd from racing the drain with a second signal while retaining ten seconds of final manager
+headroom. This preserves restart-on-crash while making an operator/systemd stop clean and
+profile-local.
 
 ## 6. Failure policy
 

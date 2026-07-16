@@ -17,10 +17,13 @@ SUPPORTED_MCP_VERSION = "1.26.0"
 MCP_SERVER_NAME = "polymarket"
 PROFILE_PLATFORMS = frozenset({
     "api_server", "bluebubbles", "cli", "cron", "dingtalk", "discord",
-    "email", "feishu", "homeassistant", "matrix", "mattermost", "qqbot",
-    "signal", "slack", "telegram", "webhook", "wecom", "wecom_callback",
-    "weixin", "whatsapp", "whatsapp_cloud", "yuanbao",
+    "email", "feishu", "google_chat", "homeassistant", "irc", "line",
+    "matrix", "mattermost", "msgraph_webhook", "ntfy", "photon", "qqbot",
+    "raft", "relay", "signal", "simplex", "slack", "sms", "teams",
+    "telegram", "webhook", "wecom", "wecom_callback", "weixin", "whatsapp",
+    "whatsapp_cloud", "yuanbao",
 })
+GATEWAY_PLATFORMS = PROFILE_PLATFORMS - {"cli", "cron"}
 _BRIDGE_COMMAND = "/opt/polymarket-bot/.venv/bin/python"
 _BRIDGE_ARGS = [
     "-m", "polybot.hermes.mcp_bridge", "--socket",
@@ -40,7 +43,8 @@ _CRON_PROMPT = Path(
 
 
 def verify_effective_contract(config, *, hermes_version, mcp_version,
-                              platform_toolsets, discovered_mcp_tools):
+                              platform_toolsets, discovered_mcp_tools,
+                              effective_gateway_platforms):
     """Verify authored config plus the toolsets/tools observed by Hermes itself."""
     if hermes_version != SUPPORTED_HERMES_VERSION:
         raise RuntimeError("unsupported Hermes version")
@@ -79,12 +83,25 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
     authored_platforms = config.get("platform_toolsets")
     if (not isinstance(authored_platforms, dict)
             or set(authored_platforms) != PROFILE_PLATFORMS
-            or any(value != [MCP_SERVER_NAME] for value in authored_platforms.values())):
+            or any(value != [] for value in authored_platforms.values())):
         raise RuntimeError("authored platform toolsets are not MCP-only")
+    gateway_platforms = config.get("platforms")
+    if (not isinstance(gateway_platforms, dict)
+            or set(gateway_platforms) != GATEWAY_PLATFORMS
+            or any(value != {"enabled": False}
+                   for value in gateway_platforms.values())):
+        raise RuntimeError("profile must disable every messaging platform")
     agent = config.get("agent")
     if (not isinstance(agent, dict)
-            or agent.get("disabled_toolsets") != _DISABLED_BUILTIN_TOOLSETS):
+            or agent != {
+                "disabled_toolsets": _DISABLED_BUILTIN_TOOLSETS,
+                "reasoning_effort": "high",
+                "restart_drain_timeout": 20,
+            }):
         raise RuntimeError("authored disabled toolsets violate the reviewed contract")
+    if config.get("kanban") != {"dispatch_in_gateway": False}:
+        raise RuntimeError("profile kanban dispatcher must be disabled")
+    verify_effective_gateway_contract(effective_gateway_platforms)
     if config.get("skills") != {
             "external_dirs": [], "inline_shell": False, "write_approval": False,
     }:
@@ -158,6 +175,15 @@ def verify_cron_contract(jobs, expected_prompt, model_visible_tool_names):
     return True
 
 
+def verify_effective_gateway_contract(platforms):
+    """Require the pinned Hermes gateway inventory to contain zero adapters."""
+    if (not isinstance(platforms, dict)
+            or set(platforms) != GATEWAY_PLATFORMS
+            or any(value is not False for value in platforms.values())):
+        raise RuntimeError("effective Hermes gateway is not cron-only")
+    return True
+
+
 def _verify_model_visible_tools(names):
     names = list(names)
     if len(names) != len(set(names)) or set(names) != _MODEL_VISIBLE_METHODS:
@@ -184,6 +210,12 @@ def _verify_profile_filesystem(home):
     effective_groups = set(os.getgroups()) | {os.getegid()}
     if effective_groups != {os.getegid(), bridge_gid}:
         raise RuntimeError("Hermes process group membership is unsafe")
+    _verify_no_local_profile_secrets(home)
+
+
+def _verify_no_local_profile_secrets(home):
+    if any((home / name).exists() for name in (".env", ".op.env", "auth.json")):
+        raise RuntimeError("Hermes profile must use only the native root auth store")
 
 
 def verify_model_selection(config):
@@ -210,6 +242,7 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
     from hermes_cli.config import read_raw_config
     from hermes_cli.tools_config import _get_platform_tools
     from cron.jobs import list_jobs
+    from gateway.config import load_gateway_config
     from model_tools import get_tool_definitions
     from tools.mcp_tool import (
         discover_mcp_tools, probe_mcp_server_tools, shutdown_mcp_servers,
@@ -221,12 +254,18 @@ def verify_installed_profile(profile_home, *, expect_no_cron=False):
         platform: _get_platform_tools(config, platform)
         for platform in PROFILE_PLATFORMS
     }
+    gateway = load_gateway_config()
+    effective_gateway_platforms = {
+        platform.value: item.enabled
+        for platform, item in gateway.platforms.items()
+    }
     verify_effective_contract(
         config,
         hermes_version=importlib.metadata.version("hermes-agent"),
         mcp_version=importlib.metadata.version("mcp"),
         platform_toolsets=platform_toolsets,
         discovered_mcp_tools=probe_mcp_server_tools(),
+        effective_gateway_platforms=effective_gateway_platforms,
     )
     jobs = list_jobs(include_disabled=True)
     if expect_no_cron:
