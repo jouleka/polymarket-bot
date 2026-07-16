@@ -101,6 +101,7 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert isinstance(runtime, ShadowRuntime)
         assert snapshot_calls == [1]
         assert runtime._collector is runtime._ingestion.collector
+        assert runtime._live_book_ready() is False
         assert runtime._components.controller._book_for.__self__ is runtime._ingestion
         assert runtime._components.pipeline.market_meta is runtime._components.market_registry
         assert runtime._ingestion.token_ids == ("101", "202")

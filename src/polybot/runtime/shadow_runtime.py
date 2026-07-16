@@ -24,7 +24,8 @@ class ShadowRuntime:
                  apply_initial_resolution_state, controller, readiness,
                  run_cycle, cycle_interval_seconds, readiness_timeout_seconds,
                  closers=(), before_writer_closers=(), lock_acquired=False,
-                 stop_requested=None, set_proposal_admission=None):
+                 stop_requested=None, set_proposal_admission=None,
+                 live_book_ready=None):
         self._services = tuple(services)
         self._writer = writer
         self._lock = lock
@@ -38,6 +39,9 @@ class ShadowRuntime:
         self._drain_resolution = drain_resolution
         self._drain_execution = drain_execution
         self._collector = collector
+        if live_book_ready is not None and not callable(live_book_ready):
+            raise TypeError("live_book_ready must be callable")
+        self._live_book_ready = live_book_ready
         self._apply_initial_resolution_state = apply_initial_resolution_state
         self._controller = controller
         self._readiness = readiness
@@ -141,7 +145,9 @@ class ShadowRuntime:
     async def _wait_for_live_frame(self):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._readiness_timeout_seconds
-        while self._collector.last_frame_at() is None:
+        while (self._collector.last_frame_at() is None
+               or (self._live_book_ready is not None
+                   and not self._live_book_ready())):
             remaining = deadline - loop.time()
             if remaining <= 0:
                 raise TimeoutError("live-book readiness timed out")

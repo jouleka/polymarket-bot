@@ -244,7 +244,8 @@ def test_live_book_readiness_timeout_is_fatal_and_never_announces_ready():
         recover_resolution=lambda: asyncio.sleep(0),
         drain_resolution=lambda: None,
         drain_execution=lambda: None,
-        collector=SimpleNamespace(last_frame_at=lambda: None),
+        collector=SimpleNamespace(last_frame_at=lambda: 1),
+        live_book_ready=lambda: False,
         apply_initial_resolution_state=lambda: None,
         controller=SimpleNamespace(boot=lambda: None),
         readiness=SimpleNamespace(
