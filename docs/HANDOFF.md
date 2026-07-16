@@ -630,6 +630,11 @@ inactive/dead/disabled. All seven databases and historical raw-firehose checksum
 contains zero raw `clob-ws` rows, and no gateway/MCP process survives. Exact evidence is in
 [`VERIFICATION-POL18-HERMES-BRAIN.md`](VERIFICATION-POL18-HERMES-BRAIN.md).
 
+Transcript reconciliation then proved those book calls used valid registry tokens before POL-17
+had advertised any fresh `live_book_tokens`. PR #26 pins the cron to stop on an empty advertised
+set and inspect only tokens present in it. This authority-neutral prompt guard passes 27 focused
+tests and the 2,294-test canonical suite; it has not triggered another production run.
+
 **Next work:** enablement is the next separate explicit operational gate, followed by the
 ≤2-week local shadow-simulation run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;

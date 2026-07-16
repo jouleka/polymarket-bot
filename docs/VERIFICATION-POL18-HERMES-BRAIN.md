@@ -276,6 +276,14 @@ Every historical raw-firehose checksum still matches. Final stopped profile pref
 exact-five, and the single cron record now truthfully records its last run as `ok`. This observation
 authorizes neither enablement nor a live-money path.
 
+Post-stop transcript inspection showed that the `get_book` arguments were valid registry token
+IDs; the catch-up run had started while `get_flags.live_book_tokens` was still empty, before the
+shared websocket books became usable. PR #26 therefore narrows the exact cron prompt: an empty
+fresh-book inventory ends the cycle, and Hermes may inspect only outcome tokens POL-17 advertises
+in that inventory. The intended RED and focused 27-case GREEN were observed; the complete suite is
+2,294 passing. This prompt-only correction adds no tool or runtime authority, and it was not used to
+manufacture another production run.
+
 ## Deployment boundary
 
 [`deploy/hermes/README.md`](../deploy/hermes/README.md) separates code/identity installation,
