@@ -541,9 +541,18 @@ Sterile validation as `polybot` passed and created no DB/runtime artifact; raw e
 verifies and both units remain inactive/disabled. Evidence is in
 [`VERIFICATION-POL13-STOPPED-CONFIG.md`](VERIFICATION-POL13-STOPPED-CONFIG.md).
 
-**Next work:** isolated Hermes profile creation is the next separately approved stopped gate.
-After that come owner-selected model/provider authentication, exact-five preflight, cron,
-first-start, and enablement gates, followed by the ≤2-week paper/shadow run. The shadow
+**UPDATE 2026-07-16 — POL-13 isolated Hermes profile created while stopped.** The dedicated
+`polybot-hermes` user created `polymarket` without clone, alias, or bundled skills. Its separate
+cron/memory/session/skills/workspace trees exist; cron and skills are empty; reviewed config/SOUL
+are byte-identical and mode 0600; model/provider remain `OWNER_CONFIG_REQUIRED`. Hermes generated a
+comment-only `.env` template with zero assignments; the reviewed no-credential contract required
+its removal, and it did not reappear. Existing root profile directories/static configs were
+unchanged. Both units remain inactive/disabled and no DB/runtime artifact was created. Evidence is
+in [`VERIFICATION-POL13-HERMES-PROFILE.md`](VERIFICATION-POL13-HERMES-PROFILE.md).
+
+**Next work:** owner-selected model/provider authentication is the next separately approved stopped
+gate. After that come exact-five preflight, cron, first-start, and enablement gates, followed by the
+≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
