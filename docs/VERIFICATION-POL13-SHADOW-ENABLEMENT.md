@@ -138,3 +138,47 @@ profile-local auth file must be removed without altering the native root auth st
 preflight must pass. The live observation must run beyond the 60-second keepalive boundary and
 prove that no profile-local auth file is recreated, in addition to the live-book, midpoint, memory,
 database, outbox, and raw-persistence gates above.
+
+## Corrected retry observation and second fail-closed stop
+
+PR #28 landed the auth-isolation bootstrap as merge `5302d92`. The stopped service checkout
+fast-forwarded to that merge. The recorded incident file was root-owned mode 0600, 4,854 bytes,
+born and modified at 15:19:48 UTC, inode 2366575, SHA-256
+`c624611d976ae730cceeddb3a3f63a232889dc47627617934b9fed80c9287f90`. Targeted cleanup removed
+only that profile-local file. The native root auth checksum was identical before and after
+(`50df4b431bb07151f2c09b043191e86258dbd4479dc8a48277343c8a744f829b`). Exact-five preflight,
+loaded shard 25, both units, seven databases, and historical raw-firehose checksums then passed.
+
+The approved retry began at 16:08:33 UTC. POL-17 satisfied usable-book readiness in about two
+seconds, reported `RUNNING`, and advertised 149 fresh book tokens before Hermes started. New
+60-second batches contained 170, 126, and 124 books; raw `clob-ws` rows remained zero. Hermes
+started at 16:09:20 after exact-five preflight. Its catch-up used `gpt-5.6-terra` through
+`openai-codex`, read `get_flags`, and created no proposal. The forbidden profile auth file remained
+absent beyond the prior 60-second leak boundary and after shutdown, proving the keepalive guard.
+
+The catch-up did not pass the useful-research gate. Two valid bounded `get_market` page requests
+failed closed. A stopped live Gamma probe reproduced the exact cause: the fixed snapshot had 100
+raw rows; row 96 raised `MarketMetadataUnavailable`, and `MarketReadView` aborted the entire page
+instead of isolating the unusable row. Ordered shutdown exposed a second bootstrap integration
+defect: the OS command line no longer looked like a Hermes gateway to its PID verifier, so
+`ExecStop` could not identify the target and place the planned-stop marker. Systemd sent SIGTERM,
+Hermes classified it as unexpected, and the unit ended `Result=exit-code` without restarting. No
+process survived. The stopped failure state was reset only after diagnosis; both units are now
+inactive, disabled, `Result=success`, and `NRestarts=0`.
+
+The observation remained economically inert: pending intents, fills, components, Maker/Shadow
+trades, shadow executions, both outboxes, assessments, terminals, and receipts are all zero.
+POL-17 peaked at 114,552,832 bytes and Hermes at 265,347,072 bytes; both recorded zero swap,
+`high`, `max`, `oom`, and `oom_kill`. All seven databases and every historical raw-firehose
+checksum pass after the stop.
+
+Strict TDD checkpoints `a391868` and `7a3b0b9` close the two defects. The bootstrap still executes
+with Hermes's Python, but its OS `argv[0]` and inert profile/gateway/run tokens now satisfy the
+pinned Hermes 0.18.2 runtime and profile identity checks, preserving marker-before-SIGTERM and
+exact PID/start-time wait. The market page skips only rows whose event identity or registry
+metadata is unavailable; an exact selector for that bad row raises `ReadViewUnavailable`, an exact
+healthy row still succeeds, and registry freshness plus Gamma normalization remain outside the
+isolation catch. A stopped probe returns 99 usable markets and the requested first 10. Closing
+focused results are 48 tests and the canonical suite passes 2,305 tests. An isolated 9/9 mutation
+battery kills loss of gateway identity/profile tokens, page-wide row failures, fail-open exact
+condition/token lookups, unrelated-row impact, and swallowed freshness/normalization failures.

@@ -662,6 +662,16 @@ unselected maintenance thread before launching the same native profile; 2,296 te
 suite to 2,297 tests. Independent re-review, landing, stopped cleanup of that
 generated duplicate, exact-five preflight, and the enablement retry remain required.
 
+PR #28 landed as `5302d92`; stopped cleanup preserved native root auth, exact-five passed, and the
+retry proved the auth guard plus live-book fix (149 advertised tokens; non-empty 170/126/124-book
+batches; zero raw/economic rows or memory pressure). It then failed closed because one
+metadata-unavailable Gamma row aborted every market page, and the bootstrap OS argv was not
+recognized by Hermes's planned-stop PID verifier. Both units are again inactive/disabled with no
+surviving process and healthy stores/evidence. Checkpoints `a391868`/`7a3b0b9` preserve supervised
+gateway identity and isolate only unusable page rows while exact bad lookups still fail closed.
+The 2,305-test suite and isolated 9/9 mutations pass; independent closing re-review, landing,
+stopped install, and another retry remain.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
