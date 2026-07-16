@@ -28,6 +28,11 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "Wants=polymarket-ingestion.service" not in text
     assert "ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock" in text
     assert "Restart=on-failure" in text
+    assert "MemoryAccounting=true" in text
+    assert "MemoryHigh=320M" in text
+    assert "MemoryMax=512M" in text
+    assert "MemorySwapMax=128M" in text
+    assert "OOMPolicy=stop" in text
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in text

@@ -25,6 +25,13 @@ ExecStart=/opt/polymarket-bot/.venv/bin/python -m polybot.runtime.shadow --confi
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=60
+# Protect co-resident projects. Reclaim Polymarket first above the soft limit and kill this cgroup,
+# never the wider host, at the hard limit. Bounded swap avoids turning memory pressure into disk I/O.
+MemoryAccounting=true
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=128M
+OOMPolicy=stop
 # Graceful shutdown: SIGTERM lets IngestionRuntime cancel the collectors and drain the off-loop
 # writer queue (the durability path) before exit. Give it room before SIGKILL.
 KillSignal=SIGTERM
