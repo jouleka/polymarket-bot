@@ -88,6 +88,10 @@ tags fail closed rather than creating calibration buckets.
 - Store the UTC epoch deadline; use one injected wall-clock reading per lookup.
 - `seconds_to_resolution = max(0, floor(end_epoch - now_epoch))`.
 - Past deadlines return zero. Missing, naive, or malformed deadlines are unavailable.
+- In a multi-market snapshot, an unavailable deadline quarantines only that market's condition and
+  both tokens. It cannot enter metadata or resolution-subject lookups, and the event deadline is
+  never substituted. If no market retains an authoritative deadline and category, construction
+  still fails loudly.
 - Never compare a Gamma wall-clock deadline with `MonotonicStamper` values.
 
 ### 3.4 Snapshot parsing and identity invariants
@@ -106,6 +110,8 @@ tags fail closed rather than creating calibration buckets.
 - Duplicate identical rows are idempotent.
 - A condition with conflicting definitions, a token reused by two conditions, or duplicate token
   siblings is a fatal snapshot-construction error.
+- Deadline quarantine does not weaken identity reconciliation: contradictions involving a
+  deadline-unavailable market remain fatal provider corruption.
 - An event with no reviewed category tag makes its markets unavailable; it never maps to
   `unknown` or an arbitrary raw category.
 - If no market is usable, construction fails loudly.
