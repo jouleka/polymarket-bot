@@ -111,6 +111,33 @@ The output must include the existing `openai-codex` credential. A model credenti
 wallet/trading key and must never be copied into POL-17 config, source, prompt, SOUL, skill, memory,
 or cron text.
 
+The 2026-07-16 failed enablement created one forbidden profile-local `auth.json` through Hermes's
+unselected Nous keepalive. This is a one-time incident cleanup, not a general instruction to delete
+an unexpected credential file. Only while both units are inactive and disabled, after confirming
+the file is the recorded root-owned, mode-0600 regular file and recording non-secret metadata plus
+its checksum, remove that generated copy. Do not read or print its contents, and do not touch the
+native root auth store:
+
+```sh
+test "$(systemctl is-active polymarket-ingestion.service)" = inactive
+test "$(systemctl is-active polymarket-hermes.service)" = inactive
+test "$(systemctl is-enabled polymarket-ingestion.service)" = disabled
+test "$(systemctl is-enabled polymarket-hermes.service)" = disabled
+test -f /root/.hermes/profiles/polymarket/auth.json
+test ! -L /root/.hermes/profiles/polymarket/auth.json
+test "$(stat -c '%U:%G %a' /root/.hermes/profiles/polymarket/auth.json)" = "root:root 600"
+stat -c 'size=%s birth=%w modify=%y inode=%i' \
+  /root/.hermes/profiles/polymarket/auth.json
+sha256sum /root/.hermes/profiles/polymarket/auth.json
+unlink -- /root/.hermes/profiles/polymarket/auth.json
+test ! -e /root/.hermes/profiles/polymarket/auth.json
+test -f /root/.hermes/auth.json
+```
+
+If any identity check differs, stop for owner review instead of deleting it. The bootstrap guard
+below must be installed before this cleanup, so the same unselected maintenance path cannot simply
+recreate the file on retry.
+
 ## 4. Exact effective-inventory preflight while stopped
 
 The preflight runs in the pinned Hermes 0.18.2 environment, starts only the local stdio MCP bridge
@@ -136,6 +163,14 @@ the effective gateway inventory must contain zero enabled adapters, and
 launcher scrubs inherited authority variables and its sandbox hides root/project/managed Hermes
 config and environment files while retaining only the native root provider `auth.json`. Do not
 bypass the launcher or remove the service's identical `ExecStartPre`.
+
+The reviewed launcher enters `polybot.hermes.profile_bootstrap` before importing Hermes. Hermes
+0.18.2 otherwise starts an unselected global Nous credential keepalive after 60 seconds and can
+copy that provider into the named profile even when `openai-codex` is selected. The bootstrap
+disables only that maintenance starter; removing or bypassing it is an auth-isolation failure. The
+profile-local `auth.json`, `.env`, and `.op.env` must remain absent before start and after every live
+observation. A run that reaches the 60-second boundary and creates any of them fails closed: stop
+and disable both units, preserve non-secret metadata as evidence, and do not relax preflight.
 
 ## 5. Cron creation while the gateway remains stopped
 

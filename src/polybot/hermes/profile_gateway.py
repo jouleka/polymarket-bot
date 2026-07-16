@@ -8,7 +8,8 @@ from pathlib import Path
 
 
 _PROFILE_HOME = Path("/root/.hermes/profiles/polymarket")
-_HERMES = "/usr/local/lib/hermes-agent/venv/bin/hermes"
+_HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
+_BOOTSTRAP_MODULE = "polybot.hermes.profile_bootstrap"
 _PASSTHROUGH_ENV = frozenset({
     "CURL_CA_BUNDLE", "HTTPS_PROXY", "HTTP_PROXY", "INVOCATION_ID",
     "JOURNAL_STREAM", "LANG", "LC_ALL", "LC_CTYPE", "NO_PROXY", "PATH",
@@ -27,17 +28,24 @@ def build_gateway_environment(source):
         "HOME": "/root",
         "HERMES_HOME": str(_PROFILE_HOME),
         "HERMES_KANBAN_DISPATCH_IN_GATEWAY": "0",
+        "PYTHONPATH": "/opt/polymarket-bot/src",
         "PYTHONDONTWRITEBYTECODE": "1",
     })
     return env
+
+
+def build_gateway_command():
+    return _HERMES_PYTHON, [
+        _HERMES_PYTHON, "-m", _BOOTSTRAP_MODULE,
+    ]
 
 
 def launch_installed_profile(profile_home: str | Path) -> None:
     home = Path(profile_home)
     if home != _PROFILE_HOME or not (home / "config.yaml").is_file():
         raise RuntimeError("Hermes profile path is not the reviewed isolated path")
-    argv = [_HERMES, "--profile", "polymarket", "gateway", "run", "--replace"]
-    os.execve(_HERMES, argv, build_gateway_environment(os.environ))
+    executable, argv = build_gateway_command()
+    os.execve(executable, argv, build_gateway_environment(os.environ))
 
 
 def main(argv=None) -> int:
