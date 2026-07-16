@@ -288,9 +288,13 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     keepalive.start_nous_auth_keepalive = lambda: calls.append("unsafe-nous")
     hermes_main = types.ModuleType("hermes_cli.main")
 
+    monkeypatch.setattr(
+        sys, "executable", "/usr/local/lib/hermes-agent/venv/bin/hermes",
+    )
+
     def run_hermes():
         keepalive.start_nous_auth_keepalive()
-        calls.append(("hermes", tuple(sys.argv)))
+        calls.append(("hermes", sys.executable, tuple(sys.argv)))
         return 0
 
     hermes_main.main = run_hermes
@@ -307,6 +311,7 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     assert main() == 0
     assert calls == [(
         "hermes",
+        "/usr/local/lib/hermes-agent/venv/bin/python",
         (
             "/usr/local/lib/hermes-agent/venv/bin/hermes",
             "--profile", "polymarket", "gateway", "run", "--replace",

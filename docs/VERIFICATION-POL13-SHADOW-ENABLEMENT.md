@@ -182,3 +182,34 @@ isolation catch. A stopped probe returns 99 usable markets and the requested fir
 focused results are 48 tests and the canonical suite passes 2,305 tests. An isolated 10/10 mutation
 battery kills loss of gateway identity/profile tokens, page-wide row failures, fail-open exact
 condition/token lookups, unrelated-row impact, and swallowed freshness/normalization failures.
+
+## PR #29 retry and interpreter-identity fail-closed stop
+
+PR #29 landed the row-isolation and supervised-command fixes as merge `e926e76`. Both service
+units were inactive and disabled while the service checkout fast-forwarded and the idempotent
+installer ran. Exact-five inventory, absence of profile-local auth/env files, all seven database
+integrity checks, the historical raw-firehose manifest, loaded shard size 25, approved provider
+IDs, file modes, systemd verification, and the bounded cgroup settings passed before activation.
+
+The approved retry started POL-17 at 16:32:03 UTC. It reached `controller=RUNNING`, reported a
+fresh registry and 110 live-book tokens, served a bounded market page, and held about 86 MiB with
+zero swap or memory pressure. Hermes started at 16:33:08 and passed exact-five preflight. Its OS
+command line now retained the native `hermes --profile polymarket gateway run --replace` identity,
+but every MCP watchdog launch failed: using the Hermes CLI script as CPython `argv[0]` also made
+`sys.executable` name that script, so Hermes tried to parse `mcp_stdio_watchdog.py` as a CLI
+subcommand. Zero tools registered, the `gpt-5.6-terra`/`openai-codex` catch-up returned SILENT,
+and no proposal or economic row could be created.
+
+The retry stopped fail closed. Hermes's planned stop completed successfully with no restart or
+surviving process; POL-17 then stopped, and both units were disabled. Hermes peaked at 214.5 MiB
+with zero swap, `high`, `max`, `oom`, or `oom_kill`; no forbidden profile-local auth file appeared.
+Strict-TDD checkpoint `3265cf9` restores only the pinned Hermes Python path in `sys.executable`
+inside the bootstrap before importing Hermes, while retaining the native OS argv needed by the
+planned-stop verifier. The exact regression observed RED then GREEN, 78 focused tests and all
+2,305 canonical tests pass, and an installed-interpreter probe under the misleading native argv
+reports the pinned Python executable, exact gateway argv, and suppressed auth keepalive. An
+isolated 3/3 mutation battery kills removal, contaminated-argv derivation, and substitution of the
+POL-17 Python environment. Independent specification and security reviews pass with no findings;
+the security review additionally verifies the interpreter ownership chain, installed watchdog and
+child-spawn behavior, unchanged `/proc` identity, auth suppression, and fail-closed missing-path
+behavior. Landing, stopped install, and retry remain.

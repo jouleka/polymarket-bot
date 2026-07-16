@@ -672,6 +672,16 @@ gateway identity and isolate only unusable page rows while exact bad lookups sti
 The 2,305-test suite and isolated 10/10 mutations pass; independent closing re-review, landing,
 stopped install, and another retry remain.
 
+PR #29 landed those fixes as `e926e76`. The next approved retry proved POL-17 ready with 110 live
+tokens and the native Hermes command identity, then failed closed before any proposal because that
+argv identity also changed CPython's `sys.executable`; Hermes consequently invoked its MCP Python
+watchdog through the CLI script and registered zero tools. Planned Hermes shutdown is now clean.
+Both units are inactive/disabled with zero restarts, pressure, swap, surviving processes, profile
+auth recreation, or economic activity. Strict-TDD checkpoint `3265cf9` restores the pinned Hermes
+Python only for child-helper launches while preserving supervised OS identity. The installed probe,
+2,305-test suite, 78 focused cases, isolated 3/3 mutations, and independent specification/security
+reviews pass with no findings. Landing, stopped install, and another retry remain.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
