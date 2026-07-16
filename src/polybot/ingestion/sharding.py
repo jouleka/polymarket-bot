@@ -47,7 +47,7 @@ class ShardedMarketCollector:
         asset_ids,
         *,
         sink=None,
-        max_assets_per_shard=500,
+        max_assets_per_shard=25,
         detector=None,
         synthetic_sink=None,
         **socket_kwargs,
