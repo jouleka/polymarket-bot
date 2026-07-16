@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-15)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-16)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -589,6 +589,23 @@ cron, and model-visible five-tool inventories. Because the gateway remains stopp
 executed and no proposal was manufactured. Both services remain inactive/disabled with memory caps
 intact and no runtime artifacts. Evidence is in
 [`VERIFICATION-POL13-HERMES-CRON.md`](VERIFICATION-POL13-HERMES-CRON.md).
+
+**UPDATE 2026-07-16 — POL-17 first-start Gamma defect reproduced and corrected; services stopped.**
+The approved non-enabled first start reached readiness, then halted because its first registry
+cycle received only Gamma's default 20 rows for a frozen 100-market filtered query. An explicit
+bulk limit corrected that truncation; live replay then proved Gamma can still purely omit one
+requested active condition (99/100) without changing or adding any returned identity. Checkpoints
+`a556d65`, `8bc7a47`, `ef16a66`, `daf7df6`, and `8e8e677` now request the complete frozen market/event
+sets, retain the last coherent registry under its existing TTL only for a strict-subset response
+whose returned market and event token identities all match, perform that check before candidate
+metadata construction, never renew the TTL from an incomplete response, and reject non-list token
+containers before fallback. Expansion or any token contradiction remains fatal. The suite passes
+2,285 tests and the isolated 9/9 mutation
+gate has zero survivors. Both services are stopped and disabled, Hermes has
+never started, and all seven created paper databases plus the prior raw evidence are preserved.
+Final independent re-review passes exact PR head `f879e63`; executable candidate `8e8e677` still
+requires PR merge, stopped installation, and a fresh first-start observation before the gate can
+pass.
 
 **Next work:** POL-17 first start without enablement is the next explicit gate. After its readiness,
 compact-persistence, provider, recovery, and memory observation passes, POL-18 first start and later

@@ -1,7 +1,8 @@
 # POL-17 ERS + harness runtime verification evidence
 
-Status: landed on `main`; independent specification/security review passed; no installation,
-database migration, service start/enable, or deployment authorized or performed
+Status: landed on `main`; independent specification/security review passed; the original delivery
+was build-only. POL-13 later installed it and ran separately approved non-enabled first-start
+attempts; both services are currently stopped and disabled, with every created database preserved.
 
 Base: `22c0a21af5d8965311745237c3abf6175fd291b8`
 
@@ -30,9 +31,10 @@ The owner approved the architecture and implementation after reviewing
 followed [`PLAN-POL17-ERS-HARNESS-RUNTIME.md`](PLAN-POL17-ERS-HARNESS-RUNTIME.md) from baseline
 2,121 tests.
 
-Publication and merge were separately authorized after the reviewed build. Installation while
-stopped and activation remain independent future gates. The VPS service remains inactive and disabled. Existing raw-firehose
-evidence and the compact production database were not touched.
+Publication and merge were separately authorized after the reviewed build. At that landing,
+installation while stopped and activation remained independent future gates, and neither had
+occurred. The later POL-13 operations are recorded in the dated appendix below; raw-firehose
+evidence remains preserved.
 
 ## Implemented runtime contract
 
@@ -213,3 +215,44 @@ systemd state, and VPS configuration were not changed by POL-17 development.
 
 This document is evidence, not operational authorization. The owner authorized PR #7 and its
 merge only. Do not install, migrate, start, enable, or deploy without approval for that exact action.
+
+## 2026-07-16 first-start Gamma reconciliation
+
+The separately approved, non-enabled first-start gate exposed a live Gamma pagination behavior
+that the hermetic adapter had not pinned. Startup selected 100 fixed markets, but the immediately
+following filtered `/markets?condition_ids=...` refresh returned the endpoint's default 20 rows
+because the request omitted `limit`. After adding the exact frozen-set limit, a live replay returned
+99/100: Gamma omitted one requested, still-active esports condition even when queried alone. No
+returned condition changed token identity and no extra condition appeared.
+
+Five serial RED/GREEN checkpoints close that operational gap without weakening fixed-universe
+authority:
+
+- `a556d65` requires exact market and event limits on filtered bulk requests;
+- `8bc7a47` classifies only a strict-subset response whose returned token identities all still match
+  as `RegistryRefreshUnavailable`, retaining the prior coherent generation under the existing TTL;
+- `ef16a66` performs that completeness/identity decision before candidate metadata construction, so
+  quarantined metadata in the partial response cannot preempt last-good retention;
+- `daf7df6` closes independent-review findings by validating returned event token identity before
+  omission fallback and pinning that incomplete responses never renew the last-good age budget;
+- `8e8e677` closes the subsequent re-review finding with one shared strict list-only token parser,
+  preventing malformed market or event objects from masquerading as a two-token identity.
+
+Expansion, replacement, duplicate/malformed identity, and omission combined with a token change
+remain fatal `MarketSnapshotError` paths. The focused suites pass 17 tests; the complete suite passes
+2,285 tests on tmpfs. An isolated 9/9 mutation battery killed removal of the market limit, removal
+of the event limit, re-fatalizing a pure omission, masking a token contradiction as an omission,
+constructing quarantined candidate metadata before detecting the omission, skipping event-identity
+validation, renewing the last-good TTL on an incomplete response, and accepting malformed token
+containers on either the market or event side.
+
+The first independent specification/security review rejected the draft because omission fallback
+ran before cross-snapshot event-token validation, and because TTL non-renewal lacked a regression
+pin. Both findings were reproduced, fixed through the RED/GREEN checkpoint above, and mutation-
+verified. The next re-review confirmed those closures but found the iterable-container parser gap;
+that finding was likewise reproduced, fixed, and killed by separate market/event mutations.
+The final independent closing review passed exact PR head `f879e63`: all three findings remain
+closed, 38 focused registry/runtime/whole-slice tests pass, and no signing, authority, lifecycle,
+or documentation regression was found. The independently reviewed executable head is `8e8e677`.
+Both production services remained stopped and disabled throughout diagnosis and verification;
+Hermes was never started, and no database or raw evidence was deleted or reset.

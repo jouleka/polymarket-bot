@@ -60,28 +60,40 @@ def test_gamma_snapshot_fetcher_freezes_selected_condition_ids_on_refresh():
             if path == "/markets" and "condition_ids" not in params:
                 return Response([low, high])
             if path == "/markets":
-                assert params["condition_ids"] == ("c-high",)
-                return Response([{**high, "question": "Updated"}])
+                assert params["condition_ids"] == ("c-low", "c-high")
+                assert params["limit"] == 2
+                return Response([low, {**high, "question": "Updated"}])
             assert path == "/events"
-            return Response([{
-                "id": "11",
-                "tags": [{"id": "2"}],
-                "markets": [{
-                    "conditionId": "c-high",
-                    "clobTokenIds": json.dumps(["t1", "t2"]),
-                }],
-            }])
+            assert params["limit"] == 2
+            return Response([
+                {
+                    "id": "11",
+                    "tags": [{"id": "2"}],
+                    "markets": [{
+                        "conditionId": "c-high",
+                        "clobTokenIds": json.dumps(["t1", "t2"]),
+                    }],
+                },
+                {
+                    "id": "12",
+                    "tags": [{"id": "2"}],
+                    "markets": [{
+                        "conditionId": "c-low",
+                        "clobTokenIds": json.dumps(["t3", "t4"]),
+                    }],
+                },
+            ])
 
     fetch = make_gamma_snapshot_fetch(
-        IngestionConfig(db_path="/tmp/events.db", universe_max_markets=1),
+        IngestionConfig(db_path="/tmp/events.db", universe_max_markets=2),
         client=Client(),
     )
 
     first = fetch()
     second = fetch()
 
-    assert [row["conditionId"] for row in first[0]] == ["c-high"]
-    assert second[0][0]["question"] == "Updated"
+    assert [row["conditionId"] for row in first[0]] == ["c-low", "c-high"]
+    assert second[0][1]["question"] == "Updated"
     assert [call[0] for call in calls] == [
         "/markets", "/events", "/markets", "/events",
     ]

@@ -5,7 +5,10 @@ import json
 import pytest
 
 from polybot.ers.market_meta import MarketSnapshotError
-from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
+from polybot.runtime.registry_provider import (
+    FixedUniverseRegistryProvider,
+    RegistryRefreshUnavailable,
+)
 
 
 def _market(condition_id="c1", tokens=("t1", "t2"), event_id="e1", question="Will X?"):
@@ -56,6 +59,149 @@ def test_registry_refresh_cannot_expand_the_collector_universe():
     assert provider.registry is first
     assert provider.condition_ids == frozenset({"c1"})
     assert provider.token_ids == ("t1", "t2")
+
+
+def test_registry_refresh_retains_last_good_generation_when_gamma_omits_a_market():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market(question="Updated question")], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+
+    first = provider.load()
+
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    assert provider.registry is first
+    assert provider.condition_ids == frozenset({"c1", "c2"})
+    assert provider.market_rows[0]["question"] == "Will X?"
+
+
+def test_registry_omission_is_detected_before_candidate_metadata_quarantine():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([{**_market(), "endDate": None}], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    first = provider.load()
+
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    assert provider.registry is first
+
+
+def test_registry_refresh_does_not_mask_token_contradiction_as_an_omission():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market(tokens=("changed-1", "changed-2"))], [
+            _event(tokens=("changed-1", "changed-2")),
+        ]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="changed"):
+        provider.refresh()
+
+
+def test_registry_omission_does_not_mask_event_token_contradiction():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market()], [_event(tokens=("changed-1", "changed-2"))]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="token identity conflict"):
+        provider.refresh()
+
+
+@pytest.mark.parametrize("malformed_side", ["market", "event"])
+def test_registry_omission_does_not_mask_malformed_token_container(malformed_side):
+    malformed = {"t1": 0, "t2": 0}
+    refresh_market = _market()
+    refresh_event = _event()
+    if malformed_side == "market":
+        refresh_market["clobTokenIds"] = malformed
+    else:
+        refresh_event["markets"][0]["clobTokenIds"] = malformed
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([refresh_market], [refresh_event]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="malformed"):
+        provider.refresh()
+
+
+def test_incomplete_refresh_does_not_renew_last_good_age_budget():
+    age = [100.0]
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market()], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: age[0],
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    age[0] = 500.0
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    age[0] = 1000.1
+    with pytest.raises(MarketSnapshotError, match="stale"):
+        provider.require_fresh()
 
 
 def test_registry_refresh_replaces_market_rows_for_read_only_consumers():

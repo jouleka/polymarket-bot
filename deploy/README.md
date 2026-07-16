@@ -16,13 +16,11 @@ The code release gate passed on 2026-07-10: 1,800.006 seconds, 5,586,944 total D
 `{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes, zero raw rows, all batches decoded, no HALT,
 graceful close, 0.249755 GiB/day, exit 0. Independent spec review passed and the mutation battery killed 41/41.
 
-The VPS service remains **STOPPED + DISABLED**. POL-17 is a reviewed-build candidate only. Do not
-install, start, enable, or restart it until:
-
-1. the feature branch is approved and merged;
-2. push and deployment are separately approved; and
-3. installation is separately approved; and
-4. activation is separately approved after the stopped configuration gate below passes.
+The VPS service is installed and remains **STOPPED + DISABLED**. Separately approved first-start
+attempts created the seven paper databases, then exposed and stopped on Gamma refresh defects; all
+files are preserved. Do not restart until the reviewed pagination/omission correction is merged and
+installed from the GitHub-linked service checkout. First start does not authorize enablement or a
+Hermes start; those remain separate gates.
 
 The old raw-firehose evidence is already preserved. Never move, overwrite, rechown recursively, or
 delete it. The current compact production `market_memory.db` must also remain byte-preserved until
@@ -203,8 +201,9 @@ systemctl is-enabled polymarket-ingestion.service   # disabled
 systemctl is-active polymarket-ingestion.service    # inactive
 ```
 
-Confirm the six new DB files still do not exist after this validation. `install.sh` is idempotent
-and must not start or enable the unit.
+Before the first start, this validation created no database. After any start attempt, preserve all
+seven paper databases and verify the validation does not mutate or replace them. `install.sh` is
+idempotent and must not start or enable the unit.
 
 ## Start/enable — separate explicit approval required
 
