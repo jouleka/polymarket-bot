@@ -180,6 +180,101 @@ def test_root_composes_propose_only_server_without_a_second_store_or_collector(t
         runtime.close_unstarted()
 
 
+def test_root_advertises_only_live_books_with_current_registry_authority(tmp_path):
+    initial_markets, initial_events = _snapshot()
+    second_market = {
+        **initial_markets[0],
+        "conditionId": "0x" + "22" * 32,
+        "clobTokenIds": json.dumps(["303", "404"]),
+        "events": [{"id": "event-2"}],
+    }
+    second_event = {
+        **initial_events[0],
+        "id": "event-2",
+        "markets": [{
+            "conditionId": second_market["conditionId"],
+            "clobTokenIds": second_market["clobTokenIds"],
+        }],
+    }
+    quarantined_market = {**second_market, "endDate": None}
+    snapshots = iter([
+        (initial_markets + [second_market], initial_events + [second_event]),
+        (initial_markets, initial_events),
+        (initial_markets + [quarantined_market], initial_events + [second_event]),
+        (initial_markets + [second_market], initial_events + [second_event]),
+    ])
+    config = replace(
+        _config(tmp_path),
+        proposal_socket_path=str(tmp_path / "proposal.sock"),
+        proposal_socket_group="polybot-proposal",
+    )
+    runtime = build_shadow_runtime(
+        config,
+        gamma_snapshot_fetch=lambda: next(snapshots),
+        resolution_providers=(
+            SimpleNamespace(provider_id="a"),
+            SimpleNamespace(provider_id="b"),
+        ),
+        ws_connect=object(),
+        data_fetch=object(),
+        history_stamper=MonotonicStamper(clock=lambda: time.time_ns()),
+        health_stamper=MonotonicStamper(clock=lambda: time.monotonic_ns()),
+        news_fetch=lambda _url: None,
+        lock=SimpleNamespace(acquire=lambda: None, release=lambda: None),
+        readiness=SimpleNamespace(ready=lambda: None, stopping=lambda: None),
+        proposal_socket_group_gid=1234,
+    )
+    try:
+        for token_id in ("101", "303"):
+            runtime._collector._stream_by_asset[token_id].ingest({
+                "event_type": "book",
+                "asset_id": token_id,
+                "bids": [{"price": "0.49", "size": "10"}],
+                "asks": [{"price": "0.51", "size": "10"}],
+            })
+        runtime._registry_provider.refresh()
+
+        assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101"]
+        assert runtime._proposal_facade.get_market(token_id="303")["total"] == 0
+        with pytest.raises(LookupError, match="unavailable|stale"):
+            runtime._proposal_facade.get_book(token_id="303")
+
+        runtime._registry_provider.refresh()
+        assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101"]
+        with pytest.raises(LookupError, match="metadata is unavailable"):
+            runtime._proposal_facade.get_market(token_id="303")
+        with pytest.raises(LookupError, match="unavailable|stale"):
+            runtime._proposal_facade.get_book(token_id="303")
+
+        runtime._registry_provider.refresh()
+        assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101", "303"]
+        assert runtime._proposal_facade.get_market(token_id="303")["total"] == 1
+        assert runtime._proposal_facade.get_book(token_id="303")["token_id"] == "303"
+    finally:
+        runtime.close_unstarted()
+
+
+def test_hermes_book_authority_uses_one_immutable_registry_generation():
+    class Book:
+        def is_stale(self):
+            return False
+
+        def midpoint(self):
+            return object()
+
+    current = SimpleNamespace(available_token_ids=("101",))
+    provider = SimpleNamespace(
+        require_fresh=lambda: current,
+        # Simulates the old separately published token cache during refresh.
+        available_token_ids=("101", "303"),
+    )
+    ingestion = SimpleNamespace(book_for=lambda _token_id: Book())
+
+    assert shadow_root._live_book_tokens(provider, ingestion) == ("101",)
+    assert shadow_root._current_registry_book_for(provider, ingestion, "101") is not None
+    assert shadow_root._current_registry_book_for(provider, ingestion, "303") is None
+
+
 def test_root_construction_unwinds_writer_and_executor_on_component_failure(
         tmp_path, monkeypatch):
     trace = []
