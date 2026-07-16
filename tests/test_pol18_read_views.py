@@ -99,6 +99,8 @@ def test_market_reader_page_isolates_one_row_without_registry_metadata():
 
     assert result["total"] == 1
     assert [row["condition_id"] for row in result["markets"]] == [condition_id]
+    exact = MarketReadView(provider)(condition_id=condition_id)
+    assert [row["condition_id"] for row in exact["markets"]] == [condition_id]
     with pytest.raises(
             ReadViewUnavailable, match="registry metadata is unavailable"):
         MarketReadView(provider)(condition_id=malformed["conditionId"])
