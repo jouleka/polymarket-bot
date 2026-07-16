@@ -1,7 +1,9 @@
 Run one bounded paper-market research cycle.
 
 1. Read `get_flags`. Stop without proposing unless the runtime and registry are ready.
-2. Read a bounded market page, then inspect current live books and relevant resolved history.
+   If `live_book_tokens` is empty, stop without proposing.
+2. Read a bounded market page. Inspect a book only when that outcome's
+   token_id is present in `live_book_tokens`, then read relevant resolved history.
 3. At most one proposal may be emitted in this run. Propose only when the market identity, live
    book, probability thesis, price limits, and citations are internally consistent.
 4. Every decimal argument must be a JSON string. Use `BUY` only. Suggestions remain untrusted and
