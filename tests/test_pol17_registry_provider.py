@@ -150,6 +150,34 @@ def test_registry_omission_does_not_mask_event_token_contradiction():
         provider.refresh()
 
 
+@pytest.mark.parametrize("malformed_side", ["market", "event"])
+def test_registry_omission_does_not_mask_malformed_token_container(malformed_side):
+    malformed = {"t1": 0, "t2": 0}
+    refresh_market = _market()
+    refresh_event = _event()
+    if malformed_side == "market":
+        refresh_market["clobTokenIds"] = malformed
+    else:
+        refresh_event["markets"][0]["clobTokenIds"] = malformed
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([refresh_market], [refresh_event]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="malformed"):
+        provider.refresh()
+
+
 def test_incomplete_refresh_does_not_renew_last_good_age_budget():
     age = [100.0]
     snapshots = iter([
