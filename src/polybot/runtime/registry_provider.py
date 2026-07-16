@@ -125,7 +125,9 @@ class FixedUniverseRegistryProvider:
     def _replace(self, *, initial):
         market_rows, event_rows = self._fetch_snapshot()
         identity, token_ids = _snapshot_identity(market_rows)
-        _assert_event_token_identity(event_rows, identity)
+        _assert_event_token_identity(
+            event_rows, identity if initial else self._identity
+        )
         if not initial and identity != self._identity:
             if (not set(identity) < set(self._identity)
                     or any(identity[key] != self._identity[key] for key in identity)):

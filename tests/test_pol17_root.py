@@ -196,9 +196,12 @@ def test_root_advertises_only_live_books_with_current_registry_authority(tmp_pat
             "clobTokenIds": second_market["clobTokenIds"],
         }],
     }
+    quarantined_market = {**second_market, "endDate": None}
     snapshots = iter([
         (initial_markets + [second_market], initial_events + [second_event]),
         (initial_markets, initial_events),
+        (initial_markets + [quarantined_market], initial_events + [second_event]),
+        (initial_markets + [second_market], initial_events + [second_event]),
     ])
     config = replace(
         _config(tmp_path),
@@ -232,6 +235,21 @@ def test_root_advertises_only_live_books_with_current_registry_authority(tmp_pat
         runtime._registry_provider.refresh()
 
         assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101"]
+        assert runtime._proposal_facade.get_market(token_id="303")["total"] == 0
+        with pytest.raises(LookupError, match="unavailable|stale"):
+            runtime._proposal_facade.get_book(token_id="303")
+
+        runtime._registry_provider.refresh()
+        assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101"]
+        with pytest.raises(LookupError, match="metadata is unavailable"):
+            runtime._proposal_facade.get_market(token_id="303")
+        with pytest.raises(LookupError, match="unavailable|stale"):
+            runtime._proposal_facade.get_book(token_id="303")
+
+        runtime._registry_provider.refresh()
+        assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101", "303"]
+        assert runtime._proposal_facade.get_market(token_id="303")["total"] == 1
+        assert runtime._proposal_facade.get_book(token_id="303")["token_id"] == "303"
     finally:
         runtime.close_unstarted()
 
