@@ -463,6 +463,11 @@ class MarketRegistry:
     def __len__(self):
         return len(self._by_condition)
 
+    @property
+    def available_token_ids(self):
+        """Tokens whose current metadata is complete enough for public lookup."""
+        return tuple(self._by_token)
+
     def _definition_for(self, intent):
         """Resolve one intent only after condition, token, and event identity agree."""
         condition_id = getattr(intent, "condition_id", None)

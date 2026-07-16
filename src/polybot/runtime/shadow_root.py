@@ -150,7 +150,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
 
     def live_book_tokens():
         available = []
-        for token_id in ingestion.token_ids:
+        for token_id in registry_provider.available_token_ids:
             book = ingestion.book_for(token_id)
             if (book is not None and not book.is_stale()
                     and book.midpoint() is not None):
