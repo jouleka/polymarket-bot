@@ -130,6 +130,52 @@ def test_registry_refresh_does_not_mask_token_contradiction_as_an_omission():
         provider.refresh()
 
 
+def test_registry_omission_does_not_mask_event_token_contradiction():
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market()], [_event(tokens=("changed-1", "changed-2"))]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: 10.0,
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    with pytest.raises(MarketSnapshotError, match="token identity conflict"):
+        provider.refresh()
+
+
+def test_incomplete_refresh_does_not_renew_last_good_age_budget():
+    age = [100.0]
+    snapshots = iter([
+        (
+            [_market(), _market("c2", ("t3", "t4"), "e2")],
+            [_event(), _event("e2", "c2", ("t3", "t4"), "21")],
+        ),
+        ([_market()], [_event()]),
+    ])
+    provider = FixedUniverseRegistryProvider(
+        fetch_snapshot=lambda: next(snapshots),
+        wall_clock=lambda: 1_700_000_000,
+        age_clock=lambda: age[0],
+        max_age_seconds=900.0,
+    )
+    provider.load()
+
+    age[0] = 500.0
+    with pytest.raises(RegistryRefreshUnavailable, match="incomplete"):
+        provider.refresh()
+
+    age[0] = 1000.1
+    with pytest.raises(MarketSnapshotError, match="stale"):
+        provider.require_fresh()
+
+
 def test_registry_refresh_replaces_market_rows_for_read_only_consumers():
     snapshots = iter([
         ([_market(question="Initial question")], [_event()]),
