@@ -103,3 +103,19 @@ remained empty, and the native root auth checksum remained
 YouTrack POL-13 remains `In Progress`; landed/restart evidence is comment `7-342`. Continued
 bounded paper/shadow observation is required. This installation grants no signer, wallet, order,
 cancellation, redemption, chain-write, or live-money authority.
+
+The time-based acceptance gate subsequently passed. Scheduled Gamma market/event refreshes at
+18:46:13, 18:51:13, and 18:56:14 UTC all returned HTTP 200; the third refresh crossed the previous
+900-second deterministic registry-stale boundary while preserving the original 18:41:10 POL-17
+invocation. Both units remained active and enabled with `Result=success`, `NRestarts=0`, zero swap,
+and zero cgroup pressure/OOM events. At 18:57 UTC POL-17 used 167,358,464 bytes current and
+167,890,944 bytes peak memory; Hermes used 266,788,864 bytes current and 269,582,336 bytes peak,
+within their unchanged caps.
+
+Runtime status remained `RUNNING` with `registry_error=null`, zero pending intents, zero resolution
+or execution outbox rows, and no news failures. All seven databases still returned
+`integrity_check=ok`; raw `clob-ws` persistence remained zero; every proposal, economic, forecast,
+component, Maker, Shadow, execution, resolution, terminal, receipt, and outbox table remained
+empty apart from 17 expected operational-audit rows. The latest midpoint persistence contained
+144 books and the full deduplicated trade tape remained active. YouTrack evidence is comment
+`7-343`. POL-13 remains `In Progress` for the bounded paper/shadow observation period.
