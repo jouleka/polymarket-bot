@@ -607,9 +607,17 @@ Final independent re-review passes exact PR head `f879e63`; executable candidate
 requires PR merge, stopped installation, and a fresh first-start observation before the gate can
 pass.
 
-**Next work:** POL-17 first start without enablement is the next explicit gate. After its readiness,
-compact-persistence, provider, recovery, and memory observation passes, POL-18 first start and later
-enablement remain separate gates, followed by the
+**UPDATE 2026-07-16 — POL-17 first-start gate PASS; runtime stopped after observation.** GitHub and
+the service checkout are at merge `790ff76`. POL-17 ran from `13:58:19` to `14:01:43` UTC with zero
+restarts/warnings/errors, both Polygon preflights successful, three 60-second midpoint batches, a
+1,000-row deduplicated trade tape, zero raw `clob-ws` rows, zero proposals/outboxes/executions, and
+all seven databases healthy. Peak memory was 107,700,224 bytes with zero swap, pressure, or OOM
+events. It then stopped gracefully; both services are inactive/dead/disabled and Hermes has never
+started. Raw-firehose checksums still pass. Exact evidence is in
+[`VERIFICATION-POL13-FIRST-START.md`](VERIFICATION-POL13-FIRST-START.md).
+
+**Next work:** POL-18/Hermes first start is the next separate explicit gate and requires POL-17 to
+be running without enablement. Later enablement remains separate, followed by the
 ≤2-week local shadow-simulation run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.

@@ -16,10 +16,10 @@ The code release gate passed on 2026-07-10: 1,800.006 seconds, 5,586,944 total D
 `{"clob-midpoint":29,"data-api":3500}`, 1,800 usable quotes, zero raw rows, all batches decoded, no HALT,
 graceful close, 0.249755 GiB/day, exit 0. Independent spec review passed and the mutation battery killed 41/41.
 
-The VPS service is installed and remains **STOPPED + DISABLED**. Separately approved first-start
-attempts created the seven paper databases, then exposed and stopped on Gamma refresh defects; all
-files are preserved. Do not restart until the reviewed pagination/omission correction is merged and
-installed from the GitHub-linked service checkout. First start does not authorize enablement or a
+The VPS service is installed and remains **STOPPED + DISABLED**. The separately approved first-start
+gate passed on 2026-07-16 after three midpoint intervals, then POL-17 stopped gracefully. Exact
+evidence is in [`../docs/VERIFICATION-POL13-FIRST-START.md`](../docs/VERIFICATION-POL13-FIRST-START.md).
+All seven paper databases are preserved. First-start success does not authorize enablement or a
 Hermes start; those remain separate gates.
 
 The old raw-firehose evidence is already preserved. Never move, overwrite, rechown recursively, or
