@@ -106,6 +106,64 @@ def test_market_reader_page_isolates_one_row_without_registry_metadata():
         MarketReadView(provider)(condition_id=malformed["conditionId"])
 
 
+@pytest.mark.parametrize("event_links", [
+    None,
+    [],
+    [{"id": "9"}, {"id": "10"}],
+    ["not-an-event"],
+    [{}],
+])
+def test_market_reader_isolates_missing_event_identity_but_exact_fails(
+        event_links):
+    from polybot.hermes.read_views import MarketReadView, ReadViewUnavailable
+
+    provider, condition_id = _registry_provider()
+    malformed = dict(provider.market_rows[0])
+    malformed.update({
+        "conditionId": "0x" + "cd" * 32,
+        "clobTokenIds": json.dumps(["33", "44"]),
+        "events": event_links,
+    })
+    provider._market_rows = (malformed, *provider.market_rows)
+    reader = MarketReadView(provider)
+
+    page = reader(offset=0, limit=25)
+    assert [row["condition_id"] for row in page["markets"]] == [condition_id]
+    with pytest.raises(ReadViewUnavailable, match="event identity is unavailable"):
+        reader(condition_id=malformed["conditionId"])
+    with pytest.raises(ReadViewUnavailable, match="event identity is unavailable"):
+        reader(token_id="33")
+    exact_good = reader(condition_id=condition_id)
+    assert [row["condition_id"] for row in exact_good["markets"]] == [condition_id]
+
+
+def test_market_reader_does_not_isolate_registry_freshness_failure(monkeypatch):
+    from polybot.ers.market_meta import MarketSnapshotError
+    from polybot.hermes.read_views import MarketReadView
+
+    provider, _condition_id = _registry_provider()
+
+    def stale():
+        raise MarketSnapshotError("registry stale")
+
+    monkeypatch.setattr(provider, "require_fresh", stale)
+    with pytest.raises(MarketSnapshotError, match="registry stale"):
+        MarketReadView(provider)()
+
+
+def test_market_reader_does_not_isolate_gamma_normalization_failure(monkeypatch):
+    from polybot.hermes import read_views
+
+    provider, _condition_id = _registry_provider()
+
+    def invalid(_raw):
+        raise ValueError("Gamma format changed")
+
+    monkeypatch.setattr(read_views, "normalize_market", invalid)
+    with pytest.raises(ValueError, match="Gamma format changed"):
+        read_views.MarketReadView(provider)()
+
+
 def test_book_reader_returns_exact_live_local_book_projection():
     from polybot.hermes.read_views import BookReadView
     from polybot.ingestion.orderbook import LocalBook
