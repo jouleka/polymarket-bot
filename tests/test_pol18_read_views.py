@@ -104,6 +104,9 @@ def test_market_reader_page_isolates_one_row_without_registry_metadata():
     with pytest.raises(
             ReadViewUnavailable, match="registry metadata is unavailable"):
         MarketReadView(provider)(condition_id=malformed["conditionId"])
+    with pytest.raises(
+            ReadViewUnavailable, match="registry metadata is unavailable"):
+        MarketReadView(provider)(token_id="33")
 
 
 @pytest.mark.parametrize("event_links", [
