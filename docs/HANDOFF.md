@@ -682,6 +682,17 @@ Python only for child-helper launches while preserving supervised OS identity. T
 2,305-test suite, 78 focused cases, isolated 3/3 mutations, and independent specification/security
 reviews pass with no findings. Landing, stopped install, and another retry remain.
 
+PR #30 landed as `f07ee06`, and the approved retry passed. POL-17 and Hermes are now active and
+enabled. POL-17 is `RUNNING` with a fresh registry/runtime and 172 live tokens; Hermes registered
+exactly five tools, completed both catch-up and a regular scheduled cycle using only read tools,
+and emitted no proposal. A Hermes-only planned stop/restart passed with zero restarts or survivor.
+No profile auth recreation, raw `clob-ws`, economic/outbox row, swap, pressure, OOM, or integrity
+failure occurred. Latest midpoint persistence held 172 books; raw evidence and native auth remain
+checksum-identical. Peaks were 133,017,600 bytes for POL-17 and 263,729,152 bytes for Hermes under
+their existing caps. Exact evidence is in
+[`VERIFICATION-POL13-SHADOW-ENABLEMENT.md`](VERIFICATION-POL13-SHADOW-ENABLEMENT.md). Continue the
+POL-13 observation window; do not infer live-money authorization.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
