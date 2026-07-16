@@ -571,6 +571,16 @@ activation. This correction supersedes the separate-home/authentication-next con
 Evidence is in
 [`VERIFICATION-POL13-NATIVE-HERMES-PROFILE.md`](VERIFICATION-POL13-NATIVE-HERMES-PROFILE.md).
 
+**UPDATE 2026-07-16 — shared-VPS memory containment installed while stopped.** Before correction,
+both Polymarket units had infinite systemd memory/swap ceilings on the 8 GiB host. PR #17 and the
+stopped installer now cap ingestion at 768 MiB RAM plus 128 MiB swap and Hermes at 512 MiB RAM plus
+128 MiB swap, with earlier `MemoryHigh` reclaim thresholds, accounting, `OOMPolicy=stop`, and the
+existing bounded restart policy. The combined hard RAM ceiling is 1.25 GiB. First-start verification
+must inspect cgroup current/peak/event counters and fail on OOM or sustained pressure; never raise
+the ceiling merely to keep the process alive. The canonical suite passes 2,276 tests. Both units
+remain inactive/disabled with no cron or runtime artifacts. Evidence is in
+[`VERIFICATION-POL13-MEMORY-GUARDRAILS.md`](VERIFICATION-POL13-MEMORY-GUARDRAILS.md).
+
 **Next work:** cron creation is the next separately approved stopped gate. After that come
 first-start and enablement gates, followed by the
 ≤2-week paper/shadow run. The shadow
