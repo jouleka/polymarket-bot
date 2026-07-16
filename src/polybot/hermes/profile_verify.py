@@ -21,6 +21,7 @@ PROFILE_PLATFORMS = frozenset({
     "signal", "slack", "telegram", "webhook", "wecom", "wecom_callback",
     "weixin", "whatsapp", "whatsapp_cloud", "yuanbao",
 })
+GATEWAY_PLATFORMS = PROFILE_PLATFORMS - {"cli", "cron"}
 _BRIDGE_COMMAND = "/opt/polymarket-bot/.venv/bin/python"
 _BRIDGE_ARGS = [
     "-m", "polybot.hermes.mcp_bridge", "--socket",
@@ -79,12 +80,24 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
     authored_platforms = config.get("platform_toolsets")
     if (not isinstance(authored_platforms, dict)
             or set(authored_platforms) != PROFILE_PLATFORMS
-            or any(value != [MCP_SERVER_NAME] for value in authored_platforms.values())):
+            or any(value != [] for value in authored_platforms.values())):
         raise RuntimeError("authored platform toolsets are not MCP-only")
+    gateway_platforms = config.get("platforms")
+    if (not isinstance(gateway_platforms, dict)
+            or set(gateway_platforms) != GATEWAY_PLATFORMS
+            or any(value != {"enabled": False}
+                   for value in gateway_platforms.values())):
+        raise RuntimeError("profile must disable every messaging platform")
     agent = config.get("agent")
     if (not isinstance(agent, dict)
-            or agent.get("disabled_toolsets") != _DISABLED_BUILTIN_TOOLSETS):
+            or agent != {
+                "disabled_toolsets": _DISABLED_BUILTIN_TOOLSETS,
+                "reasoning_effort": "high",
+                "restart_drain_timeout": 20,
+            }):
         raise RuntimeError("authored disabled toolsets violate the reviewed contract")
+    if config.get("kanban") != {"dispatch_in_gateway": False}:
+        raise RuntimeError("profile kanban dispatcher must be disabled")
     if config.get("skills") != {
             "external_dirs": [], "inline_shell": False, "write_approval": False,
     }:

@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import signal
+import sys
+import types
 
 import pytest
 
@@ -34,11 +37,19 @@ def test_profile_template_grants_only_one_exact_five_tool_mcp_server():
     assert len(server["tools"]["include"]) == len(APPROVED)
     assert server["tools"]["resources"] is False
     assert server["tools"]["prompts"] is False
-    assert config["platform_toolsets"]["cron"] == ["polymarket"]
-    assert config["platform_toolsets"]["cli"] == ["polymarket"]
+    assert config["platform_toolsets"]["cron"] == []
+    assert config["platform_toolsets"]["cli"] == []
+    assert set(config["platforms"]) == set(config["platform_toolsets"]) - {
+        "cli", "cron",
+    }
+    assert all(value == {"enabled": False}
+               for value in config["platforms"].values())
     assert config["agent"]["disabled_toolsets"] == [
         "feishu_doc", "feishu_drive", "kanban",
     ]
+    assert config["agent"]["reasoning_effort"] == "high"
+    assert config["agent"]["restart_drain_timeout"] == 20
+    assert config["kanban"] == {"dispatch_in_gateway": False}
     assert config["model"]["default"] == "OWNER_CONFIG_REQUIRED"
     assert config["model"]["provider"] == "OWNER_CONFIG_REQUIRED"
 
@@ -96,6 +107,39 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         )
 
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
+    config["platform_toolsets"]["cron"] = ["polymarket"]
+    with pytest.raises(RuntimeError, match="authored platform toolsets"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools=discovered,
+        )
+
+    config = json.loads(PROFILE.read_text(encoding="utf-8"))
+    config["platforms"]["telegram"]["enabled"] = True
+    with pytest.raises(RuntimeError, match="disable every messaging platform"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools=discovered,
+        )
+
+    config = json.loads(PROFILE.read_text(encoding="utf-8"))
+    config["kanban"]["dispatch_in_gateway"] = True
+    with pytest.raises(RuntimeError, match="kanban dispatcher"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools=discovered,
+        )
+
+    config = json.loads(PROFILE.read_text(encoding="utf-8"))
     config["skills"]["inline_shell"] = True
     with pytest.raises(RuntimeError, match="skills"):
         verify_effective_contract(
@@ -105,6 +149,60 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
         )
+
+
+def test_profile_stop_marks_exact_profile_gateway_before_sigterm(
+        monkeypatch, tmp_path):
+    from polybot.hermes import profile_stop
+
+    home = tmp_path / "polymarket"
+    home.mkdir()
+    (home / "config.yaml").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(profile_stop, "_PROFILE_HOME", home)
+    events = []
+    status = types.ModuleType("gateway.status")
+    status.get_running_pid = lambda **kwargs: 4242
+    status.write_planned_stop_marker = lambda pid: events.append(
+        ("marker", pid)
+    ) or True
+    gateway = types.ModuleType("gateway")
+    gateway.status = status
+    monkeypatch.setitem(sys.modules, "gateway", gateway)
+    monkeypatch.setitem(sys.modules, "gateway.status", status)
+    monkeypatch.setattr(profile_stop.os, "kill", lambda pid, sig: events.append(
+        ("kill", pid, sig)
+    ))
+
+    assert profile_stop.stop_installed_profile(home) is True
+    assert events == [
+        ("marker", 4242),
+        ("kill", 4242, signal.SIGTERM),
+    ]
+    assert profile_stop.os.environ["HERMES_HOME"] == str(home)
+
+
+def test_profile_stop_refuses_to_signal_without_planned_marker(
+        monkeypatch, tmp_path):
+    from polybot.hermes import profile_stop
+
+    home = tmp_path / "polymarket"
+    home.mkdir()
+    (home / "config.yaml").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(profile_stop, "_PROFILE_HOME", home)
+    status = types.ModuleType("gateway.status")
+    status.get_running_pid = lambda **kwargs: 4242
+    status.write_planned_stop_marker = lambda pid: False
+    gateway = types.ModuleType("gateway")
+    gateway.status = status
+    monkeypatch.setitem(sys.modules, "gateway", gateway)
+    monkeypatch.setitem(sys.modules, "gateway.status", status)
+    monkeypatch.setattr(
+        profile_stop.os, "kill",
+        lambda pid, sig: pytest.fail("SIGTERM sent without planned marker"),
+    )
+
+    with pytest.raises(RuntimeError, match="mark Hermes gateway stop"):
+        profile_stop.stop_installed_profile(home)
 
 
 @pytest.mark.parametrize(("section", "field", "unsafe_value"), [

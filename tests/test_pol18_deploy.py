@@ -21,6 +21,8 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "EnvironmentFile=" not in text
     assert "profile_verify --profile-home" in text
     assert "--profile polymarket gateway run --replace" in text
+    assert "Environment=HERMES_KANBAN_DISPATCH_IN_GATEWAY=0" in text
+    assert "profile_stop --profile-home /root/.hermes/profiles/polymarket" in text
     assert "After=network-online.target polymarket-ingestion.service" in text
     assert "Requisite=polymarket-ingestion.service" in text
     assert "PartOf=polymarket-ingestion.service" in text

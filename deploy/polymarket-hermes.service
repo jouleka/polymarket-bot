@@ -16,9 +16,11 @@ WorkingDirectory=/root/.hermes/profiles/polymarket
 Environment=HOME=/root
 Environment=PYTHONPATH=/opt/polymarket-bot/src
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HERMES_KANBAN_DISPATCH_IN_GATEWAY=0
 ExecStartPre=/usr/bin/test -S /run/polybot-proposal/proposal.sock
 ExecStartPre=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_verify --profile-home /root/.hermes/profiles/polymarket
 ExecStart=/usr/local/bin/hermes --profile polymarket gateway run --replace
+ExecStop=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.profile_stop --profile-home /root/.hermes/profiles/polymarket
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=60
