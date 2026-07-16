@@ -171,7 +171,7 @@ def test_profile_stop_marks_exact_profile_gateway_before_sigterm(
     status = types.ModuleType("gateway.status")
     status.get_running_pid = lambda **kwargs: 4242
     status.get_process_start_time = lambda pid: 1234
-    status._pid_exists = lambda pid: False
+    status._pid_exists = lambda pid: events.append(("exists", pid)) or False
     status.write_planned_stop_marker = lambda pid: events.append(
         ("marker", pid)
     ) or True
@@ -187,6 +187,7 @@ def test_profile_stop_marks_exact_profile_gateway_before_sigterm(
     assert events == [
         ("marker", 4242),
         ("kill", 4242, signal.SIGTERM),
+        ("exists", 4242),
     ]
     assert profile_stop.os.environ["HERMES_HOME"] == str(home)
 
@@ -268,6 +269,8 @@ def test_profile_rejects_local_secret_sources(monkeypatch, tmp_path, name):
 
 def test_profile_stop_wait_is_exact_identity_and_bounded(monkeypatch):
     from polybot.hermes import profile_stop
+
+    assert profile_stop._STOP_TIMEOUT_SECONDS == 50.0
 
     clock = iter([0.0, 0.1, 0.2])
     starts = iter([1234, 5678])

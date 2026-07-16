@@ -104,6 +104,7 @@ only provider names/credential counts—never token values:
 /usr/local/bin/hermes --profile polymarket auth list
 test ! -e /root/.hermes/profiles/polymarket/auth.json
 test ! -e /root/.hermes/profiles/polymarket/.env
+test ! -e /root/.hermes/profiles/polymarket/.op.env
 ```
 
 The output must include the existing `openai-codex` credential. A model credential is not a
@@ -127,7 +128,14 @@ setpriv --reuid=0 --regid=0 --groups="$(getent group polybot-proposal | cut -d: 
 
 Required output ends with `exact five; PASS`. Any version mismatch, extra/missing MCP tool,
 resource/prompt capability, native/plugin toolset, second MCP server, unsafe command/env, or model
-placeholder is a hard failure. Do not bypass or remove the service's identical `ExecStartPre`.
+placeholder is a hard failure. The authored per-platform lists must be empty (Hermes's explicit
+no-native-tools selection), while the effective resolver must layer back exactly the sole
+`polymarket` MCP server. Every pinned built-in/plugin messaging adapter must be explicitly disabled,
+the effective gateway inventory must contain zero enabled adapters, and
+`kanban.dispatch_in_gateway` must be false. Profile-local auth/env files are forbidden. The unit's
+launcher scrubs inherited authority variables and its sandbox hides root/project/managed Hermes
+config and environment files while retaining only the native root provider `auth.json`. Do not
+bypass the launcher or remove the service's identical `ExecStartPre`.
 
 ## 5. Cron creation while the gateway remains stopped
 
@@ -205,6 +213,8 @@ Required before leaving it running:
 - runtime directory is `polybot:polybot-proposal` and socket is `polybot:polybot-proposal 0660`;
 - brain preflight reports exact five and the journal contains no terminal/file/browser/web/plugin
   tool, extra MCP server, profile migration, or credential/config error;
+- the journal reports no attempted messaging-platform connection, token collision, invalid
+  toolset warning, kanban database open/dispatcher error, or system-wide profile interaction;
 - the first cron run either emits no proposal or at most one genuine evidence-backed `PROPOSED`
   row; no fake proposal is injected for testing;
 - any proposal is independently processed by ERS with fresh-book re-fetch, PaperSigner only, and
@@ -224,6 +234,16 @@ systemctl enable polymarket-hermes.service
 ```sh
 systemctl disable --now polymarket-hermes.service
 systemctl disable --now polymarket-ingestion.service
+```
+
+The Hermes unit's `ExecStop` must write the profile-scoped native planned-stop marker before it
+signals the gateway, then wait for that exact PID/start-time identity to exit before returning.
+After a deliberate stop, require `Result=success`, `NRestarts=0`, no surviving `polymarket` gateway
+PID, and both units disabled:
+
+```sh
+systemctl show polymarket-hermes.service \
+  -p ActiveState -p SubState -p Result -p NRestarts -p UnitFileState
 ```
 
 Preserve the Hermes profile, cron state, every paper database/WAL/SHM, compact midpoint/trade/news

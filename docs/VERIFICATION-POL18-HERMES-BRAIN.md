@@ -184,6 +184,52 @@ and the restored mutation battery all passed. Closing checks also passed: `bash 
 deploy/install.sh`, compileall, `git diff --check`, clean porcelain status, sacred-surface diff,
 static no-authority import audit, exact deployment/profile artifacts, and isolated-worktree cleanup.
 
+## 2026-07-16 first-start reconciliation addendum
+
+The separately approved first Hermes start began at 14:21:56 UTC with POL-17 already active and
+both units still disabled. The stopped preflight observed exactly five model-visible MCP tools and
+passed. Live Hermes then exposed four configuration/runtime mismatches that the static verifier had
+not pinned:
+
+1. authored MCP-only `platform_toolsets` lists resolved the right MCP but triggered Hermes's
+   native-tool validator warning on every reviewed platform;
+2. the existing root Hermes environment supplied a Telegram token, so the new profile attempted to
+   connect the already-running root bot and hit a token/PID collision;
+3. the default gateway kanban dispatcher attempted to open the machine-global kanban database,
+   which the systemd sandbox correctly kept read-only;
+4. a bare systemd stop was classified by Hermes as unexpected, used the default zero-second drain,
+   interrupted the in-flight cron turn, and exited status 1.
+
+The gate failed closed. Hermes was stopped before POL-17, neither unit restarted or became enabled,
+and no intent, fill, shadow execution, execution/resolution outbox, or terminal/economic row was
+created. Seven database integrity checks remained `ok`; production raw-firehose evidence was not
+changed. Hermes peaked at 291,999,744 bytes (278.4 MiB), below `MemoryHigh=320M`, with zero swap,
+pressure, or OOM events.
+
+The first independent security review of checkpoint `d4bd5ae` found two blocking gaps: Hermes
+could re-enable several environment-driven adapters (including omitted platform/tool surfaces),
+and the first planned-stop helper returned before systemd's main process had exited. Checkpoint
+`cd5ca30` closes both findings:
+
+- every explicit platform toolset list is empty, which installed Hermes 0.18.2 resolves to no
+  native tools plus the sole globally enabled `polymarket` MCP;
+- all pinned built-in and registered-plugin gateway tool surfaces/adapters are explicit, and
+  effective preflight requires all 31 adapters disabled;
+- a minimal-environment `execve` launcher strips inherited provider/messaging/relay/plugin secrets,
+  while systemd hides root/project/managed env/config sources and profile-local auth/env refuses
+  startup;
+- kanban dispatch is disabled in both profile config and the unit environment;
+- a 20-second drain remains within the existing 60-second unit stop budget; and
+- a profile-scoped `ExecStop` helper requires Hermes's native planned-stop marker before SIGTERM
+  and waits for the exact PID/start-time identity to exit before returning.
+
+The installed Hermes resolver proof reports 31 disabled adapters and exactly the `polymarket` MCP
+on all 33 reviewed surfaces. Focused profile/deployment tests pass 26/26; the complete suite passes
+2,293 tests on tmpfs. The first isolated 12/12 adversarial battery had zero survivors across
+toolset, messaging, kanban, drain, unit, marker-before-signal, marker-failure, verifier-bypass, and
+extra-tool mutations; the review-fix battery is recorded after its closing re-review. This addendum
+does not itself authorize installation, retry, enablement, or continued operation.
+
 ## Deployment boundary
 
 [`deploy/hermes/README.md`](../deploy/hermes/README.md) separates code/identity installation,
