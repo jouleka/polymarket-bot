@@ -9,6 +9,7 @@ from pathlib import Path
 
 _PROFILE_HOME = Path("/root/.hermes/profiles/polymarket")
 _HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
+_HERMES_ARGV0 = "/usr/local/lib/hermes-agent/venv/bin/hermes"
 _BOOTSTRAP_MODULE = "polybot.hermes.profile_bootstrap"
 _PASSTHROUGH_ENV = frozenset({
     "CURL_CA_BUNDLE", "HTTPS_PROXY", "HTTP_PROXY", "INVOCATION_ID",
@@ -36,7 +37,8 @@ def build_gateway_environment(source):
 
 def build_gateway_command():
     return _HERMES_PYTHON, [
-        _HERMES_PYTHON, "-m", _BOOTSTRAP_MODULE,
+        _HERMES_ARGV0, "-m", _BOOTSTRAP_MODULE,
+        "--profile", "polymarket", "gateway", "run", "--replace",
     ]
 
 
