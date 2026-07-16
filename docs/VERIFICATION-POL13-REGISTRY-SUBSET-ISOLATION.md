@@ -1,6 +1,6 @@
 # POL-13 registry subset isolation verification
 
-Status: corrective build complete; independent re-review and owner-approved landing/install/restart pending
+Status: corrective build and closing review gates pass; owner-approved landing/install/restart pending
 
 Date: 2026-07-16
 
@@ -67,14 +67,17 @@ The first independent specification/security reviews rejected `5a22e8b` for two 
 Both findings now have direct regressions, including omitted, metadata-quarantined, and restored
 conditions. Re-review then found a concurrent publication gap between the immutable registry and a
 separate token cache; `a297588` removes that cache from authority decisions and pins the exact
-interleaving. Closing re-review is required at the final documentation head before landing.
+interleaving. Independent specification and security closing re-reviews both pass exact candidate
+`980586a` with no findings; reviewers independently ran 277 and 136 focused tests, and the
+specification reviewer reran the complete 2,311-test tmpfs suite.
 
-An isolated disposable-worktree mutation battery killed 8/8 changes: admit universe expansion;
+An isolated disposable-worktree mutation battery at exact candidate `980586a` killed 10/10
+changes: admit universe expansion;
 skip returned identity comparison; advertise frozen instead of current tokens; advertise collector
 books outside current registry authority; fail to renew a coherent subset's own TTL; shrink frozen
 identity so restoration fails; include quarantined metadata tokens; and publish a zero-usable
-replacement. The review findings add direct pins for omitted event-token contradiction and
-remembered-token `get_book` access; the closing battery must re-run those mutations as well.
+replacement; validate event relationships only against the returned subset; and authorize
+`get_book` from a separately published provider token view. Zero survivors remain.
 
 ## Deployment boundary
 

@@ -708,8 +708,8 @@ Expansion, any returned market/event identity
 contradiction (including an omitted frozen condition), zero usable replacement, and true TTL
 expiry remain fatal. The first independent reviews found and closed the omitted-event and
 remembered-`get_book` gaps plus re-review's split-publication race. The focused 253 and canonical
-2,311-test suites pass; final re-review,
-expanded mutation closure, landing, installation, and controlled restart remain. Evidence is in
+2,311-test suites, two closing independent re-reviews, and isolated 10/10 mutation battery pass
+with zero survivors. Landing, installation, and controlled restart remain. Evidence is in
 [`VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md`](VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
