@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.ingestion.gamma import normalize_market
 
 
@@ -41,25 +42,40 @@ class MarketReadView:
         rows = []
         for raw in self._provider.market_rows:
             market = normalize_market(raw)
-            event_links = raw.get("events")
-            if (not isinstance(event_links, list) or len(event_links) != 1
-                    or not isinstance(event_links[0], dict)):
-                raise ValueError("market event identity is unavailable")
-            event_id = event_links[0].get("id")
-            if not isinstance(event_id, str) or not event_id:
-                raise ValueError("market event identity is unavailable")
             token_ids = tuple(outcome.token_id for outcome in market.outcomes)
             if condition_id is not None and market.condition_id != condition_id:
                 continue
             if token_id is not None and token_id not in token_ids:
+                continue
+            event_links = raw.get("events")
+            if (not isinstance(event_links, list) or len(event_links) != 1
+                    or not isinstance(event_links[0], dict)):
+                if condition_id is not None or token_id is not None:
+                    raise ReadViewUnavailable(
+                        "market event identity is unavailable"
+                    )
+                continue
+            event_id = event_links[0].get("id")
+            if not isinstance(event_id, str) or not event_id:
+                if condition_id is not None or token_id is not None:
+                    raise ReadViewUnavailable(
+                        "market event identity is unavailable"
+                    )
                 continue
             identity = SimpleNamespace(
                 condition_id=market.condition_id,
                 token_id=token_ids[0],
                 event_id=event_id,
             )
-            metadata = registry.metadata_for(identity)
-            subject = registry.resolution_subject_for(identity)
+            try:
+                metadata = registry.metadata_for(identity)
+                subject = registry.resolution_subject_for(identity)
+            except MarketMetadataUnavailable as exc:
+                if condition_id is not None or token_id is not None:
+                    raise ReadViewUnavailable(
+                        "market registry metadata is unavailable"
+                    ) from exc
+                continue
             rows.append({
                 "event_id": subject.event_id,
                 "condition_id": market.condition_id,
