@@ -718,6 +718,14 @@ persistence held 142 books. YouTrack evidence is comment `7-342`. Continue the b
 window. Evidence is in
 [`VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md`](VERIFICATION-POL13-REGISTRY-SUBSET-ISOLATION.md).
 
+The 18:51:13 and 18:56:14 UTC Gamma refreshes also completed successfully. The latter crossed the
+old deterministic 900-second stale-registry boundary on the original POL-17 invocation, with both
+services still active+enabled and `NRestarts=0`. Runtime status remained `RUNNING`; all outboxes,
+pending intents, proposal/economic/forecast/resolution tables, raw `clob-ws` persistence, swap, and
+memory-pressure/OOM counters remained zero. All seven database integrity checks passed. POL-17
+current/peak memory was 167,358,464/167,890,944 bytes and Hermes was
+266,788,864/269,582,336 bytes, within unchanged caps. YouTrack evidence is comment `7-343`.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
