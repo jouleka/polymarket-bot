@@ -112,6 +112,13 @@ def test_root_shares_one_gamma_generation_and_one_live_collector(tmp_path):
         assert runtime._live_book_ready() is True
         runtime._ingestion.book_for("101").mark_stale()
         assert runtime._live_book_ready() is False
+        stream.ingest({
+            "event_type": "book",
+            "asset_id": "101",
+            "bids": [{"price": "0.49", "size": "10"}],
+            "asks": [],
+        })
+        assert runtime._live_book_ready() is False
         assert runtime._components.controller._book_for.__self__ is runtime._ingestion
         assert runtime._components.pipeline.market_meta is runtime._components.market_registry
         assert runtime._ingestion.token_ids == ("101", "202")
