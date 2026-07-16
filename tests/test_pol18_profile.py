@@ -309,6 +309,46 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     )]
 
 
+def test_installed_profile_launch_execs_reviewed_bootstrap(monkeypatch, tmp_path):
+    from polybot.hermes import profile_gateway
+
+    home = tmp_path / "polymarket"
+    home.mkdir()
+    (home / "config.yaml").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(profile_gateway, "_PROFILE_HOME", home)
+    monkeypatch.setattr(profile_gateway.os, "environ", {
+        "PATH": "/usr/bin",
+        "LANG": "C.UTF-8",
+        "TELEGRAM_BOT_TOKEN": "must-be-scrubbed",
+        "OPENAI_API_KEY": "must-use-native-auth-store",
+    })
+    execs = []
+    monkeypatch.setattr(
+        profile_gateway.os,
+        "execve",
+        lambda executable, argv, env: execs.append(
+            (executable, argv, env)
+        ),
+    )
+
+    profile_gateway.launch_installed_profile(home)
+
+    python = "/usr/local/lib/hermes-agent/venv/bin/python"
+    assert execs == [(
+        python,
+        [python, "-m", "polybot.hermes.profile_bootstrap"],
+        {
+            "HOME": "/root",
+            "HERMES_HOME": str(home),
+            "HERMES_KANBAN_DISPATCH_IN_GATEWAY": "0",
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/bin",
+            "PYTHONPATH": "/opt/polymarket-bot/src",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+    )]
+
+
 def test_effective_gateway_contract_rejects_any_enabled_missing_or_extra_adapter():
     from polybot.hermes.profile_verify import verify_effective_gateway_contract
 

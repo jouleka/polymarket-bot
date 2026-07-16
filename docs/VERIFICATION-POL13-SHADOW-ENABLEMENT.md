@@ -96,3 +96,37 @@ preflight; then a fresh enablement observation. The retry must prove non-empty f
 non-empty midpoint batches, bounded eight-shard cgroup memory under the existing limits, zero raw
 `clob-ws` persistence, healthy databases/outboxes, and a clean regular Hermes turn before the
 services are left enabled.
+
+## Stopped-install auth-isolation gate
+
+PR #27 landed the reviewed live-book correction as merge `9df7c10`. With both units confirmed
+inactive and disabled, the service checkout fast-forwarded to that merge, the idempotent installer
+completed without activation, and the sole production config change set
+`max_assets_per_shard = 25`. The loaded config reports seven distinct databases and the same two
+approved Polygon provider IDs. All seven integrity checks, the historical raw-firehose manifest,
+unit-file comparison, systemd verification, ownership, modes, and memory ceilings passed.
+
+The exact-five Hermes preflight then failed closed because
+`/root/.hermes/profiles/polymarket/auth.json` existed. Metadata dates its creation to 15:19:48 UTC,
+60 seconds after the failed enablement attempt started Hermes. A structure-only inspection (no
+credential values were printed) found one borrowed `nous` credential and no OpenAI credential.
+Hermes 0.18.2 unconditionally starts its global Nous auth keepalive with a 60-second initial delay,
+even though this profile selects `openai-codex`; the keepalive's global fallback then persisted that
+unselected provider into the profile. No unit was started during this discovery.
+
+Strict TDD checkpoint `369b477` routes the same existing profile through a small repo-owned
+bootstrap. Before importing the Hermes CLI, it replaces only the unselected Nous keepalive starter
+with a no-op, then executes the unchanged `--profile polymarket gateway run --replace` command. The
+launcher still strips inherited authority variables and now supplies only the exact root-owned
+repository `PYTHONPATH`. It does not create a profile, credential, cron, model configuration, tool,
+or runtime authority. Focused tests pass 6/6, the canonical suite passes 2,296 tests, and an
+installed-Hermes probe confirms the exact 0.18.2 entry point is disabled. An isolated 4/4 mutation
+battery killed restoration of the keepalive, bypass of the bootstrap, loss of its exact source
+path, and loss of the exact named-profile command.
+
+The services remain inactive and disabled. Before retry, this follow-up must pass independent
+review and land; the service checkout must fast-forward while stopped; the generated forbidden
+profile-local auth file must be removed without altering the native root auth store; and exact-five
+preflight must pass. The live observation must run beyond the 60-second keepalive boundary and
+prove that no profile-local auth file is recreated, in addition to the live-book, midpoint, memory,
+database, outbox, and raw-persistence gates above.

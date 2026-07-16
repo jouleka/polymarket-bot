@@ -653,6 +653,14 @@ suite, two independent reviews, and isolated 8/8 mutation battery pass at exact 
 reconciliation, and a fresh enablement observation remain required. Evidence is in
 [`VERIFICATION-POL13-SHADOW-ENABLEMENT.md`](VERIFICATION-POL13-SHADOW-ENABLEMENT.md).
 
+PR #27 subsequently landed the correction as `9df7c10`; the stopped service checkout and explicit
+production shard value are installed at 25. The exact-five preflight then caught a profile-local
+Nous credential that Hermes's unselected 60-second global keepalive had created during the failed
+run. Both units stayed stopped/disabled. Strict-TDD follow-up `369b477` disables only that
+unselected maintenance thread before launching the same native profile; 2,296 tests, an installed
+0.18.2 probe, and isolated 4/4 mutations pass. Independent review, landing, stopped cleanup of that
+generated duplicate, exact-five preflight, and the enablement retry remain required.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

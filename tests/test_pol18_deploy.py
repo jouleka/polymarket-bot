@@ -95,5 +95,7 @@ def test_runbook_uses_native_profile_and_existing_auth_without_another_login():
     assert "/root/.hermes/profiles/polymarket" in text
     assert "Native named profiles inherit the existing root Hermes provider store" in text
     assert "Do not run another device login" in text
+    assert "unlink -- /root/.hermes/profiles/polymarket/auth.json" in text
+    assert "test ! -e /root/.hermes/profiles/polymarket/auth.json" in text
     assert "/var/lib/polybot-hermes" not in text
     assert "sudo -u polybot-hermes" not in text
