@@ -532,10 +532,18 @@ content hash is unchanged; raw-firehose checksums still pass; no DB, profile, so
 cron, start, enable, or activation occurred. Evidence is in
 [`VERIFICATION-POL13-STOPPED-INSTALL.md`](VERIFICATION-POL13-STOPPED-INSTALL.md).
 
-**Next work:** the old D4a config still needs a separately approved stopped reconciliation with
-seven distinct database paths, proposal socket settings, and two real independently operated
-read-only Polygon providers. Placeholders are forbidden. After that come the separate profile,
-model/provider, cron, first-start, and enablement gates, followed by the ≤2-week paper/shadow run. The shadow
+**UPDATE 2026-07-16 — POL-13 stopped composite configuration complete.** The original D4a config
+is preserved byte-for-byte as `config.toml.pre-pol17`. Production config keeps every ingestion
+value and now adds seven exact distinct DB identities, proposal socket/rate/timeout settings, and
+independent `polygon-publicnode` plus `polygon-drpc` read-only providers from Polygon's official
+directory. Both production adapters returned chain 137, block 90,323,104, and the same block hash.
+Sterile validation as `polybot` passed and created no DB/runtime artifact; raw evidence still
+verifies and both units remain inactive/disabled. Evidence is in
+[`VERIFICATION-POL13-STOPPED-CONFIG.md`](VERIFICATION-POL13-STOPPED-CONFIG.md).
+
+**Next work:** isolated Hermes profile creation is the next separately approved stopped gate.
+After that come owner-selected model/provider authentication, exact-five preflight, cron,
+first-start, and enablement gates, followed by the ≤2-week paper/shadow run. The shadow
 must accrue honest resolved outcomes and prove calibrated, net-positive, out-of-sample results;
 otherwise do not proceed.
 
