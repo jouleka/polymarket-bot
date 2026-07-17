@@ -77,20 +77,29 @@ class MarketSocket:
                 keepalive = asyncio.create_task(self._keepalive(transport))
                 resync = False
                 resync_detail = None
+                will_reconnect = max_connections is None or connections < max_connections
                 try:
-                    async for frame in transport:
-                        self._dispatch(frame)
-                        if self._stream.consume_resync_request():
-                            resync_detail = self._stream.consume_resync_detail()
-                            if resync_detail is None:
-                                raise RuntimeError(
-                                    "order book resync requested without divergence detail - HALT"
-                                )
-                            resync = True
-                            break  # leave the receive loop to force a reconnect == resync
-                        if self._stream.consume_clean_progress():
-                            resync_failures = 0  # a reconciling delta clears the storm counter
-                            resync_history.clear()
+                    try:
+                        async for frame in transport:
+                            self._dispatch(frame)
+                            if self._stream.consume_resync_request():
+                                resync_detail = self._stream.consume_resync_detail()
+                                if resync_detail is None:
+                                    raise RuntimeError(
+                                        "order book resync requested without divergence detail - HALT"
+                                    )
+                                resync = True
+                                break  # leave the receive loop to force a reconnect == resync
+                            if self._stream.consume_clean_progress():
+                                resync_failures = 0  # a reconciling delta clears the storm counter
+                                resync_history.clear()
+                    except BaseException:
+                        # Once this generation is abandoned, no sibling runtime task
+                        # may observe it as fresh across the await in keepalive teardown.
+                        self._stream.mark_all_stale()
+                        raise
+                    if resync or will_reconnect:
+                        self._stream.mark_all_stale()
                 finally:
                     keepalive.cancel()
                     try:
@@ -107,7 +116,6 @@ class MarketSocket:
                     resync_history.append(resync_detail)
                     if len(resync_history) > _DIVERGENCE_HISTORY_LIMIT:
                         del resync_history[0]
-                    self._stream.mark_all_stale()  # untrusted until the resync snapshot
                     await self._safe_close(transport)
                     if resync_failures >= self._max_resyncs:
                         raise RuntimeError(
@@ -128,9 +136,7 @@ class MarketSocket:
                 # ahead of its replacement snapshot cannot use the old book as a
                 # baseline. Back off exactly like an exception close: repeated clean
                 # closes must not create a zero-delay reconnect loop.
-                will_reconnect = max_connections is None or connections < max_connections
                 if will_reconnect:
-                    self._stream.mark_all_stale()
                     failures += 1
                     resync_failures = 0
                     resync_history.clear()
