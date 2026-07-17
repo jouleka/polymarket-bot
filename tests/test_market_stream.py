@@ -236,6 +236,26 @@ def test_ingest_consistent_price_change_requests_no_resync():
     assert stream.consume_resync_request() is False
 
 
+def test_ingest_one_sided_book_accepts_live_empty_ask_boundary():
+    # Exact production failure shape from 2026-07-17: snapshot has bid 0.999 and
+    # no asks; price_change reports venue top 0.999/1. The ask boundary is empty,
+    # so this is clean progress rather than an eight-reconnect divergence storm.
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    stream.ingest(_book("A", [("0.999", "100")], []))
+
+    stream.ingest(_price_change(
+        ("A", "0.998", "BUY", "50", "0.999", "1"),
+        market="0xc236", timestamp="1784297760926",
+    ))
+
+    book = stream.book_for("A")
+    assert not book.is_stale()
+    assert book.best_bid() == Decimal("0.999")
+    assert book.best_ask() is None
+    assert stream.consume_resync_request() is False
+    assert stream.consume_clean_progress() is True
+
+
 def test_consume_clean_progress_true_after_a_consistent_price_change():
     # A clean applied delta is the signal the socket uses to reset its resync-storm
     # counter. A book snapshot is NOT delta progress; a consistent price_change is.

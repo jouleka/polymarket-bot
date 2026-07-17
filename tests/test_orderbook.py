@@ -196,6 +196,19 @@ def test_verify_top_of_book_treats_zero_as_an_empty_side():
     assert not book.is_stale()
 
 
+def test_verify_top_of_book_treats_one_as_an_empty_ask_boundary():
+    # Live evidence (2026-07-17) showed one-sided snapshots with no ask while the
+    # corresponding price_change top reports best_ask="1". Prices are strictly
+    # inside (0, 1), so the ask boundary is an empty-side sentinel, not a level we
+    # missed. Misclassifying it causes a permanent eight-reconnect storm.
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.999", "100")], asks=[]))
+
+    assert book.best_ask() is None
+    assert book.verify_top_of_book(best_bid="0.999", best_ask="1") is True
+    assert not book.is_stale()
+
+
 # --- depth helpers (feed the synthetic-event detectors) ----------------------
 
 
