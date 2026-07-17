@@ -38,4 +38,33 @@ fail-closed version comparison. Review also confirmed no MCP HTTP, WebSocket, SS
 or experimental task server is configured; resources and prompts remain absent and the exact-five
 tools-only inventory is unchanged.
 
-Landing, deployment, live ticket reconciliation, and post-restart evidence follows.
+## Landing and stopped deployment
+
+PR #39 landed as merge `26e2009`. Before maintenance, both services were active+enabled with zero
+restarts and MCP 1.26.0 in both venvs. Hermes was stopped first, then POL-17; both reached
+inactive/dead with `Result=success`. The service checkout fast-forwarded while stopped and the
+installer left both units stopped+disabled. Each real environment then resolved and performed one
+package replacement only: MCP 1.26.0 to 1.28.1. Hermes Agent remained exactly 0.18.2.
+
+Both environment compatibility checks and the stopped exact-five preflight passed. Maintenance
+preserved configuration SHA-256
+`f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361`, native Hermes auth
+SHA-256 `275e8a8c29728794104683627d818f6bb0d176b4d89263bc8780a869fa6e2fef`, all seven
+database integrity checks, all four raw-firehose manifest entries, lock/config ownership, the
+approved cron, and absence of profile-local auth/env files.
+
+## Ordered restart and live result
+
+POL-17 started at 15:53:57 UTC and reached fresh runtime/registry readiness with 144 authoritative
+live-book tokens. Hermes started at 15:54:09 after its systemd exact-five preflight passed on MCP
+1.28.1. Its first scheduled post-upgrade turn completed `ok` at 15:56:52.
+
+At 15:57:29, both units were active+enabled with `NRestarts=0`, service swap zero, and all cgroup
+`low/high/max/oom/oom_kill` counters zero. POL-17 current/peak memory was
+252,772,352/424,222,720 bytes and Hermes was 280,162,304/283,459,584 bytes, within unchanged caps.
+There were zero pending intents, fills, shadow executions, execution-outbox entries, shadow trades,
+and raw `clob-ws` rows. All configuration/auth/evidence checksums and database integrity checks
+still passed. No profile-local auth/env file appeared.
+
+GitHub still reported alerts 1–3 open at 15:57 UTC because Dependabot had not yet rescanned the
+post-merge manifest. They must close through dependency-graph detection, not manual dismissal.
