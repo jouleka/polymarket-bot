@@ -67,6 +67,10 @@ usermod -a -G "$BRIDGE_GROUP" "$SVC_USER"
 
 echo "== 2. dirs =="
 mkdir -p "$APP/data"
+if [ -L "$APP/data" ] || [ ! -d "$APP/data" ]; then
+    echo "ERROR: data root must be a real directory: $APP/data" >&2
+    exit 1
+fi
 
 echo "== 3. venv (uv, standalone python 3.13 UNDER the app dir) + runtime deps =="
 # Pin uv's python install dir under the app tree. Otherwise uv symlinks the venv to a python under
@@ -87,11 +91,13 @@ else
     echo "   config.toml already present, kept"
 fi
 
-echo "== 5. ownership (ONLY the writable data dir -> $SVC_USER) =="
-# The service only WRITES to data/. Code + venv stay root-owned + world-readable, so (a) polybot can
-# still run .venv/bin/python + read src/, and (b) redeploys (`git pull` as root) never hit git's
-# dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 in the unit keeps src/ write-free.
-chown -R "$SVC_USER:$SVC_USER" "$APP/data"
+echo "== 5. ownership (ONLY the writable data directory + runtime lock -> $SVC_USER) =="
+# Never recursively re-own data/: it contains preserved raw-firehose evidence and live databases.
+# The service only needs the directory itself writable to create new stores; existing production
+# files keep their established ownership. Code + venv stay root-owned + world-readable, so (a)
+# polybot can still run .venv/bin/python + read src/, and (b) redeploys (`git pull` as root) never
+# hit git's dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 keeps src/ write-free.
+chown "$SVC_USER:$SVC_USER" "$APP/data"
 chmod 0750 "$APP/data"
 if [ -L "$RUNTIME_LOCK" ] || { [ -e "$RUNTIME_LOCK" ] && [ ! -f "$RUNTIME_LOCK" ]; }; then
     echo "ERROR: runtime lock must be a regular file: $RUNTIME_LOCK" >&2
