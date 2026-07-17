@@ -56,7 +56,7 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     text = INSTALLER.read_text(encoding="utf-8")
 
-    assert '"mcp==1.26.0"' in text
+    assert '"mcp==1.28.1"' in text
     assert "BRAIN_USER" not in text
     assert "/var/lib/polybot-hermes" not in text
     assert "polybot-proposal" in text
@@ -76,6 +76,12 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert 'systemctl show --property=ActiveState --value "$unit"' in text
     assert 'systemctl show --property=LoadState --value "$unit"' in text
     assert text.count('if [ "$active_state" != "inactive" ]') >= 1
+
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    assert "/usr/local/lib/hermes-agent/venv/bin/python" in runbook
+    assert '"mcp==1.28.1"' in runbook
+    assert "do not recreate Hermes" in runbook
+    assert "profile:" in runbook
 
 
 def test_composite_example_configures_only_the_group_scoped_local_endpoint():

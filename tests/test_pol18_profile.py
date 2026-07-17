@@ -31,6 +31,31 @@ def test_profile_verifier_targets_native_existing_hermes_profile():
     )
 
 
+def test_profile_verifier_requires_mcp_release_patching_all_open_advisories():
+    from polybot.hermes import profile_verify
+
+    assert profile_verify.SUPPORTED_MCP_VERSION == "1.28.1"
+
+
+def test_effective_inventory_verifier_rejects_vulnerable_mcp_version():
+    from polybot.hermes.profile_verify import verify_effective_contract
+
+    config = json.loads(PROFILE.read_text(encoding="utf-8"))
+    platform_toolsets = {
+        platform: {"polymarket"} for platform in config["platform_toolsets"]
+    }
+
+    with pytest.raises(RuntimeError, match="unsupported MCP SDK version"):
+        verify_effective_contract(
+            config,
+            hermes_version="0.18.2",
+            mcp_version="1.26.0",
+            platform_toolsets=platform_toolsets,
+            discovered_mcp_tools={"polymarket": sorted(APPROVED)},
+            effective_gateway_platforms=DISABLED_GATEWAY,
+        )
+
+
 def test_profile_template_grants_only_one_exact_five_tool_mcp_server():
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
 
@@ -75,7 +100,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
     verify_effective_contract(
         config,
         hermes_version="0.18.2",
-        mcp_version="1.26.0",
+        mcp_version="1.28.1",
         platform_toolsets=platform_toolsets,
         discovered_mcp_tools=discovered,
         effective_gateway_platforms=DISABLED_GATEWAY,
@@ -85,7 +110,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY | {"telegram": True},
@@ -95,7 +120,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED | {"terminal"})},
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -104,7 +129,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED - {"get_flags"})},
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -113,7 +138,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets | {"cron": {"polymarket", "terminal"}},
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -124,7 +149,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -136,7 +161,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -148,7 +173,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -160,7 +185,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -172,7 +197,7 @@ def test_effective_inventory_verifier_rejects_any_extra_tool_or_toolset():
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools=discovered,
             effective_gateway_platforms=DISABLED_GATEWAY,
@@ -444,7 +469,7 @@ def test_effective_contract_rejects_each_unsafe_approval_and_security_setting(
         verify_effective_contract(
             config,
             hermes_version="0.18.2",
-            mcp_version="1.26.0",
+            mcp_version="1.28.1",
             platform_toolsets=platform_toolsets,
             discovered_mcp_tools={"polymarket": sorted(APPROVED)},
             effective_gateway_platforms=DISABLED_GATEWAY,

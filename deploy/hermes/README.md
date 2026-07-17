@@ -143,6 +143,25 @@ recreate the file on retry.
 The preflight runs in the pinned Hermes 0.18.2 environment, starts only the local stdio MCP bridge
 for tool discovery, and does not need POL-17 or its socket to be active:
 
+The application and native Hermes environments must both carry the reviewed MCP SDK version. On
+an update from MCP 1.26.0, stop both services first, run the ordinary application installer, and
+upgrade only the SDK dependency in the existing Hermes environment—do not recreate Hermes or any
+profile:
+
+```sh
+/root/.local/bin/uv pip install \
+  --python /usr/local/lib/hermes-agent/venv/bin/python "mcp==1.28.1"
+/opt/polymarket-bot/.venv/bin/python -c \
+  'import importlib.metadata as m; assert m.version("mcp") == "1.28.1"'
+/usr/local/lib/hermes-agent/venv/bin/python -c \
+  'import importlib.metadata as m; assert m.version("mcp") == "1.28.1"'
+```
+
+Any dependency resolver change beyond the single MCP replacement is a stop condition. Then run
+the exact effective-inventory preflight. The command below is for a new pre-cron profile; for the
+existing approved production cron, omit `--expect-no-cron` and run the full stopped verification
+in section 5:
+
 ```sh
 setpriv --reuid=0 --regid=0 --groups="$(getent group polybot-proposal | cut -d: -f3)" env \
   HOME=/root \

@@ -759,6 +759,15 @@ paper/shadow services are active+enabled under unchanged caps. Exact evidence is
 [`VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md`](VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md).
 Continue the broader POL-13 observation window; this grants no signing or live-money authority.
 
+**UPDATE 2026-07-17 — MCP security maintenance in build.** GitHub reports three high-severity MCP
+SDK advisories against the repository's exact 1.26.0 pin; all are patched by 1.28.1. Production
+uses only a local stdio MCP bridge and Unix proposal RPC, not the affected HTTP/WebSocket/task
+surfaces, but the vulnerable SDK must still be removed. The maintenance contract upgrades only MCP
+in both existing venvs, preserves Hermes Agent 0.18.2 and the native profile/auth/cron, requires the
+exact-five fail-closed preflight, and changes no proposal, ERS, execution, persistence, or signing
+authority. POL-17/POL-18 ticket summaries were also corrected to reflect their active deployment.
+See [`DESIGN-POL13-MCP-SECURITY-UPGRADE.md`](DESIGN-POL13-MCP-SECURITY-UPGRADE.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

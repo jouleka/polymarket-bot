@@ -13,7 +13,7 @@ from polybot.hermes.rpc import APPROVED_METHODS
 
 
 SUPPORTED_HERMES_VERSION = "0.18.2"
-SUPPORTED_MCP_VERSION = "1.26.0"
+SUPPORTED_MCP_VERSION = "1.28.1"
 MCP_SERVER_NAME = "polymarket"
 PROFILE_PLATFORMS = frozenset({
     "api_server", "bluebubbles", "cli", "cron", "dingtalk", "discord",
