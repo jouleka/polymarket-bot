@@ -143,3 +143,28 @@ database, execution/controller seam, signer boundary, or proposal authority. A s
 regression covers gap -> reconnect -> delta-before-snapshot -> snapshot -> clean delta and fails
 under the pre-fix stale-baseline behavior. A combined two-asset regression additionally proves
 sibling preservation and atomic HALT on a malformed multi-asset frame during recovery.
+
+## 8. Stage C amendment — side-aware empty-book boundaries
+
+The landed diagnostics then attributed the next live halt exactly. At 2026-07-17 14:17:04 UTC,
+all eight attempts named asset
+`87799961432065897081457579217720144183820894061679127498797994042052915780390`
+in market `0xc2367f6c81c524809d55f9b6b1e681b7c6ee6e782ccd197ed426a20d20b365a5`.
+Every attempt reconstructed `0.999`/no ask while the venue reported `0.999`/`1`. A direct REST
+book read confirmed 41 bids with best bid `0.999` and zero asks. This proves that the websocket's
+`best_ask="1"` is an empty-ask boundary sentinel, not a missing executable level.
+
+Polymarket order prices remain strictly inside `(0, 1)`. Top verification therefore applies this
+minimal, side-aware rule:
+
+- bid `0` denotes an empty bid; bid `1` is not accepted as empty;
+- ask `1` denotes an empty ask; ask `0` remains accepted for compatibility with prior frames;
+- any in-domain price is parsed as an exact `Decimal` and must match the reconstructed top;
+- a boundary sentinel matches only an actually empty reconstructed side. It cannot hide a real
+  level, and every mismatch still marks the book stale and enters the existing resync path.
+
+A one-sided book may now remain structurally fresh, but it is not execution authority:
+`midpoint()` remains `None`, so readiness, ERS validation, shadow filling, Hermes book views, and
+midpoint persistence continue to reject or skip it. The amendment changes no collector identity,
+retry or HALT threshold, controller seam, proposal authority, persistence contract, or signing
+boundary.

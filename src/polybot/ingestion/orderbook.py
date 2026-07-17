@@ -64,24 +64,31 @@ class LocalBook:
         book stale (``midpoint()`` then returns None) so the gap forces a resync.
 
         ``best_bid`` / ``best_ask`` are venue price strings; ``""`` or ``None``
-        denotes an empty side. Returns True when in sync, False when diverged.
+        denotes an empty side. The venue also uses the out-of-domain boundary 0
+        for an empty bid and 1 for an empty ask (ask 0 remains accepted for
+        backward compatibility). Returns True when in sync, False when diverged.
         """
-        if self._matches(self.best_bid(), best_bid) and self._matches(self.best_ask(), best_ask):
+        if (self._matches(self.best_bid(), best_bid, empty_sentinels=(Decimal(0),))
+                and self._matches(
+                    self.best_ask(), best_ask,
+                    empty_sentinels=(Decimal(0), Decimal(1)),
+                )):
             return True
         self.mark_stale()
         return False
 
     @staticmethod
-    def _matches(reconstructed, venue_price):
+    def _matches(reconstructed, venue_price, *, empty_sentinels):
         # venue_price is a required entry field, HALT-guarded to a string upstream.
-        # "" / None denote an empty side; 0 is not a valid top-of-book price in the
-        # (0, 1) domain, so a "0" sentinel also reads as empty. Parse with Decimal()
-        # exactly like apply_price_change (no str() coercion) so apply and verify
-        # never disagree on what a price value is.
+        # "" / None denote an empty side. Prices live strictly inside (0, 1), so
+        # boundary values can be venue empty-side sentinels: bid uses 0; live
+        # evidence also shows ask=1 when the snapshot has no asks. Ask retains the
+        # historical 0 sentinel for compatibility. Parse with Decimal() exactly like
+        # apply_price_change so apply and verify never disagree on numeric meaning.
         venue = None
         if venue_price not in (None, ""):
             parsed = Decimal(venue_price)
-            venue = None if parsed == 0 else parsed
+            venue = None if parsed in empty_sentinels else parsed
         return reconstructed == venue  # Decimal value-equality; both-None == empty side
 
     def best_bid(self):
