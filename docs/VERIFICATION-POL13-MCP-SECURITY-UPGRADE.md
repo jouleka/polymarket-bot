@@ -26,5 +26,16 @@ whole-slice tests pass. A temporary MCP 1.28.1 import overlay on the actual nati
 Python environment passed the installed profile's exact-five tool discovery and imported the
 patched `ClientSession`. The overlay did not modify the running production environments.
 
-Final canonical, independent-review, mutation, landing, deployment, and live evidence follows.
+The final canonical suite passed **2,338 tests** on MCP 1.28.1, and the environment dependency
+compatibility check passed. Independent specification review passed after 62 focused tests and an
+independent canonical tmpfs run of 2,338 tests. Independent security review passed after 61 focused
+profile/deployment/real-stdio/RPC tests and direct confirmation that both production-venv dry runs
+replace only MCP 1.26.0 with 1.28.1.
 
+An isolated 5/5 mutation battery had zero survivors. Named tests killed a downgrade in project
+metadata, stopped installer, native-Hermes runbook, and verifier constant, plus removal of the
+fail-closed version comparison. Review also confirmed no MCP HTTP, WebSocket, SSE/Streamable HTTP,
+or experimental task server is configured; resources and prompts remain absent and the exact-five
+tools-only inventory is unchanged.
+
+Landing, deployment, live ticket reconciliation, and post-restart evidence follows.
