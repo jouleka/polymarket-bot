@@ -759,14 +759,18 @@ paper/shadow services are active+enabled under unchanged caps. Exact evidence is
 [`VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md`](VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md).
 Continue the broader POL-13 observation window; this grants no signing or live-money authority.
 
-**UPDATE 2026-07-17 — MCP security maintenance in build.** GitHub reports three high-severity MCP
+**UPDATE 2026-07-17 — MCP security maintenance landed and deployed.** GitHub reported three high-severity MCP
 SDK advisories against the repository's exact 1.26.0 pin; all are patched by 1.28.1. Production
 uses only a local stdio MCP bridge and Unix proposal RPC, not the affected HTTP/WebSocket/task
-surfaces, but the vulnerable SDK must still be removed. The maintenance contract upgrades only MCP
-in both existing venvs, preserves Hermes Agent 0.18.2 and the native profile/auth/cron, requires the
-exact-five fail-closed preflight, and changes no proposal, ERS, execution, persistence, or signing
-authority. POL-17/POL-18 ticket summaries were also corrected to reflect their active deployment.
-See [`DESIGN-POL13-MCP-SECURITY-UPGRADE.md`](DESIGN-POL13-MCP-SECURITY-UPGRADE.md).
+surfaces. PR #39 (`26e2009`) upgraded only MCP to 1.28.1 in both existing venvs after 2,338 tests,
+independent specification/security PASS, and a 5/5 mutation gate. Hermes Agent 0.18.2 and the native
+profile/model/auth/cron were not recreated or changed. The stopped maintenance preserved config,
+auth, seven databases, raw evidence, and exact-five inventory. Both services restarted in order,
+advertised 144 live books, and completed the first Hermes turn `ok` with zero restarts, swap,
+economic/outbox/raw rows, or cgroup pressure/OOM events. The three GitHub alerts remained open at
+15:57 UTC pending Dependabot's post-merge rescan; do not dismiss them manually. POL-17/POL-18
+repository and live-ticket summaries are reconciled to their active deployment. Exact evidence is
+in [`VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md`](VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
