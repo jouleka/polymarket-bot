@@ -209,6 +209,30 @@ def test_verify_top_of_book_treats_one_as_an_empty_ask_boundary():
     assert not book.is_stale()
 
 
+def test_verify_top_of_book_treats_zero_as_an_empty_bid_boundary():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[], asks=[("0.40", "10")]))
+
+    assert book.verify_top_of_book(best_bid="0", best_ask="0.40") is True
+    assert not book.is_stale()
+
+
+def test_verify_top_of_book_rejects_one_as_an_empty_bid_boundary():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[], asks=[("0.40", "10")]))
+
+    assert book.verify_top_of_book(best_bid="1", best_ask="0.40") is False
+    assert book.is_stale()
+
+
+def test_verify_top_of_book_rejects_empty_ask_boundary_when_ask_exists():
+    book = LocalBook()
+    book.apply_book(_snapshot(bids=[("0.40", "10")], asks=[("0.60", "10")]))
+
+    assert book.verify_top_of_book(best_bid="0.40", best_ask="1") is False
+    assert book.is_stale()
+
+
 # --- depth helpers (feed the synthetic-event detectors) ----------------------
 
 

@@ -106,6 +106,32 @@ established operationally by the ordered service stop and zero remaining service
 candidate additionally enforces exclusion with the shared real `flock`; a real-filesystem test
 proves a second runtime is rejected while the probe owns it and succeeds after release.
 
+## Post-install live attribution and boundary correction
+
+The diagnostic implementation landed through PR #35 as `360d495`; the stopped-data installer
+hardening landed through PR #36 as `bba09fb`. Installation while both services were stopped
+preserved the configuration SHA-256
+`f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361`, all seven database
+integrity checks, the full raw-firehose manifest checksum, and the exact-five Hermes preflight.
+The durable singleton lock was installed as `0640 polybot:polybot`.
+
+POL-17 started at 2026-07-17 14:11:55 UTC and Hermes at 14:13:29 UTC. The runtime reached fresh
+registry/book readiness, and Hermes's first scheduled cycle completed without a proposal. At
+14:17:04, the new bounded diagnostics captured all eight resync attempts for asset
+`87799961432065897081457579217720144183820894061679127498797994042052915780390` in market
+`0xc2367f6c81c524809d55f9b6b1e681b7c6ee6e782ccd197ed426a20d20b365a5`:
+reconstructed top `0.999`/no ask versus venue top `0.999`/`1`. A direct REST read returned 41 bids,
+best bid `0.999`, and zero asks. The venue therefore uses ask boundary `1` as the empty-side
+sentinel. Hermes followed the supervised stop; after one systemd restart both services were
+stopped deliberately to prevent churn.
+
+Strict TDD first reproduced the one-sided mismatch, then implemented only the side-aware boundary
+mapping. Regressions prove ask `1` and bid `0` match only empty reconstructed sides, bid `1` is
+rejected, a real ask cannot be hidden by ask `1`, and the exact live stream shape remains fresh but
+has no midpoint authority. The final pre-publication canonical suite passed **2,336 tests**.
+Independent security review passed; the specification review's missing asymmetry cases were added
+and passed before publication.
+
 ## Handoff state
 
 At the end of build verification, both production units remain stopped. They were not disabled by
