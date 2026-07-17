@@ -424,6 +424,38 @@ def test_socket_resync_storm_backs_off_then_halts():
     assert sleep.delays == [0.5, 1.0]  # backed off (exp) before HALTing on the 3rd consecutive resync
 
 
+def test_socket_resync_halt_reports_bounded_asset_divergence():
+    # Overnight production HALTs were unactionable because the exception discarded
+    # the asset and expected/actual top. The terminal error must carry only bounded
+    # diagnostic fields -- never a raw frame -- without weakening the retry gate.
+    gap = _price_change_frame("A", "0.61", "BUY", "50",
+                              best_bid="0.99", best_ask="0.62",
+                              market="0xmarket", timestamp="123")
+
+    def make():
+        return FakeTransport([_book_frame("A", "0.60", "0.62"), gap])
+
+    transports = iter([make() for _ in range(3)])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, _stream(), asset_ids=["A", "B"],
+                          sleep=RecordingSleep(), max_resyncs=2)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(socket.run(max_connections=None))
+
+    message = str(excinfo.value)
+    assert "asset_id='A'" in message
+    assert "market='0xmarket'" in message
+    assert "timestamp='123'" in message
+    assert "reconstructed=0.61/0.62" in message
+    assert "venue=0.99/0.62" in message
+    assert "shard_assets=2" in message
+    assert "price_changes" not in message  # no raw frame persistence-by-log
+
+
 def test_socket_resyncs_separated_by_clean_progress_do_not_halt():
     # A transient gap that RECOVERS (the reconnect then streams a clean delta) must not
     # accrue toward the storm HALT: a clean applied price_change resets the counter, so

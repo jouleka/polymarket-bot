@@ -73,10 +73,16 @@ class MarketSocket:
                 await transport.send(self._subscribe_message())
                 keepalive = asyncio.create_task(self._keepalive(transport))
                 resync = False
+                resync_detail = None
                 try:
                     async for frame in transport:
                         self._dispatch(frame)
                         if self._stream.consume_resync_request():
+                            resync_detail = self._stream.consume_resync_detail()
+                            if resync_detail is None:
+                                raise RuntimeError(
+                                    "order book resync requested without divergence detail - HALT"
+                                )
                             resync = True
                             break  # leave the receive loop to force a reconnect == resync
                         if self._stream.consume_clean_progress():
@@ -99,7 +105,8 @@ class MarketSocket:
                     if resync_failures >= self._max_resyncs:
                         raise RuntimeError(
                             f"order book failed to resync after {resync_failures} consecutive "
-                            f"attempts - HALT (irreconcilable divergence / likely format change)"
+                            f"attempts - HALT (irreconcilable divergence / likely format change); "
+                            f"{self._format_divergence(resync_detail)}"
                         )
                     # Back off so a persistently re-diverging book can never become a
                     # zero-delay reconnect hot-loop against the gateway; a single
@@ -170,6 +177,26 @@ class MarketSocket:
 
     def _backoff_delay(self, failures):
         return min(self._backoff_cap, self._backoff_base * (2 ** (failures - 1)))
+
+    def _format_divergence(self, detail):
+        return (
+            f"shard_assets={len(self._asset_ids)}; "
+            f"asset_id={self._bounded_repr(detail.asset_id)}; "
+            f"market={self._bounded_repr(detail.market)}; "
+            f"timestamp={self._bounded_repr(detail.timestamp)}; "
+            f"reconstructed={self._bounded_value(detail.reconstructed_bid)}/"
+            f"{self._bounded_value(detail.reconstructed_ask)}; "
+            f"venue={self._bounded_value(detail.venue_bid)}/"
+            f"{self._bounded_value(detail.venue_ask)}"
+        )
+
+    @staticmethod
+    def _bounded_repr(value):
+        return repr(value if value is None else str(value)[:128])
+
+    @staticmethod
+    def _bounded_value(value):
+        return "None" if value is None else str(value)[:64]
 
     def _subscribe_message(self):
         return json.dumps({"type": "market", "assets_ids": self._asset_ids})
