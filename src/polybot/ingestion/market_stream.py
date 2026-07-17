@@ -41,6 +41,17 @@ class Observation:
     message: dict
 
 
+@dataclass(frozen=True)
+class BookDivergence:
+    asset_id: str
+    market: str | None
+    timestamp: str | None
+    reconstructed_bid: str | None
+    reconstructed_ask: str | None
+    venue_bid: str
+    venue_ask: str
+
+
 class MarketStream:
     def __init__(self, stamper, sink=None, asset_ids=None, detector=None, synthetic_sink=None):
         self._stamper = stamper
@@ -58,6 +69,7 @@ class MarketStream:
         # also carries (skip, to avoid a phantom book and cross-shard duplicate rows).
         self._tracked = set(asset_ids) if asset_ids is not None else None
         self._resync_requested = False
+        self._resync_detail = None
         self._clean_progress = False
         self._last_frame_at = None  # stamper-ns of the last dispatched REAL venue frame (S4.4d)
 
@@ -94,6 +106,11 @@ class MarketStream:
             self._clean_progress = False
             return True
         return False
+
+    def consume_resync_detail(self):
+        detail = self._resync_detail
+        self._resync_detail = None
+        return detail
 
     def last_frame_at(self):
         """Stamper-ns ``observed_at`` of the last dispatched REAL venue frame;
@@ -183,6 +200,16 @@ class MarketStream:
             last = entries[-1]
             if not book.verify_top_of_book(last["best_bid"], last["best_ask"]):  # required (HALT-guarded)
                 self._resync_requested = True  # diverged -> force a resync snapshot
+                self._resync_detail = BookDivergence(
+                    asset_id=asset_id,
+                    market=message.get("market") if isinstance(message.get("market"), str) else None,
+                    timestamp=(message.get("timestamp")
+                               if isinstance(message.get("timestamp"), str) else None),
+                    reconstructed_bid=self._price_string(book.best_bid()),
+                    reconstructed_ask=self._price_string(book.best_ask()),
+                    venue_bid=last["best_bid"],
+                    venue_ask=last["best_ask"],
+                )
             else:
                 self._clean_progress = True  # reconciling delta -> resets the resync-storm counter
             if self._sink is not None:
@@ -195,6 +222,10 @@ class MarketStream:
                     asset_id, level_changes, before_top, book.top_of_book(), observed_at))
             stamps.append(observed_at)
         return stamps
+
+    @staticmethod
+    def _price_string(value):
+        return None if value is None else str(value)
 
     def _emit_synthetic(self, events):
         # Each synthetic event is its own point-in-time observation -> its own
