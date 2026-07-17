@@ -6,6 +6,7 @@ UNIT = ROOT / "deploy" / "polymarket-hermes.service"
 INSTALLER = ROOT / "deploy" / "install.sh"
 CONFIG = ROOT / "deploy" / "config.example.toml"
 RUNBOOK = ROOT / "deploy" / "hermes" / "README.md"
+PYPROJECT = ROOT / "pyproject.toml"
 
 
 def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol17():
@@ -55,8 +56,11 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
 
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     text = INSTALLER.read_text(encoding="utf-8")
+    project = PYPROJECT.read_text(encoding="utf-8")
 
     assert '"mcp==1.28.1"' in text
+    assert '"mcp==1.28.1"' in project
+    assert '"mcp==1.26.0"' not in project
     assert "BRAIN_USER" not in text
     assert "/var/lib/polybot-hermes" not in text
     assert "polybot-proposal" in text
