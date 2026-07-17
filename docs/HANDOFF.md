@@ -726,7 +726,7 @@ memory-pressure/OOM counters remained zero. All seven database integrity checks 
 current/peak memory was 167,358,464/167,890,944 bytes and Hermes was
 266,788,864/269,582,336 bytes, within unchanged caps. YouTrack evidence is comment `7-343`.
 
-**UPDATE 2026-07-17 — repeated order-book resync correction reviewed; services stopped.** The
+**UPDATE 2026-07-17 — repeated order-book resync correction landed and live-verified.** The
 extended shadow accumulated eight fail-closed eight-attempt book-resync exits, including two more
 at 12:51 and 13:20 UTC. Memory pressure, swap, and OOM remained zero. The old terminal error could
 not attribute historical causality, but strict TDD reproduced a reconnect-generation defect: a
@@ -741,12 +741,23 @@ The 1,800-second stopped-service probe covered 200 tokens over eight shards with
 about 85 MB RSS, and reached its bound without a natural terminal storm; that is negative bounded
 evidence, not historical attribution. The canonical suite passes 2,330 tests, final independent
 specification/security re-reviews pass, and the isolated 10/10 mutation battery has zero survivors.
-Exact evidence is in
+The diagnostic landed through PR #35 and attributed the next halt exactly: the venue reported
+`best_ask="1"` for a one-sided asset whose REST book had bids but zero asks. PR #37 (`e1e17c1`)
+landed the minimal side-aware empty-boundary rule: bid `0`, ask `1`, with ask `0` compatibility;
+boundary sentinels match only an actually empty reconstructed side. One-sided books still have no
+midpoint/ERS authority. The final suite passes 2,336 tests, both independent re-reviews pass, and
+the isolated 3/3 sentinel mutation battery has zero survivors.
+
+The stopped install preserved the exact config checksum, seven healthy databases, historical raw
+evidence, exact-five native Hermes profile/cron/auth isolation, and existing cgroup limits. After
+ordered restart, POL-17 ran 29:24 beyond its final start—past both the exact prior 5:09 failure and
+the prior 29-minute recurrence—with zero restarts or resync/HALT evidence. It advertised 138 live
+books; the exact one-sided asset remained non-authoritative while REST still showed 25 bids and
+zero asks. Five Hermes cycles completed `ok` with zero proposals, fills, executions, outboxes, or
+shadow trades. There are zero raw `clob-ws` rows and zero cgroup swap/pressure/OOM events. Both
+paper/shadow services are active+enabled under unchanged caps. Exact evidence is in
 [`VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md`](VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md).
-Both services are currently inactive/dead but remain enabled. Candidate code is at `2c7db2b`; it
-has not yet been landed or installed. Next: land, install while stopped with all databases/config/
-raw evidence preserved, then restart POL-17 followed by Hermes and observe the prior failure
-window. This grants no live-money authority.
+Continue the broader POL-13 observation window; this grants no signing or live-money authority.
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and

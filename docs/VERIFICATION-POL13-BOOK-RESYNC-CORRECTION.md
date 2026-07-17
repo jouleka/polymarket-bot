@@ -132,11 +132,46 @@ has no midpoint authority. The final pre-publication canonical suite passed **2,
 Independent security review passed; the specification review's missing asymmetry cases were added
 and passed before publication.
 
+## Landing, installation, and corrected live gate
+
+PR #37 landed the exact reviewed correction as merge `e1e17c1`. The service checkout
+fast-forwarded to that merge while both units were inactive. The installer left both stopped and
+disabled and preserved:
+
+- configuration SHA-256
+  `f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361`;
+- `PRAGMA integrity_check=ok` for all seven databases;
+- all four historical raw-firehose manifest entries;
+- `0640 polybot:polybot` ownership for the durable singleton lock;
+- the existing native Hermes profile, approved cron, auth isolation, and exact-five effective
+  tool inventory;
+- POL-17/Hermes memory high/max/swap ceilings of 512/768/128 MiB and 320/512/128 MiB.
+
+POL-17 first started at 14:30:33 UTC and reached a fresh registry/runtime with nonempty live books.
+Hermes then started and passed its service-side exact-five preflight. A temporary observation
+watchdog incorrectly treated an empty zero-match count as a terminal event and issued its designed
+planned stop at 14:33:29. Neither service had failed or restarted. The watchdog was corrected, and
+the same ordered readiness gate restarted POL-17 at 14:33:51 and Hermes at 14:34:08.
+
+At 15:03:15, the final POL-17 invocation had run 29:24, beyond both the exact prior 5:09 sentinel
+failure and the prior 29-minute recurrence, with `NRestarts=0` and no resync, divergence, HALT,
+traceback, or failed-unit log. Five scheduled Hermes turns completed `ok`; two changing-universe
+book reads were rejected fail-closed during the first turn. Final read-only checks showed:
+
+- `runtime_ready=true`, `registry_fresh=true`, and 138 authoritative live-book tokens;
+- the exact offending asset was not authoritative; its REST book still had 25 bids, best bid
+  `0.999`, zero asks, and no best ask;
+- zero pending intents, fills, shadow executions, execution-outbox entries, shadow trades,
+  resolution-outbox entries, or resolution terminals;
+- zero raw `clob-ws` rows, with periodic `clob-midpoint` batches and the full data-API tape intact;
+- all seven database integrity checks and all historical evidence checksums still passing;
+- POL-17 current/peak memory 276,856,832/401,387,520 bytes and Hermes
+  267,968,512/270,196,736 bytes, with cgroup `low/high/max/oom/oom_kill=0` and service swap zero;
+- no profile-local Hermes `auth.json`, `.env`, or `.op.env`.
+
 ## Handoff state
 
-At the end of build verification, both production units remain stopped. They were not disabled by
-this correction, and no service checkout update, installer run, database migration, production
-data rewrite, start, or restart occurred during code verification. Installation must precreate the
-durable lock while stopped, then preserve the existing configuration, seven databases, historical
-raw-firehose evidence, native Hermes profile/auth, exact-five tool grant, cron, memory ceilings,
-and paper-only authority before restarting POL-17 and then Hermes.
+Both production paper/shadow units are active and enabled under their unchanged memory caps. Keep
+the broader POL-13 observation running and preserve the same fail-closed stop policy for any new
+supervision event. No signer, wallet, order, cancellation, redemption, chain-write, or live-money
+authority exists or is authorized.
