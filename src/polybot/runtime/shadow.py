@@ -23,7 +23,7 @@ from polybot.runtime.shadow_root import build_shadow_runtime
 
 
 log = logging.getLogger("polybot.shadow")
-LOCK_PATH = "/run/polybot/shadow-runtime.lock"
+LOCK_PATH = "/srv/polybot/app/data/shadow-runtime.lock"
 
 
 def build_production_runtime(

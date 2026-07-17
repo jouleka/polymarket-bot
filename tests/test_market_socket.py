@@ -54,6 +54,17 @@ class FakeTransport:
             yield frame
 
 
+class ObserveOnExhaustionTransport(FakeTransport):
+    def __init__(self, frames, observer):
+        super().__init__(frames)
+        self._observer = observer
+
+    async def __aiter__(self):
+        async for frame in super().__aiter__():
+            yield frame
+        asyncio.get_running_loop().call_soon(self._observer)
+
+
 class IdleAfterFramesTransport:
     """Yields the given frames, then stays open and idle forever (blocks).
 
@@ -360,6 +371,56 @@ def test_socket_marks_books_stale_on_disconnect():
     assert stream.book_for("A").is_stale()
 
 
+def test_socket_normal_close_stales_before_production_reconnect():
+    # websockets iteration ends normally for close codes 1000/1001. In unbounded
+    # production mode that is still a reconnect boundary: retain old levels only
+    # for diagnostics, mark them stale, back off, and ignore a raced delta until
+    # this connection's replacement snapshot arrives.
+    t1 = FakeTransport([_book_frame("A", "0.60", "0.62")])
+    raced_delta = _price_change_frame("A", "0.70", "BUY", "50",
+                                       best_bid="0.70", best_ask="0.72")
+    clean = _price_change_frame("A", "0.71", "BUY", "50",
+                                best_bid="0.71", best_ask="0.72")
+    t2 = FakeTransport([raced_delta, _book_frame("A", "0.70", "0.72"), clean])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    sleep = RecordingSleep()
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=sleep, max_resyncs=1)
+
+    asyncio.run(socket.run(max_connections=2))
+
+    book = stream.book_for("A")
+    assert not book.is_stale()
+    assert book.best_bid() == Decimal("0.71")
+    assert book.best_ask() == Decimal("0.72")
+    assert sleep.delays == [0.5]  # normal-close reconnect cannot hot-loop
+
+
+def test_socket_normal_close_stales_before_teardown_can_yield():
+    observed = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    t1 = ObserveOnExhaustionTransport(
+        [_book_frame("A", "0.60", "0.62")],
+        lambda: observed.append(stream.book_for("A").is_stale()),
+    )
+    t2 = FakeTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=RecordingSleep())
+
+    asyncio.run(socket.run(max_connections=2))
+
+    assert observed == [True]  # never expose the abandoned generation across an await
+    assert not stream.book_for("A").is_stale()  # replacement snapshot restored authority
+
+
 def _price_change_frame(asset_id, price, side, size, best_bid, best_ask,
                         market="0xmarket", timestamp="1"):
     return json.dumps({
@@ -399,6 +460,99 @@ def test_socket_reconnects_to_resync_on_a_midstream_sequence_gap():
     assert sleep.delays == [0.5]  # one resync -> a floor backoff (never a zero-delay hot-loop)
 
 
+def test_socket_reconnect_waits_for_snapshot_when_delta_arrives_first():
+    # Production repeatedly exhausted the resync gate because a reconnect retained
+    # the old stale book and a live delta could race ahead of that asset's replacement
+    # snapshot. The delta is observable but non-authoritative; only the snapshot may
+    # make the book fresh again, after which clean deltas resume normally.
+    gap = _price_change_frame("A", "0.61", "BUY", "50",
+                              best_bid="0.99", best_ask="0.62")
+    raced_delta = _price_change_frame("A", "0.70", "BUY", "50",
+                                       best_bid="0.70", best_ask="0.72")
+    clean = _price_change_frame("A", "0.71", "BUY", "50",
+                                best_bid="0.71", best_ask="0.72")
+    t1 = FakeTransport([_book_frame("A", "0.60", "0.62"), gap])
+    t2 = FakeTransport([
+        raced_delta,
+        _book_frame("A", "0.70", "0.72"),
+        clean,
+    ])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    sleep = RecordingSleep()
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=sleep, max_resyncs=2)
+
+    asyncio.run(socket.run(max_connections=2))
+
+    book = stream.book_for("A")
+    assert not book.is_stale()
+    assert book.best_bid() == Decimal("0.71")
+    assert book.best_ask() == Decimal("0.72")
+    assert sleep.delays == [0.5]  # no manufactured second resync before the snapshot
+
+
+def test_socket_recovery_preserves_sibling_and_halts_atomically_on_format_change():
+    gap_a = _price_change_frame("A", "0.61", "BUY", "50",
+                                best_bid="0.99", best_ask="0.62")
+    raced_b = _price_change_frame("B", "0.90", "BUY", "50",
+                                  best_bid="0.90", best_ask="0.92")
+    malformed = json.dumps({
+        "event_type": "price_change",
+        "market": "0xmarket",
+        "timestamp": "3",
+        "price_changes": [
+            {"asset_id": "A", "price": "0.61", "side": "BUY", "size": "50",
+             "best_bid": "0.61", "best_ask": "0.62"},
+            {"asset_id": "B", "price": "0.41", "side": "RENAMED_SIDE", "size": "50",
+             "best_bid": "0.41", "best_ask": "0.45"},
+        ],
+    })
+    t1 = FakeTransport([
+        _book_frame("A", "0.60", "0.62"),
+        _book_frame("B", "0.40", "0.45"),
+        gap_a,
+    ])
+    t2 = FakeTransport([
+        raced_b,
+        _book_frame("A", "0.60", "0.62"),
+        _book_frame("B", "0.40", "0.45"),
+        malformed,
+    ])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A", "B"])
+    socket = MarketSocket(connect, stream, asset_ids=["A", "B"], sleep=RecordingSleep())
+
+    with pytest.raises(ValueError, match="unknown price_change side"):
+        asyncio.run(socket.run(max_connections=2))
+
+    assert stream.book_for("A").best_bid() == Decimal("0.60")  # no partial A apply
+    assert stream.book_for("B").best_bid() == Decimal("0.40")  # raced B was non-authoritative
+    assert stream.book_for("A").is_stale()  # global HALT revokes authority before teardown awaits
+    assert stream.book_for("B").is_stale()
+
+
+def test_socket_resync_request_without_detail_halts():
+    stream = _stream()
+    stream._resync_requested = True
+    transport = FakeTransport([_book_frame("A", "0.60", "0.62")])
+
+    async def connect():
+        return transport
+
+    socket = MarketSocket(connect, stream, asset_ids=["A"])
+
+    with pytest.raises(RuntimeError, match="without divergence detail"):
+        asyncio.run(socket.run(max_connections=1))
+
+
 def test_socket_resync_storm_backs_off_then_halts():
     # A book that re-diverges on EVERY fresh snapshot must not hot-loop the gateway:
     # back off each consecutive resync and then HALT loudly (a never-reconcilable book
@@ -422,6 +576,93 @@ def test_socket_resync_storm_backs_off_then_halts():
         asyncio.run(socket.run(max_connections=None))  # 24/7 mode: only the HALT stops it
 
     assert sleep.delays == [0.5, 1.0]  # backed off (exp) before HALTing on the 3rd consecutive resync
+
+
+def test_socket_resync_halt_reports_bounded_asset_divergence():
+    # Overnight production HALTs were unactionable because the exception discarded
+    # the asset and expected/actual top. The terminal error must carry only bounded
+    # diagnostic fields -- never a raw frame -- without weakening the retry gate.
+    gap = _price_change_frame("A", "0.61", "BUY", "50",
+                              best_bid="0.99", best_ask="0.62",
+                              market="0xmarket", timestamp="123")
+
+    def make():
+        return FakeTransport([_book_frame("A", "0.60", "0.62"), gap])
+
+    transports = iter([make() for _ in range(3)])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, _stream(), asset_ids=["A", "B"],
+                          sleep=RecordingSleep(), max_resyncs=2)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(socket.run(max_connections=None))
+
+    message = str(excinfo.value)
+    assert "asset_id='A'" in message
+    assert "market='0xmarket'" in message
+    assert "timestamp='123'" in message
+    assert "reconstructed='0.61'/'0.62'" in message
+    assert "venue='0.99'/'0.62'" in message
+    assert "shard_assets=2" in message
+    assert "price_changes" not in message  # no raw frame persistence-by-log
+
+
+def test_socket_resync_diagnostic_escapes_and_bounds_untrusted_fields():
+    long_market = "\n" + ("m" * 140) + "MARKET-INJECTION"
+    long_timestamp = "\n" + ("t" * 140) + "TIMESTAMP-INJECTION"
+    long_venue_bid = "\n0." + ("9" * 100) + "\n"  # valid Decimal despite whitespace
+    gap = _price_change_frame("A", "0.61", "BUY", "50",
+                              best_bid=long_venue_bid, best_ask="0.62",
+                              market=long_market, timestamp=long_timestamp)
+    transports = iter([
+        FakeTransport([_book_frame("A", "0.60", "0.62"), gap]),
+    ])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, _stream(), asset_ids=["A"],
+                          sleep=RecordingSleep(), max_resyncs=1)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(socket.run(max_connections=None))
+
+    message = str(excinfo.value)
+    assert "\n" not in message
+    assert "\\n" in message
+    assert "MARKET-INJECTION" not in message
+    assert "TIMESTAMP-INJECTION" not in message
+    assert "9" * 65 not in message
+
+
+def test_socket_resync_halt_reports_each_consecutive_attempt_in_order():
+    gap_a = _price_change_frame("A", "0.61", "BUY", "50",
+                                best_bid="0.99", best_ask="0.62", timestamp="1")
+    gap_b = _price_change_frame("B", "0.41", "BUY", "50",
+                                best_bid="0.88", best_ask="0.45", timestamp="2")
+    transports = iter([
+        FakeTransport([_book_frame("A", "0.60", "0.62"), gap_a]),
+        FakeTransport([_book_frame("B", "0.40", "0.45"), gap_b]),
+    ])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, MarketStream(MonotonicStamper(clock=lambda: 1),
+                                                 asset_ids=["A", "B"]),
+                          asset_ids=["A", "B"], sleep=RecordingSleep(), max_resyncs=2)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        asyncio.run(socket.run(max_connections=None))
+
+    message = str(excinfo.value)
+    assert "attempts=[" in message
+    assert message.index("asset_id='A'") < message.index("asset_id='B'")
+    assert "timestamp='1'" in message
+    assert "timestamp='2'" in message
 
 
 def test_socket_resyncs_separated_by_clean_progress_do_not_halt():
