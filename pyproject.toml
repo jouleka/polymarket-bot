@@ -5,7 +5,7 @@ description = "Autonomous Polymarket trading bot — ingestion layer + ERS (see 
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28",
-    "mcp==1.26.0",
+    "mcp==1.28.1",
     "websockets>=16",
 ]
 
