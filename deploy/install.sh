@@ -81,7 +81,7 @@ if [ ! -x "$APP/.venv/bin/python" ]; then
     "$UV" venv --python 3.13 "$APP/.venv"
 fi
 "$UV" pip install --python "$APP/.venv/bin/python" \
-    "httpx>=0.28" "mcp==1.26.0" "websockets>=16"
+    "httpx>=0.28" "mcp==1.28.1" "websockets>=16"
 
 echo "== 4. config (kept if present) =="
 if [ ! -f "$APP/config.toml" ]; then
