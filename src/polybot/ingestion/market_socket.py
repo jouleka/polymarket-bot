@@ -24,6 +24,8 @@ import asyncio
 import json
 from json import JSONDecodeError
 
+_DIVERGENCE_HISTORY_LIMIT = 8
+
 
 class MarketSocket:
     def __init__(
@@ -66,6 +68,7 @@ class MarketSocket:
         connections = 0
         failures = 0
         resync_failures = 0  # CONSECUTIVE resyncs with no clean delta between them
+        resync_history = []  # bounded evidence aligned with the consecutive counter
         while max_connections is None or connections < max_connections:
             connections += 1
             try:
@@ -87,6 +90,7 @@ class MarketSocket:
                             break  # leave the receive loop to force a reconnect == resync
                         if self._stream.consume_clean_progress():
                             resync_failures = 0  # a reconciling delta clears the storm counter
+                            resync_history.clear()
                 finally:
                     keepalive.cancel()
                     try:
@@ -100,13 +104,16 @@ class MarketSocket:
                     # pulls a fresh snapshot. Re-subscribing on the SAME live socket
                     # does NOT reliably resnapshot (confirmed live 2026-06-25).
                     resync_failures += 1
+                    resync_history.append(resync_detail)
+                    if len(resync_history) > _DIVERGENCE_HISTORY_LIMIT:
+                        del resync_history[0]
                     self._stream.mark_all_stale()  # untrusted until the resync snapshot
                     await self._safe_close(transport)
                     if resync_failures >= self._max_resyncs:
                         raise RuntimeError(
                             f"order book failed to resync after {resync_failures} consecutive "
                             f"attempts - HALT (irreconcilable divergence / likely format change); "
-                            f"{self._format_divergence(resync_detail)}"
+                            f"{self._format_divergence_history(resync_history)}"
                         )
                     # Back off so a persistently re-diverging book can never become a
                     # zero-delay reconnect hot-loop against the gateway; a single
@@ -115,13 +122,30 @@ class MarketSocket:
                     await self._sleep(self._backoff_delay(resync_failures))
                     failures = 0  # the connection was streaming; disconnect-backoff resets
                     continue
-                failures = 0          # a clean close resets the backoff
+                # A normal iterator exit is still a closed websocket. In unbounded
+                # production mode (or any bounded run with another connection left),
+                # stale the prior generation before reconnecting so a delta that races
+                # ahead of its replacement snapshot cannot use the old book as a
+                # baseline. Back off exactly like an exception close: repeated clean
+                # closes must not create a zero-delay reconnect loop.
+                will_reconnect = max_connections is None or connections < max_connections
+                if will_reconnect:
+                    self._stream.mark_all_stale()
+                    failures += 1
+                    resync_failures = 0
+                    resync_history.clear()
+                    await self._safe_close(transport)
+                    await self._sleep(self._backoff_delay(failures))
+                    continue
+                failures = 0
                 resync_failures = 0
+                resync_history.clear()
                 await self._safe_close(transport)  # don't leak a cleanly-exhausted transport
             except self._reconnect_on:
                 self._stream.mark_all_stale()  # books untrusted until the resync snapshot
                 failures += 1
                 resync_failures = 0  # a real disconnect is not a resync storm
+                resync_history.clear()
                 await self._sleep(self._backoff_delay(failures))
 
     async def _safe_close(self, transport):
@@ -178,9 +202,15 @@ class MarketSocket:
     def _backoff_delay(self, failures):
         return min(self._backoff_cap, self._backoff_base * (2 ** (failures - 1)))
 
+    def _format_divergence_history(self, history):
+        attempts = " | ".join(
+            f"{index}:{self._format_divergence(detail)}"
+            for index, detail in enumerate(history, start=1)
+        )
+        return f"shard_assets={len(self._asset_ids)}; attempts=[{attempts}]"
+
     def _format_divergence(self, detail):
         return (
-            f"shard_assets={len(self._asset_ids)}; "
             f"asset_id={self._bounded_repr(detail.asset_id)}; "
             f"market={self._bounded_repr(detail.market)}; "
             f"timestamp={self._bounded_repr(detail.timestamp)}; "
@@ -196,7 +226,7 @@ class MarketSocket:
 
     @staticmethod
     def _bounded_value(value):
-        return "None" if value is None else str(value)[:64]
+        return "None" if value is None else repr(str(value)[:64])
 
     def _subscribe_message(self):
         return json.dumps({"type": "market", "assets_ids": self._asset_ids})

@@ -13,7 +13,7 @@ ordering, but revisit if batch-atomic timestamps are ever needed.
 
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from polybot.ingestion.orderbook import LocalBook
 
@@ -31,6 +31,7 @@ _PRICE_CHANGE_REQUIRED = ("asset_id", "price", "side", "size", "best_bid", "best
 # float) is a format change AND would desync apply() (Decimal(x)) from verify() --
 # the Gamma normalizer takes the same reject-non-string stance -> HALT.
 _PRICE_CHANGE_NUMERIC = ("price", "size", "best_bid", "best_ask")
+_PRICE_CHANGE_SIDES = {"buy", "bid", "sell", "ask"}
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,25 @@ class MarketStream:
                         f"({entry[field]!r}, type {type(entry[field]).__name__}) "
                         f"- HALT on format change (lossy numeric)"
                     )
+                if field in ("best_bid", "best_ask") and entry[field] == "":
+                    continue  # documented empty-side sentinel
+                try:
+                    parsed = Decimal(entry[field])
+                except DecimalException as exc:
+                    raise ValueError(
+                        f"price_change {field} is not a valid finite decimal "
+                        f"({entry[field]!r}) - HALT on format change"
+                    ) from exc
+                if not parsed.is_finite():
+                    raise ValueError(
+                        f"price_change {field} is not a valid finite decimal "
+                        f"({entry[field]!r}) - HALT on format change"
+                    )
+            side = entry["side"]
+            if not isinstance(side, str) or side.strip().lower() not in _PRICE_CHANGE_SIDES:
+                raise ValueError(
+                    f"unknown price_change side: {side!r} - HALT on format change"
+                )
             asset_id = entry["asset_id"]
             if asset_id not in grouped:
                 grouped[asset_id] = []
