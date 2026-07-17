@@ -1,5 +1,10 @@
 # PLAN — POL-13 repeated order-book resync correction
 
+Status at 2026-07-17 13:45 UTC: Stage A and Stage B implementation are complete. Independent
+reviews found normal-close readiness, semantic-validation, bounded-history/log-safety, lock, and
+coverage gaps; all have focused GREEN fixes. Mutation completion, re-review, final canonical suite,
+documentation/publication, installation, and observation remain.
+
 ## Stage A — identify the real divergence
 
 1. Add one failing `MarketStream` test requiring bounded exact divergence evidence and proving a
@@ -31,4 +36,3 @@
     merge only the reviewed candidate.
 15. Install with databases/config preserved, validate memory caps and no-signing boundaries, and
     restart POL-17 then Hermes. Observe the corrected failure window and record evidence.
-

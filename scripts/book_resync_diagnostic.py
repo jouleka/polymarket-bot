@@ -20,6 +20,8 @@ from polybot.ingestion.sharding import ShardedMarketCollector
 from polybot.ingestion.transport import WS_RECONNECT_ON, open_market_ws
 from polybot.runtime.config import load_config
 from polybot.runtime.discovery import discover_universe, make_gamma_fetch
+from polybot.runtime.shadow import LOCK_PATH
+from polybot.runtime.shadow_adapters import SingletonLock
 
 
 def make_diagnostic_collector(token_ids, *, max_assets_per_shard, connect=open_market_ws):
@@ -33,25 +35,30 @@ def make_diagnostic_collector(token_ids, *, max_assets_per_shard, connect=open_m
     )
 
 
-async def run(config_path, *, seconds):
-    config = load_config(config_path)
-    token_ids = tuple(discover_universe(make_gamma_fetch(config.gamma_url), config))
-    collector = make_diagnostic_collector(
-        token_ids,
-        max_assets_per_shard=config.max_assets_per_shard,
-    )
-    print(
-        f"diagnostic collector: tokens={len(token_ids)} shards={collector.shard_count} "
-        f"seconds={seconds:g} persistence=none",
-        flush=True,
-    )
+async def run(config_path, *, seconds, lock_factory=SingletonLock):
+    lock = lock_factory(LOCK_PATH)
+    lock.acquire()
     try:
-        await asyncio.wait_for(
-            collector.run(max_connections=None),
-            timeout=seconds,
+        config = load_config(config_path)
+        token_ids = tuple(discover_universe(make_gamma_fetch(config.gamma_url), config))
+        collector = make_diagnostic_collector(
+            token_ids,
+            max_assets_per_shard=config.max_assets_per_shard,
         )
-    except TimeoutError:
-        print("diagnostic bound reached without a terminal resync storm", flush=True)
+        print(
+            f"diagnostic collector: tokens={len(token_ids)} shards={collector.shard_count} "
+            f"seconds={seconds:g} persistence=none",
+            flush=True,
+        )
+        try:
+            await asyncio.wait_for(
+                collector.run(max_connections=None),
+                timeout=seconds,
+            )
+        except TimeoutError:
+            print("diagnostic bound reached without a terminal resync storm", flush=True)
+    finally:
+        lock.release()
 
 
 def _positive_finite(raw):
@@ -71,4 +78,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

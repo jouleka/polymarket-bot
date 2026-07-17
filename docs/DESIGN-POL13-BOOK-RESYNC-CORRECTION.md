@@ -48,16 +48,20 @@ levels, sizes, sibling entries, or full frames. A clean event cannot erase pendi
 evidence. `consume_resync_request()` remains exactly boolean for compatibility.
 
 `MarketSocket` consumes the paired detail when it consumes the request. Its terminal resync error
-must include the bounded detail and the shard's configured asset count. Missing detail is itself a
-fail-loud internal invariant error. The retry/backoff/HALT behavior is otherwise unchanged in
-Stage A.
+must include the shard's configured asset count and an ordered, escaped history of no more than
+eight bounded divergence details. This distinguishes repeated-same from changing-asset storms
+without logging raw frames. Clean progress, transport disconnect, or normal-close reconnect clears
+the history together with the consecutive counter. Missing detail is itself a fail-loud internal
+invariant error. The retry/backoff/HALT threshold is otherwise unchanged.
 
 ## 4. Stopped-service live diagnostic
 
 After Stage A tests pass, stop Hermes and then POL-17 cleanly. Run a bounded, non-persisting
 collector from the synchronized development checkout against the production discovery/shard
-configuration. It must use the single collector identity while production is stopped and exit on
-the first terminal resync storm or its time bound. Preserve databases and raw-firehose evidence.
+configuration. It acquires the production runtime's nonblocking singleton lock before discovery
+and holds it until completion, so a service/operator race cannot create a duplicate collector. It
+must exit on the first terminal resync storm or its time bound. Preserve databases and raw-firehose
+evidence.
 
 The captured `BookDivergence` decides Stage B:
 
@@ -93,3 +97,45 @@ The Stage B design amendment must name the observed exact failure class and prov
 - Deployment preserves config/data, retains existing memory caps, and restarts in dependency order
   only after the reviewed correction lands.
 
+## 7. Stage B amendment — reconnect snapshot-readiness race
+
+Two further production resync HALTs occurred at 2026-07-17 12:51:18 UTC and
+13:20:33 UTC. The latter followed a restart by only 29 minutes. The process peaked at
+285.7 MB RSS with zero swap, excluding the VPS memory cap as the trigger. The installed
+pre-diagnostic build still discarded the offending asset/top details. A state-machine audit found
+and reproduced a recovery race that deterministically creates the same consecutive resync storm.
+It is a confirmed defect consistent with the incidents, not proof that it caused every historical
+restart; the bounded live diagnostic remains the causal observation gate:
+
+1. a gap or exceptional transport disconnect calls `MarketStream.mark_all_stale()` but
+   intentionally retains the prior levels for diagnostics; normal close codes previously bypassed
+   this stale transition entirely;
+2. reconnect subscribes the whole shard and waits for replacement snapshots;
+3. a tracked asset's live `price_change` can arrive before that asset's new `book` snapshot;
+4. the dispatcher distinguished only `book is None`, so it applied that delta to the retained
+   stale levels and compared the mixed-generation book with the venue's current top;
+5. the manufactured mismatch forced another reconnect before the replacement snapshot could be
+   consumed, repeating until the existing eight-attempt HALT.
+
+This differs from an actual post-snapshot divergence. A stale book explicitly has no read/ERS
+authority, so deltas received before its replacement snapshot cannot safely mutate it. The exact
+recovery rule is therefore:
+
+- `book is None` and `book.is_stale()` use the same pre-snapshot path;
+- all entries first pass atomic semantic validation (finite exact decimals and known sides), so the
+  archive-only window cannot suppress a protocol-format HALT;
+- a tracked delta is still stamped and archived by the configured sink, preserving the
+  no-backfill evidence contract;
+- it is not applied, cannot clear staleness, and cannot request another resync;
+- an untracked sibling remains skipped as before;
+- only a full `book` snapshot replaces levels and clears staleness;
+- subsequent deltas are applied and verified exactly as before, and a real post-snapshot mismatch
+  still follows the existing backoff and eight-attempt HALT.
+- any normally exhausted websocket is marked stale and backed off before a production reconnect;
+  bounded one-shot runs retain their existing terminal semantics.
+
+The correction changes no collector identity, websocket schema, retry limit, raw persistence,
+database, execution/controller seam, signer boundary, or proposal authority. A socket-level
+regression covers gap -> reconnect -> delta-before-snapshot -> snapshot -> clean delta and fails
+under the pre-fix stale-baseline behavior. A combined two-asset regression additionally proves
+sibling preservation and atomic HALT on a malformed multi-asset frame during recovery.

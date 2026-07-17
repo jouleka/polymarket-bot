@@ -303,6 +303,43 @@ def test_ingest_does_not_apply_reconnect_delta_before_fresh_snapshot():
     assert stream.consume_resync_request() is False  # wait for the fresh snapshot
 
 
+def test_ingest_rejects_invalid_decimal_while_waiting_for_reconnect_snapshot():
+    # Archive-only recovery is not a parser bypass: malformed semantic content must
+    # still HALT before mutation even while the retained book is stale.
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+
+    with pytest.raises(ValueError, match="valid finite decimal"):
+        stream.ingest(_price_change(
+            ("A", "not-a-decimal", "BUY", "50", "0.70", "0.72"),
+        ))
+
+    assert stream.book_for("A").best_bid() == Decimal("0.60")
+    assert stream.book_for("A").is_stale()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("best_bid", "NaN", "valid finite decimal"),
+        ("side", "RENAMED_SIDE", "unknown price_change side"),
+    ],
+)
+def test_ingest_rejects_semantic_format_change_while_book_is_stale(field, value, match):
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+    message = _price_change(("A", "0.70", "BUY", "50", "0.70", "0.72"))
+    message["price_changes"][0][field] = value
+
+    with pytest.raises(ValueError, match=match):
+        stream.ingest(message)
+
+    assert stream.book_for("A").best_bid() == Decimal("0.60")
+    assert stream.book_for("A").is_stale()
+
+
 def test_ingest_price_change_observation_message_is_a_per_asset_slice():
     # Each fanned-out row in the no-backfill store must carry ONLY its own asset's
     # entries plus the frame's market+timestamp (published_at) -- never the sibling's.
