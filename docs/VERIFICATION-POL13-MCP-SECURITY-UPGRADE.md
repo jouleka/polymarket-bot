@@ -67,4 +67,20 @@ and raw `clob-ws` rows. All configuration/auth/evidence checksums and database i
 still passed. No profile-local auth/env file appeared.
 
 GitHub still reported alerts 1–3 open at 15:57 UTC because Dependabot had not yet rescanned the
-post-merge manifest. They must close through dependency-graph detection, not manual dismissal.
+post-merge manifest. At 16:18:24–25 UTC, the dependency graph detected MCP 1.28.1 and automatically
+marked all three alerts fixed; none was manually dismissed.
+
+## One-hour shadow checkpoint
+
+At 16:53:40 UTC, the post-upgrade POL-17 invocation had run for almost one hour. Both services
+remained active+enabled with `NRestarts=0`, service swap zero, memory-pressure averages zero, and
+all cgroup `low/high/max/oom/oom_kill` counters zero. POL-17 current/peak memory was
+293,462,016/424,222,720 bytes and Hermes was 287,621,120/289,554,432 bytes, within unchanged caps.
+The latest scheduled Hermes turn completed `ok` at 16:50:32. One book read was rejected fail-closed
+during a changing live universe; there was no service error or authority fallback.
+
+All seven database quick checks passed. There were zero pending intents, fills, shadow executions,
+execution-outbox entries, shadow trades, resolution subjects/assessments/terminals/outbox entries,
+and raw `clob-ws` rows. Periodic midpoint batches and the full deduplicated data-API tape continued
+to grow. The shadow remains safely idle until Hermes produces a genuine proposal; no fake production
+proposal is synthesized for test coverage.

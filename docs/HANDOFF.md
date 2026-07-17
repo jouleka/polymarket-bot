@@ -767,8 +767,8 @@ independent specification/security PASS, and a 5/5 mutation gate. Hermes Agent 0
 profile/model/auth/cron were not recreated or changed. The stopped maintenance preserved config,
 auth, seven databases, raw evidence, and exact-five inventory. Both services restarted in order,
 advertised 144 live books, and completed the first Hermes turn `ok` with zero restarts, swap,
-economic/outbox/raw rows, or cgroup pressure/OOM events. The three GitHub alerts remained open at
-15:57 UTC pending Dependabot's post-merge rescan; do not dismiss them manually. POL-17/POL-18
+economic/outbox/raw rows, or cgroup pressure/OOM events. Dependabot's graph rescanned MCP 1.28.1
+and automatically closed all three alerts at 16:18 UTC; none was manually dismissed. POL-17/POL-18
 repository and live-ticket summaries are reconciled to their active deployment. Exact evidence is
 in [`VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md`](VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md).
 
