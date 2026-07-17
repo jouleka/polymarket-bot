@@ -370,6 +370,36 @@ def test_resync_request_survives_an_intervening_consistent_frame():
     assert stream.consume_resync_request() is True  # the gap's request survived
 
 
+def test_resync_detail_identifies_gap_and_survives_later_clean_frame():
+    # Production saw repeated eight-attempt HALTs, but the old boolean request lost
+    # the only evidence that could identify the poisoning asset. Keep a bounded,
+    # exact diagnostic paired with the pending request; clean sibling progress must
+    # not erase it before the socket consumes the resync.
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.ingest(_book("B", [("0.40", "100")], [("0.45", "100")]))
+
+    stream.ingest(_price_change(
+        ("A", "0.61", "BUY", "50", "0.70", "0.62"),
+        market="0xA", timestamp="123",
+    ))
+    stream.ingest(_price_change(
+        ("B", "0.41", "BUY", "50", "0.41", "0.45"),
+        market="0xB", timestamp="124",
+    ))
+
+    assert stream.consume_resync_request() is True
+    detail = stream.consume_resync_detail()
+    assert detail.asset_id == "A"
+    assert detail.market == "0xA"
+    assert detail.timestamp == "123"
+    assert detail.reconstructed_bid == "0.61"
+    assert detail.reconstructed_ask == "0.62"
+    assert detail.venue_bid == "0.70"
+    assert detail.venue_ask == "0.62"
+    assert stream.consume_resync_detail() is None
+
+
 def test_ingest_price_change_malformed_later_entry_halts_atomically():
     # _group_by_asset validates EVERY entry before any mutation/persist, so a malformed
     # later entry HALTs with no partial fan-out (earlier asset's book untouched, sink empty).
