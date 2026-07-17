@@ -202,6 +202,19 @@ def test_installer_precreates_durable_service_owned_runtime_lock():
     assert 'chmod 0640 "$RUNTIME_LOCK"' in text
 
 
+def test_installer_never_recursively_reowns_preserved_data_tree():
+    text = INSTALLER.read_text()
+    guard = '[ -L "$APP/data" ] || [ ! -d "$APP/data" ]'
+    chown = 'chown "$SVC_USER:$SVC_USER" "$APP/data"'
+    chmod = 'chmod 0750 "$APP/data"'
+
+    assert 'chown -R "$SVC_USER:$SVC_USER" "$APP/data"' not in text
+    assert guard in text
+    assert chown in text
+    assert text.index(guard) < text.index(chown)
+    assert text.index(guard) < text.index(chmod)
+
+
 def test_ingestion_unit_has_fail_closed_memory_ceiling():
     text = UNIT.read_text()
 
