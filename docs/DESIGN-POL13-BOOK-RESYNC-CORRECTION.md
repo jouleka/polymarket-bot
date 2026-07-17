@@ -58,10 +58,12 @@ invariant error. The retry/backoff/HALT threshold is otherwise unchanged.
 
 After Stage A tests pass, stop Hermes and then POL-17 cleanly. Run a bounded, non-persisting
 collector from the synchronized development checkout against the production discovery/shard
-configuration. It acquires the production runtime's nonblocking singleton lock before discovery
-and holds it until completion, so a service/operator race cannot create a duplicate collector. It
-must exit on the first terminal resync storm or its time bound. Preserve databases and raw-firehose
-evidence.
+configuration. It acquires the production runtime's nonblocking singleton lock at
+`/opt/polymarket-bot/data/shadow-runtime.lock` before discovery and holds it until completion, so a
+service/operator race cannot create a duplicate collector. The stopped installer precreates that
+regular file as `0640 polybot:polybot`; unlike systemd's `/run/polybot`, its parent persists while
+the unit is stopped. The probe must exit on the first terminal resync storm or its time bound.
+Preserve databases and raw-firehose evidence.
 
 The captured `BookDivergence` decides Stage B:
 
@@ -69,8 +71,8 @@ The captured `BookDivergence` decides Stage B:
   may be designed;
 - changing assets, malformed values, or cross-shard evidence: preserve whole-process HALT and fix
   the protocol parser/ordering contract;
-- no reproduction within the bound: deploy Stage A only, restart in order, and wait for one
-  production recurrence before any behavior change.
+- no reproduction within the bound and no deterministic invariant defect: deploy Stage A only,
+  restart in order, and wait for one production recurrence before any behavior change.
 
 No asset quarantine or parser relaxation may be inferred without this evidence.
 
@@ -130,9 +132,11 @@ recovery rule is therefore:
 - an untracked sibling remains skipped as before;
 - only a full `book` snapshot replaces levels and clears staleness;
 - subsequent deltas are applied and verified exactly as before, and a real post-snapshot mismatch
-  still follows the existing backoff and eight-attempt HALT.
+  still follows the existing backoff and eight-attempt HALT;
 - any normally exhausted websocket is marked stale and backed off before a production reconnect;
-  bounded one-shot runs retain their existing terminal semantics.
+  every abandoned generation, including format HALT and cancellation, is marked stale synchronously
+  before keepalive/socket teardown can yield; bounded one-shot runs retain their existing terminal
+  semantics.
 
 The correction changes no collector identity, websocket schema, retry limit, raw persistence,
 database, execution/controller seam, signer boundary, or proposal authority. A socket-level

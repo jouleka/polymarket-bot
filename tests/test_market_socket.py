@@ -54,6 +54,17 @@ class FakeTransport:
             yield frame
 
 
+class ObserveOnExhaustionTransport(FakeTransport):
+    def __init__(self, frames, observer):
+        super().__init__(frames)
+        self._observer = observer
+
+    async def __aiter__(self):
+        async for frame in super().__aiter__():
+            yield frame
+        asyncio.get_running_loop().call_soon(self._observer)
+
+
 class IdleAfterFramesTransport:
     """Yields the given frames, then stays open and idle forever (blocks).
 
@@ -389,6 +400,27 @@ def test_socket_normal_close_stales_before_production_reconnect():
     assert sleep.delays == [0.5]  # normal-close reconnect cannot hot-loop
 
 
+def test_socket_normal_close_stales_before_teardown_can_yield():
+    observed = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    t1 = ObserveOnExhaustionTransport(
+        [_book_frame("A", "0.60", "0.62")],
+        lambda: observed.append(stream.book_for("A").is_stale()),
+    )
+    t2 = FakeTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    socket = MarketSocket(connect, stream, asset_ids=["A"], sleep=RecordingSleep())
+
+    asyncio.run(socket.run(max_connections=2))
+
+    assert observed == [True]  # never expose the abandoned generation across an await
+    assert not stream.book_for("A").is_stale()  # replacement snapshot restored authority
+
+
 def _price_change_frame(asset_id, price, side, size, best_bid, best_ask,
                         market="0xmarket", timestamp="1"):
     return json.dumps({
@@ -503,8 +535,8 @@ def test_socket_recovery_preserves_sibling_and_halts_atomically_on_format_change
 
     assert stream.book_for("A").best_bid() == Decimal("0.60")  # no partial A apply
     assert stream.book_for("B").best_bid() == Decimal("0.40")  # raced B was non-authoritative
-    assert not stream.book_for("A").is_stale()
-    assert not stream.book_for("B").is_stale()
+    assert stream.book_for("A").is_stale()  # global HALT revokes authority before teardown awaits
+    assert stream.book_for("B").is_stale()
 
 
 def test_socket_resync_request_without_detail_halts():

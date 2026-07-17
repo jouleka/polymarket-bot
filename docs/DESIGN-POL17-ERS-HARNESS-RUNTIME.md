@@ -247,7 +247,8 @@ Production defaults are distinct files under `/opt/polymarket-bot/data`:
 The same path may not back two logical stores: Maker and Shadow share table names and receipt
 schemas, so aliasing would destroy role separation. SQLite migrations are forward-only,
 transactional, idempotent schema creation/validation at open. POL-17 does not migrate or touch the
-existing production files. The runtime singleton lock and readiness/status live under `/run/polybot`
+existing production files. The runtime singleton lock lives durably under
+`/opt/polymarket-bot/data`; readiness/status live under `/run/polybot`
 and contain no market authority.
 
 Configuration requires two distinct read-only Polygon HTTPS providers, stable non-secret provider
