@@ -726,6 +726,28 @@ memory-pressure/OOM counters remained zero. All seven database integrity checks 
 current/peak memory was 167,358,464/167,890,944 bytes and Hermes was
 266,788,864/269,582,336 bytes, within unchanged caps. YouTrack evidence is comment `7-343`.
 
+**UPDATE 2026-07-17 — repeated order-book resync correction reviewed; services stopped.** The
+extended shadow accumulated eight fail-closed eight-attempt book-resync exits, including two more
+at 12:51 and 13:20 UTC. Memory pressure, swap, and OOM remained zero. The old terminal error could
+not attribute historical causality, but strict TDD reproduced a reconnect-generation defect: a
+delta racing ahead of its replacement snapshot was applied to retained stale levels and could
+manufacture the next resync before the snapshot arrived. The correction requires a fresh snapshot
+before authority, validates semantic content before archive-only recovery, stales every abandoned
+generation before teardown can yield, backs off normal-close reconnects, and reports an escaped,
+bounded eight-attempt history without raw frames. A non-persisting probe now shares a durable
+`/opt/polymarket-bot/data/shadow-runtime.lock`, precreated safely by the stopped installer.
+
+The 1,800-second stopped-service probe covered 200 tokens over eight shards with `sink=None`, used
+about 85 MB RSS, and reached its bound without a natural terminal storm; that is negative bounded
+evidence, not historical attribution. The canonical suite passes 2,330 tests, final independent
+specification/security re-reviews pass, and the isolated 10/10 mutation battery has zero survivors.
+Exact evidence is in
+[`VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md`](VERIFICATION-POL13-BOOK-RESYNC-CORRECTION.md).
+Both services are currently inactive/dead but remain enabled. Candidate code is at `2c7db2b`; it
+has not yet been landed or installed. Next: land, install while stopped with all databases/config/
+raw evidence preserved, then restart POL-17 followed by Hermes and observe the prior failure
+window. This grants no live-money authority.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
