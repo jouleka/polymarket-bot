@@ -168,13 +168,14 @@ class MarketStream:
         for asset_id in order:
             entries = grouped[asset_id]
             book = self._books.get(asset_id)
-            if book is None:
-                # No snapshot baseline yet. If this is a SUBSCRIBED asset (its snapshot
-                # is merely in-flight), archive the raw delta -- the store cannot be
-                # backfilled -- but do NOT apply it (a delta with no baseline is not a
-                # trustworthy book; the imminent snapshot supersedes it). A truly
-                # untracked sibling leg is skipped: no phantom book, and no duplicate
-                # row racing the shard that actually subscribed to it.
+            if book is None or book.is_stale():
+                # No trustworthy snapshot baseline for this connection yet. This is
+                # either initial startup (no book) or reconnect (the retained old book
+                # is stale until its replacement snapshot arrives). If this is a
+                # SUBSCRIBED asset, archive the raw delta -- the store cannot be
+                # backfilled -- but do NOT apply it to an absent/stale baseline. A
+                # truly untracked sibling leg is skipped: no phantom book, and no
+                # duplicate row racing the shard that actually subscribed to it.
                 if self._tracked is not None and asset_id in self._tracked and self._sink is not None:
                     observed_at = self._stamp_frame()
                     self._sink(Observation(
