@@ -169,13 +169,14 @@ def test_sharded_collector_isolates_staleness_to_the_disconnected_shard():
 
 
 def test_sharded_collector_reconnects_one_shard_while_sibling_keeps_streaming():
-    # The headline feature: shard A disconnects then RECONNECTS+resyncs (book fresh
-    # again), while sibling shard B streams undisturbed throughout. (max_connections=2
-    # bounds each shard to its two scripted connections so the run terminates.)
+    # Shard A disconnects then RECONNECTS+resyncs while sibling shard B independently
+    # crosses its own normal-close reconnect boundary and receives the same fresh
+    # snapshot. max_connections=2 bounds both scripted shards so the run terminates.
     scripts = {
         "A": [[_book_frame("A", "0.60", "0.62"), FakeDisconnect()],  # conn1: book then drop
               [_book_frame("A", "0.61", "0.63")]],                   # conn2: resync snapshot
-        "B": [[_book_frame("B", "0.40", "0.45")]],                   # conn1: streams once, stays clean
+        "B": [[_book_frame("B", "0.40", "0.45")],                    # conn1: normal close
+              [_book_frame("B", "0.40", "0.45")]],                   # conn2: replacement snapshot
     }
     stamper = MonotonicStamper(clock=lambda: 1)
     collector = ShardedMarketCollector(
@@ -187,8 +188,8 @@ def test_sharded_collector_reconnects_one_shard_while_sibling_keeps_streaming():
 
     assert collector.book_for("A").best_bid() == Decimal("0.61")  # A resynced to the fresh snapshot
     assert not collector.book_for("A").is_stale()                 # ...and is no longer stale
-    assert collector.book_for("B").best_bid() == Decimal("0.40")  # B untouched
-    assert not collector.book_for("B").is_stale()                 # B never went stale
+    assert collector.book_for("B").best_bid() == Decimal("0.40")  # B independently resnapshotted
+    assert not collector.book_for("B").is_stale()
 
 
 def test_sharded_collector_shares_one_stamper_for_global_observed_at_order():

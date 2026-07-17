@@ -192,6 +192,16 @@ def test_unit_runs_the_composite_shadow_runtime_with_notify_contract():
     assert "ExecStartPre=/usr/bin/chgrp" not in text
 
 
+def test_installer_precreates_durable_service_owned_runtime_lock():
+    text = INSTALLER.read_text()
+
+    assert 'RUNTIME_LOCK="$APP/data/shadow-runtime.lock"' in text
+    assert '[ -L "$RUNTIME_LOCK" ]' in text
+    assert 'install -o "$SVC_USER" -g "$SVC_USER" -m 0640 /dev/null "$RUNTIME_LOCK"' in text
+    assert 'chown "$SVC_USER:$SVC_USER" "$RUNTIME_LOCK"' in text
+    assert 'chmod 0640 "$RUNTIME_LOCK"' in text
+
+
 def test_ingestion_unit_has_fail_closed_memory_ceiling():
     text = UNIT.read_text()
 

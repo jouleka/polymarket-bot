@@ -9,6 +9,7 @@ APP=/opt/polymarket-bot
 SVC_USER=polybot
 BRIDGE_GROUP=polybot-proposal
 UV=/root/.local/bin/uv
+RUNTIME_LOCK="$APP/data/shadow-runtime.lock"
 
 verify_services_not_active() {
     local unit active_state load_state
@@ -92,6 +93,15 @@ echo "== 5. ownership (ONLY the writable data dir -> $SVC_USER) =="
 # dubious-ownership guard. PYTHONDONTWRITEBYTECODE=1 in the unit keeps src/ write-free.
 chown -R "$SVC_USER:$SVC_USER" "$APP/data"
 chmod 0750 "$APP/data"
+if [ -L "$RUNTIME_LOCK" ] || { [ -e "$RUNTIME_LOCK" ] && [ ! -f "$RUNTIME_LOCK" ]; }; then
+    echo "ERROR: runtime lock must be a regular file: $RUNTIME_LOCK" >&2
+    exit 1
+fi
+if [ ! -e "$RUNTIME_LOCK" ]; then
+    install -o "$SVC_USER" -g "$SVC_USER" -m 0640 /dev/null "$RUNTIME_LOCK"
+fi
+chown "$SVC_USER:$SVC_USER" "$RUNTIME_LOCK"
+chmod 0640 "$RUNTIME_LOCK"
 chown root:"$SVC_USER" "$APP/config.toml"
 chmod 0640 "$APP/config.toml"
 if [ -f "$APP/.env" ]; then

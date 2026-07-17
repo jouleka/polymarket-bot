@@ -13,7 +13,7 @@ ordering, but revisit if batch-atomic timestamps are ever needed.
 
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from polybot.ingestion.orderbook import LocalBook
 
@@ -31,6 +31,7 @@ _PRICE_CHANGE_REQUIRED = ("asset_id", "price", "side", "size", "best_bid", "best
 # float) is a format change AND would desync apply() (Decimal(x)) from verify() --
 # the Gamma normalizer takes the same reject-non-string stance -> HALT.
 _PRICE_CHANGE_NUMERIC = ("price", "size", "best_bid", "best_ask")
+_PRICE_CHANGE_SIDES = {"buy", "bid", "sell", "ask"}
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,17 @@ class Observation:
     event_type: str
     observed_at: int
     message: dict
+
+
+@dataclass(frozen=True)
+class BookDivergence:
+    asset_id: str
+    market: str | None
+    timestamp: str | None
+    reconstructed_bid: str | None
+    reconstructed_ask: str | None
+    venue_bid: str
+    venue_ask: str
 
 
 class MarketStream:
@@ -58,6 +70,7 @@ class MarketStream:
         # also carries (skip, to avoid a phantom book and cross-shard duplicate rows).
         self._tracked = set(asset_ids) if asset_ids is not None else None
         self._resync_requested = False
+        self._resync_detail = None
         self._clean_progress = False
         self._last_frame_at = None  # stamper-ns of the last dispatched REAL venue frame (S4.4d)
 
@@ -94,6 +107,11 @@ class MarketStream:
             self._clean_progress = False
             return True
         return False
+
+    def consume_resync_detail(self):
+        detail = self._resync_detail
+        self._resync_detail = None
+        return detail
 
     def last_frame_at(self):
         """Stamper-ns ``observed_at`` of the last dispatched REAL venue frame;
@@ -151,13 +169,14 @@ class MarketStream:
         for asset_id in order:
             entries = grouped[asset_id]
             book = self._books.get(asset_id)
-            if book is None:
-                # No snapshot baseline yet. If this is a SUBSCRIBED asset (its snapshot
-                # is merely in-flight), archive the raw delta -- the store cannot be
-                # backfilled -- but do NOT apply it (a delta with no baseline is not a
-                # trustworthy book; the imminent snapshot supersedes it). A truly
-                # untracked sibling leg is skipped: no phantom book, and no duplicate
-                # row racing the shard that actually subscribed to it.
+            if book is None or book.is_stale():
+                # No trustworthy snapshot baseline for this connection yet. This is
+                # either initial startup (no book) or reconnect (the retained old book
+                # is stale until its replacement snapshot arrives). If this is a
+                # SUBSCRIBED asset, archive the raw delta -- the store cannot be
+                # backfilled -- but do NOT apply it to an absent/stale baseline. A
+                # truly untracked sibling leg is skipped: no phantom book, and no
+                # duplicate row racing the shard that actually subscribed to it.
                 if self._tracked is not None and asset_id in self._tracked and self._sink is not None:
                     observed_at = self._stamp_frame()
                     self._sink(Observation(
@@ -183,6 +202,16 @@ class MarketStream:
             last = entries[-1]
             if not book.verify_top_of_book(last["best_bid"], last["best_ask"]):  # required (HALT-guarded)
                 self._resync_requested = True  # diverged -> force a resync snapshot
+                self._resync_detail = BookDivergence(
+                    asset_id=asset_id,
+                    market=message.get("market") if isinstance(message.get("market"), str) else None,
+                    timestamp=(message.get("timestamp")
+                               if isinstance(message.get("timestamp"), str) else None),
+                    reconstructed_bid=self._price_string(book.best_bid()),
+                    reconstructed_ask=self._price_string(book.best_ask()),
+                    venue_bid=last["best_bid"],
+                    venue_ask=last["best_ask"],
+                )
             else:
                 self._clean_progress = True  # reconciling delta -> resets the resync-storm counter
             if self._sink is not None:
@@ -195,6 +224,10 @@ class MarketStream:
                     asset_id, level_changes, before_top, book.top_of_book(), observed_at))
             stamps.append(observed_at)
         return stamps
+
+    @staticmethod
+    def _price_string(value):
+        return None if value is None else str(value)
 
     def _emit_synthetic(self, events):
         # Each synthetic event is its own point-in-time observation -> its own
@@ -223,6 +256,25 @@ class MarketStream:
                         f"({entry[field]!r}, type {type(entry[field]).__name__}) "
                         f"- HALT on format change (lossy numeric)"
                     )
+                if field in ("best_bid", "best_ask") and entry[field] == "":
+                    continue  # documented empty-side sentinel
+                try:
+                    parsed = Decimal(entry[field])
+                except DecimalException as exc:
+                    raise ValueError(
+                        f"price_change {field} is not a valid finite decimal "
+                        f"({entry[field]!r}) - HALT on format change"
+                    ) from exc
+                if not parsed.is_finite():
+                    raise ValueError(
+                        f"price_change {field} is not a valid finite decimal "
+                        f"({entry[field]!r}) - HALT on format change"
+                    )
+            side = entry["side"]
+            if not isinstance(side, str) or side.strip().lower() not in _PRICE_CHANGE_SIDES:
+                raise ValueError(
+                    f"unknown price_change side: {side!r} - HALT on format change"
+                )
             asset_id = entry["asset_id"]
             if asset_id not in grouped:
                 grouped[asset_id] = []

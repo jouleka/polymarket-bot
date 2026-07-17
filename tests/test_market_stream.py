@@ -279,6 +279,67 @@ def test_ingest_persists_pre_snapshot_delta_for_a_subscribed_asset():
     assert stream.consume_resync_request() is False  # no book to verify -> not a gap
 
 
+def test_ingest_does_not_apply_reconnect_delta_before_fresh_snapshot():
+    # A reconnect retains the old book for diagnostics but marks it stale. A delta
+    # may race ahead of this connection's replacement snapshot; it must be archived
+    # exactly like an initial pre-snapshot delta, never applied to the stale baseline
+    # (which would manufacture another gap and an eight-reconnect storm).
+    seen = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=seen.append,
+                          asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+    seen.clear()
+
+    stream.ingest(_price_change(
+        ("A", "0.70", "BUY", "50", "0.70", "0.72"),
+        market="0xMKT", timestamp="2",
+    ))
+
+    book = stream.book_for("A")
+    assert book.is_stale()
+    assert book.best_bid() == Decimal("0.60")       # stale diagnostic state unchanged
+    assert [o.asset_id for o in seen] == ["A"]      # raw delta still archived
+    assert stream.consume_resync_request() is False  # wait for the fresh snapshot
+
+
+def test_ingest_rejects_invalid_decimal_while_waiting_for_reconnect_snapshot():
+    # Archive-only recovery is not a parser bypass: malformed semantic content must
+    # still HALT before mutation even while the retained book is stale.
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+
+    with pytest.raises(ValueError, match="valid finite decimal"):
+        stream.ingest(_price_change(
+            ("A", "not-a-decimal", "BUY", "50", "0.70", "0.72"),
+        ))
+
+    assert stream.book_for("A").best_bid() == Decimal("0.60")
+    assert stream.book_for("A").is_stale()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("best_bid", "NaN", "valid finite decimal"),
+        ("side", "RENAMED_SIDE", "unknown price_change side"),
+    ],
+)
+def test_ingest_rejects_semantic_format_change_while_book_is_stale(field, value, match):
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+    message = _price_change(("A", "0.70", "BUY", "50", "0.70", "0.72"))
+    message["price_changes"][0][field] = value
+
+    with pytest.raises(ValueError, match=match):
+        stream.ingest(message)
+
+    assert stream.book_for("A").best_bid() == Decimal("0.60")
+    assert stream.book_for("A").is_stale()
+
+
 def test_ingest_price_change_observation_message_is_a_per_asset_slice():
     # Each fanned-out row in the no-backfill store must carry ONLY its own asset's
     # entries plus the frame's market+timestamp (published_at) -- never the sibling's.
@@ -368,6 +429,36 @@ def test_resync_request_survives_an_intervening_consistent_frame():
     stream.ingest(_price_change(("A", "0.61", "BUY", "50", "0.61", "0.62")))  # consistent-looking
 
     assert stream.consume_resync_request() is True  # the gap's request survived
+
+
+def test_resync_detail_identifies_gap_and_survives_later_clean_frame():
+    # Production saw repeated eight-attempt HALTs, but the old boolean request lost
+    # the only evidence that could identify the poisoning asset. Keep a bounded,
+    # exact diagnostic paired with the pending request; clean sibling progress must
+    # not erase it before the socket consumes the resync.
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1))
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.ingest(_book("B", [("0.40", "100")], [("0.45", "100")]))
+
+    stream.ingest(_price_change(
+        ("A", "0.61", "BUY", "50", "0.70", "0.62"),
+        market="0xA", timestamp="123",
+    ))
+    stream.ingest(_price_change(
+        ("B", "0.41", "BUY", "50", "0.41", "0.45"),
+        market="0xB", timestamp="124",
+    ))
+
+    assert stream.consume_resync_request() is True
+    detail = stream.consume_resync_detail()
+    assert detail.asset_id == "A"
+    assert detail.market == "0xA"
+    assert detail.timestamp == "123"
+    assert detail.reconstructed_bid == "0.61"
+    assert detail.reconstructed_ask == "0.62"
+    assert detail.venue_bid == "0.70"
+    assert detail.venue_ask == "0.62"
+    assert stream.consume_resync_detail() is None
 
 
 def test_ingest_price_change_malformed_later_entry_halts_atomically():
