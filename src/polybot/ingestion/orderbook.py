@@ -64,7 +64,9 @@ class LocalBook:
         book stale (``midpoint()`` then returns None) so the gap forces a resync.
 
         ``best_bid`` / ``best_ask`` are venue price strings; ``""`` or ``None``
-        denotes an empty side. Returns True when in sync, False when diverged.
+        denotes an empty side. The venue also uses the out-of-domain boundary 0
+        for an empty bid and 1 for an empty ask (ask 0 remains accepted for
+        backward compatibility). Returns True when in sync, False when diverged.
         """
         if (self._matches(self.best_bid(), best_bid, empty_sentinels=(Decimal(0),))
                 and self._matches(
