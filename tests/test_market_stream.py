@@ -279,6 +279,30 @@ def test_ingest_persists_pre_snapshot_delta_for_a_subscribed_asset():
     assert stream.consume_resync_request() is False  # no book to verify -> not a gap
 
 
+def test_ingest_does_not_apply_reconnect_delta_before_fresh_snapshot():
+    # A reconnect retains the old book for diagnostics but marks it stale. A delta
+    # may race ahead of this connection's replacement snapshot; it must be archived
+    # exactly like an initial pre-snapshot delta, never applied to the stale baseline
+    # (which would manufacture another gap and an eight-reconnect storm).
+    seen = []
+    stream = MarketStream(MonotonicStamper(clock=lambda: 1), sink=seen.append,
+                          asset_ids=["A"])
+    stream.ingest(_book("A", [("0.60", "100")], [("0.62", "100")]))
+    stream.mark_all_stale()
+    seen.clear()
+
+    stream.ingest(_price_change(
+        ("A", "0.70", "BUY", "50", "0.70", "0.72"),
+        market="0xMKT", timestamp="2",
+    ))
+
+    book = stream.book_for("A")
+    assert book.is_stale()
+    assert book.best_bid() == Decimal("0.60")       # stale diagnostic state unchanged
+    assert [o.asset_id for o in seen] == ["A"]      # raw delta still archived
+    assert stream.consume_resync_request() is False  # wait for the fresh snapshot
+
+
 def test_ingest_price_change_observation_message_is_a_per_asset_slice():
     # Each fanned-out row in the no-backfill store must carry ONLY its own asset's
     # entries plus the frame's market+timestamp (published_at) -- never the sibling's.
