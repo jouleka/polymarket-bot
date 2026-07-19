@@ -24,6 +24,7 @@ systemctl is-active polymarket-ingestion.service   # inactive
 systemctl is-enabled polymarket-ingestion.service # disabled
 systemctl is-active polymarket-hermes.service     # inactive
 systemctl is-enabled polymarket-hermes.service    # disabled
+systemctl is-active polymarket-hermes-auth-writer.socket   # inactive
 ```
 
 It does not create a Hermes profile, write cron state, start a gateway, or open production
@@ -111,9 +112,10 @@ The output must include the existing `openai-codex` credential. A model credenti
 wallet/trading key and must never be copied into POL-17 config, source, prompt, SOUL, skill, memory,
 or cron text.
 
-The 2026-07-16 failed enablement created one forbidden profile-local `auth.json` through Hermes's
-unselected Nous keepalive. This is a one-time incident cleanup, not a general instruction to delete
-an unexpected credential file. Only while both units are inactive and disabled, after confirming
+The 2026-07-18 shadow observation created one forbidden profile-local `auth.json` through Hermes's
+credential-pool persistence path. This is a one-time incident cleanup, not a general instruction to
+delete an unexpected credential file. Only while both units and the auth-writer socket are inactive,
+after confirming
 the file is the recorded root-owned, mode-0600 regular file and recording non-secret metadata plus
 its checksum, remove that generated copy. Do not read or print its contents, and do not touch the
 native root auth store:
@@ -123,6 +125,7 @@ test "$(systemctl is-active polymarket-ingestion.service)" = inactive
 test "$(systemctl is-active polymarket-hermes.service)" = inactive
 test "$(systemctl is-enabled polymarket-ingestion.service)" = disabled
 test "$(systemctl is-enabled polymarket-hermes.service)" = disabled
+test "$(systemctl is-active polymarket-hermes-auth-writer.socket)" = inactive
 test -f /root/.hermes/profiles/polymarket/auth.json
 test ! -L /root/.hermes/profiles/polymarket/auth.json
 test "$(stat -c '%U:%G %a' /root/.hermes/profiles/polymarket/auth.json)" = "root:root 600"
@@ -191,6 +194,13 @@ profile-local `auth.json`, `.env`, and `.op.env` must remain absent before start
 observation. A run that reaches the 60-second boundary and creates any of them fails closed: stop
 and disable both units, preserve non-secret metadata as evidence, and do not relax preflight.
 
+Selected-provider rotation is persisted through a root-only, socket-activated one-shot writer. The
+Hermes process has no direct write access to `/root/.hermes/auth.json`; it must transfer its already
+held native `auth.lock` lease to the writer. The writer accepts one bounded request, permits changes
+only to `openai-codex` provider/pool state, performs Hermes's native atomic save to the fixed root
+store, and exits. There is no idle writer process and no model, tool, network, wallet, or trading
+authority in that unit.
+
 ## 5. Cron creation while the gateway remains stopped
 
 Requires separate cron-state approval. Use the reviewed prompt verbatim and do not attach skills,
@@ -248,6 +258,8 @@ cat /run/polybot/shadow-status.json
 
 systemctl start polymarket-hermes.service
 systemctl is-active polymarket-hermes.service
+systemctl is-active polymarket-hermes-auth-writer.socket
+systemctl list-units 'polymarket-hermes-auth-writer@*.service'
 journalctl -u polymarket-hermes.service --since=-5m --no-pager
 systemctl show polymarket-ingestion.service polymarket-hermes.service \
   -p MemoryCurrent -p MemoryPeak -p MemoryHigh -p MemoryMax \
@@ -287,13 +299,14 @@ systemctl enable polymarket-hermes.service
 
 ```sh
 systemctl disable --now polymarket-hermes.service
+systemctl stop polymarket-hermes-auth-writer.socket
 systemctl disable --now polymarket-ingestion.service
 ```
 
 The Hermes unit's `ExecStop` must write the profile-scoped native planned-stop marker before it
 signals the gateway, then wait for that exact PID/start-time identity to exit before returning.
 After a deliberate stop, require `Result=success`, `NRestarts=0`, no surviving `polymarket` gateway
-PID, and both units disabled:
+PID, an inactive auth-writer socket with no accepted instance, and both units disabled:
 
 ```sh
 systemctl show polymarket-hermes.service \

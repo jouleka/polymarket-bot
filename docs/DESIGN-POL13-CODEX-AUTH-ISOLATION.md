@@ -45,8 +45,14 @@ read-only `/root/.hermes` and sends only the complete native auth-store dictiona
 Unix socket. The writer has no model, tools, network, profile, persistence loop, or target selector;
 it validates the bounded JSON request, invokes Hermes 0.18.2's native `_save_auth_store` against the
 one fixed `/root/.hermes/auth.json`, returns success/failure, and exits. Socket activation means it
-consumes no persistent process memory between the rare auth writes. The shared native `auth.lock`
-remains held by the caller, preserving serialization with other Hermes processes.
+consumes no persistent process memory between the rare auth writes.
+
+The client must already hold Hermes's native `/root/.hermes/auth.lock`. It transfers a duplicate of
+that exact locked open-file description with `SCM_RIGHTS`; the writer proves both that the canonical
+path is locked and that the transferred descriptor itself owns that flock. The writer retains the
+lease through native save and reply. Serialization therefore survives caller death, while a stale,
+waiting, or independently opened decoy descriptor fails closed. Accepted writer instances are also
+bound to the Hermes service lifecycle and have a 20-second runtime ceiling.
 
 ## 3. Contract
 
@@ -76,6 +82,8 @@ the exact root target; the socket-activated server alone calls the unmodified na
 - The LLM-bearing Hermes unit cannot write `/root/.hermes`; only the no-model auth writer can create
   the native sibling temp, and it has exactly one fixed target.
 - Auth writer requests are root-peer-only, bounded, JSON-object-only, single-request, and fail closed.
+- Each request carries the caller's actual native lock lease; missing, unheld, decoy, or wrong-path
+  descriptors are rejected before the store is read or saved.
 - The writer is socket-activated and exits after one request, so it has zero idle memory footprint.
 - Token refresh and pool status updates persist; the correction must not silently drop rotation.
 - Other global providers and independent pool entries survive a Codex update unchanged.
@@ -102,6 +110,7 @@ authoritative.
 | Refresh is not dropped | Updated dummy access/refresh tokens and pool metadata are present in the global test store. |
 | Global merge is preserved | An unrelated provider and independent Codex pool entry remain unchanged. |
 | Systemd permits atomic save | A stopped socket-activated writer probe performs the real native atomic save while the Hermes unit rejects shared-root writes. |
+| Caller-death serialization | A synchronized server test closes the caller descriptor after save entry and proves the transferred lease remains held through save; an early-close mutation is killed. |
 | Fail closed | Wrong active/global paths and any local `.env`, `.op.env`, or `auth.json` refuse bootstrap. |
 | No authority expansion | Profile config, model, cron, MCP grant, proposal facade, and signer surfaces are untouched. |
 | Installed proof | Native Hermes 0.18.2 temp-path probe passes; stopped preflight passes after incident cleanup. |

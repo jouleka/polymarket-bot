@@ -31,7 +31,9 @@ atomically renames it, so file-only write exceptions are insufficient and granti
 service the parent is too broad. Add a root-only socket-activated one-request writer which alone has
 the parent write exception and invokes the unmodified native save for the one fixed target. Keep the
 Hermes unit's shared root read-only. Prove a native atomic save, shared-root write rejection, request
-bounds, peer/target checks, and zero idle writer process in the stopped sandbox gate.
+bounds, peer/target checks, and zero idle writer process in the stopped sandbox gate. Transfer the
+caller's held native auth-lock description with `SCM_RIGHTS`; require the writer to prove ownership
+and retain it through save/reply so caller death cannot release serialization early.
 
 ## 4. Fail-closed and preservation pins
 
@@ -51,8 +53,9 @@ Each concern follows one RED, minimum GREEN, focused suite, full suite, and chec
 Run independent specification review followed by independent security review. Then isolate mutations
 that remove the redirect, install it after Hermes import, redirect only one imported alias, allow a
 profile auth file, redirect to an unexpected path, silently drop refresh persistence, clobber an
-unrelated provider/pool entry, or expand model/tool/runtime authority. Every mutation must be killed
-by a named test. Re-review any fix and rerun the complete suite.
+unrelated provider/pool entry, release the transferred lock before save, accept an unlocked decoy,
+or expand model/tool/runtime authority. Every mutation must be killed by a named test. Re-review any
+fix and rerun the complete suite.
 
 ## 6. Land and stopped installation
 
