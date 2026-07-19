@@ -76,6 +76,7 @@ def test_brain_unit_allows_native_atomic_root_auth_replacement():
         "config.yaml.bak.20260623_202711",
         "config.yaml.bak.20260623_204207",
         "config.yaml.bak.20260623_210124",
+        "config.yaml.bak.20260623_212641",
         "config.yaml.bak.20260708_134437",
         "config.yaml.bak.20260708_135104",
         "config.yaml.bak.20260708_135146",
@@ -97,6 +98,12 @@ def test_brain_unit_allows_native_atomic_root_auth_replacement():
             if path.parent == Path("/root/.hermes"):
                 protected.add(path.name)
     assert expected_protected <= protected
+    live_root = Path("/root/.hermes")
+    if live_root.is_dir():
+        live_shared = {
+            path.name for path in live_root.iterdir()
+        } - {"auth.json", "auth.lock", "profiles"}
+        assert live_shared <= protected
 
 
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
