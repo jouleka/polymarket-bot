@@ -71,9 +71,9 @@ async def open_market_ws(url=CLOB_MARKET_WS):
     MarketSocket's keepalive task) governs liveness instead.
     """
     # One independent queue per shard otherwise multiplies websockets' default
-    # high-water mark across the production fan-out. A single queued frame keeps
-    # memory bounded; TCP backpressure plus the existing top-of-book gap detector
-    # preserve fail-closed resync semantics if the event loop falls behind.
+    # high-water mark across the production fan-out. A high-water mark of one
+    # queued frame bounds memory; TCP backpressure plus the existing top-of-book
+    # gap detector preserve fail-closed resync semantics if the loop falls behind.
     return await websockets.connect(url, ping_interval=None, max_queue=1)
 
 
