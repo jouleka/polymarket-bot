@@ -789,6 +789,24 @@ checkout, run stopped installation/preflight, then remove only the recorded inci
 the guarded runbook. Exact evidence is in
 [`VERIFICATION-POL13-CODEX-AUTH-ISOLATION.md`](VERIFICATION-POL13-CODEX-AUTH-ISOLATION.md).
 
+**UPDATE 2026-07-19 — auth isolation and boot-memory corrections landed and shadow resumed.** PR #42
+landed the reviewed root-only one-shot auth writer as merge `e8c51ba`. Stopped installation preserved
+config and every database/WAL; the exact recorded profile-auth artifact was unlinked only after all
+identity checks, and the native root store remained authoritative. Exact-five preflight passed.
+The first POL-17 restart then failed closed under memory pressure before Hermes started. PR #43
+(`402d44b`) bounded every websocket shard's receive high-water mark; the live retry proved that was
+useful defense-in-depth but not the primary allocation. Isolation found walletless boot materializing
+the entire 685 MiB EventStore only to return DORMANT. PR #44 (`cb8ff79`) skips that irrelevant scan
+only for exact `wallet=None`; every wallet-present full CLOB/on-chain reconciliation path is unchanged.
+After 2,365 tests, independent specification/security PASS, and both-direction mutations, the original
+config reached POL-17 readiness in about three seconds at an ~84 MiB peak and zero swap/pressure.
+Hermes then passed exact-five, crossed the prior 60-second profile-leak boundary with no local auth/env,
+and settled near 257 MiB beside ~90 MiB POL-17, both with zero restarts/swap/pressure/OOM. A live
+missing-lock writer request was rejected without changing root auth. Both paper/shadow units are now
+active+enabled; the writer socket is static/on-demand with no idle instance. The first genuine cron
+job completed `ok` at 11:11:04 UTC with zero pending intents/outboxes. Continue observation
+through a natural token-refresh boundary; no signer or live-money authority exists.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

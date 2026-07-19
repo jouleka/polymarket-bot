@@ -1,8 +1,9 @@
 # POL-13 Codex OAuth auth-store isolation verification
 
 **Date:** 2026-07-19  
-**Candidate:** `bf9e317` on `pol-13-codex-auth-isolation`  
-**Deployment state:** reviewed build only; both shadow services remain inactive and disabled
+**Reviewed head:** `bf9e317`; landed through [PR #42](https://github.com/jouleka/polymarket-bot/pull/42)
+as merge `e8c51ba`
+**Deployment state:** installed; paper/shadow services active and enabled after the stopped gate
 
 ## Incident evidence
 
@@ -21,8 +22,9 @@ Stopped evidence recorded on 2026-07-19:
 - `polymarket-hermes.service`: inactive/disabled;
 - auth-writer socket: not installed in the service checkout and inactive.
 
-The known forbidden artifact remains preserved pending reviewed installation and the exact guarded
-cleanup in `deploy/hermes/README.md`.
+After PR #42 was stopped-installed, every recorded identity check matched. Only the known forbidden
+profile artifact was unlinked; the newer native root store was neither overwritten nor copied. The
+profile-local `auth.json`, `.env`, and `.op.env` remain absent.
 
 ## Implemented boundary
 
@@ -123,10 +125,14 @@ before the next case.
 The earlier no-descriptor protocol mutation is also pinned by
 `test_auth_writer_rejects_request_without_transferred_native_lock`. Zero mutation survived.
 
-## Remaining deployment gates
+## Installed/live gate
 
-Publication/merge, stopped installation, guarded incident cleanup, stopped exact-five/native-save
-preflight, and shadow restart are separately recorded actions. This verification does not itself
-authorize production data migration or any live-money capability. The user has authorized continuing
-the existing paper/shadow workflow; services remain stopped until the reviewed code is landed and
-the stopped host gate passes.
+- stopped installer preserved the production config checksum and all database/WAL metadata;
+- stopped profile verification reported `exact five; PASS`;
+- a live no-lock socket request was rejected, the native auth hash was unchanged, and the accepted
+  writer instance was collected;
+- both services crossed the prior 60-second leak boundary with no profile auth/env artifact;
+- auth writer has no idle process; its root-only socket is pulled in by Hermes;
+- no production data migration or live-money capability was introduced.
+
+Longer observation through a natural Codex token-refresh boundary remains an operational watch item.

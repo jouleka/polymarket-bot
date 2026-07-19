@@ -1,8 +1,9 @@
 # POL-13 websocket receive-buffer memory bound verification
 
 **Date:** 2026-07-19  
-**Candidate:** `9e51c55` on `pol-13-ws-buffer-memory-bound`  
-**Runtime state:** both paper/shadow services inactive and disabled
+**Reviewed head:** `9e51c55`; landed through [PR #43](https://github.com/jouleka/polymarket-bot/pull/43)
+as merge `402d44b`
+**Runtime state:** installed; retained as defense-in-depth beside the primary boot fix
 
 ## Trigger
 
