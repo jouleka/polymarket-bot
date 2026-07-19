@@ -69,6 +69,35 @@ def test_brain_unit_allows_native_atomic_root_auth_replacement():
     ):
         assert f"InaccessiblePaths=-/root/.hermes/{path}" in lines
 
+    expected_protected = {
+        ".codex_gpt55_autoraise_notice", ".env", ".hermes_history",
+        ".update_check", "SOUL.md", "audio_cache", "backups", "bin",
+        "cache", "channel_directory.json", "config.yaml",
+        "config.yaml.bak.20260623_202711",
+        "config.yaml.bak.20260623_204207",
+        "config.yaml.bak.20260623_210124",
+        "config.yaml.bak.20260708_134437",
+        "config.yaml.bak.20260708_135104",
+        "config.yaml.bak.20260708_135146",
+        "context_length_cache.yaml", "cron", "gateway.lock", "gateway.pid",
+        "gateway_state.json", "hooks", "image_cache", "images", "kanban",
+        "kanban.db", "kanban.db.dispatch.lock", "kanban.db.init.lock", "logs",
+        "lsp", "memories", "models_dev_cache.json", "node",
+        "ollama_cloud_models_cache.json", "pairing", "pastes", "platforms",
+        "processes.json", "provider_models_cache.json", "sandboxes", "scripts",
+        "sessions", "shared", "skills", "state", "state-snapshots", "state.db",
+        "state.db-shm", "state.db-wal", "verification_evidence.db",
+    }
+    protected = set()
+    for line in lines:
+        if not line.startswith(("ReadOnlyPaths=", "InaccessiblePaths=")):
+            continue
+        for raw_path in line.split("=", 1)[1].split():
+            path = Path(raw_path.removeprefix("-"))
+            if path.parent == Path("/root/.hermes"):
+                protected.add(path.name)
+    assert expected_protected <= protected
+
 
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     text = INSTALLER.read_text(encoding="utf-8")
