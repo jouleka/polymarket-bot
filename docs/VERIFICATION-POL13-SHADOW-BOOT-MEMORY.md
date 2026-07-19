@@ -1,8 +1,9 @@
 # POL-13 walletless shadow-boot memory correction verification
 
 **Date:** 2026-07-19  
-**Candidate:** `7e743a0` on `pol-13-shadow-boot-memory`  
-**Runtime state:** both paper/shadow services inactive and disabled
+**Reviewed head:** `7e743a0`; landed through [PR #44](https://github.com/jouleka/polymarket-bot/pull/44)
+as merge `cb8ff79`
+**Runtime state:** installed; both paper/shadow services active and enabled
 
 ## Root cause
 
@@ -56,9 +57,24 @@ TMPDIR=/dev/shm ./.venv/bin/pytest -o addopts="" -q \
   `test_injected_onchain_divergence_stays_halted`;
 - zero mutation survived.
 
-## Deployment gate
+## Installed/live gate
 
-Install while both services remain stopped. Restore and verify the original production config
-checksum. Start POL-17 alone under the unchanged 512 MiB soft / 768 MiB hard / 128 MiB swap limits;
-Hermes must remain off until POL-17 reports ready with stable memory. Do not weaken restart,
-controller, resolution, or persistence authority to pass the gate.
+The service checkout was fast-forwarded to merge `cb8ff79` while stopped. The installer preserved
+the original production config checksum
+`f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361` and all database/WAL metadata.
+With the original universe restored and unchanged cgroup limits:
+
+- POL-17 reached `active/running` in about three seconds;
+- startup peak was about 84 MiB instead of 601 MiB, with zero swap and zero `memory.events` pressure;
+- controller reported RUNNING with zero pending intents/resolution outbox/execution outbox and no
+  registry/news error;
+- proposal socket ownership remained `polybot:polybot-proposal 0660`;
+- Hermes was started only after POL-17 readiness and settled around 257 MiB, with POL-17 around
+  90 MiB; both had zero restarts, swap, pressure, or OOM events;
+- the first genuine scheduled Hermes job completed `ok` at `2026-07-19 11:11:04 UTC`; runtime
+  status remained controller RUNNING with zero pending intents or outboxes;
+- both services were then enabled; the auth-writer socket is active/static with no idle instance;
+- persistence remains downsampled: no `clob-ws` source rows, with midpoint batches and the
+  deduplicated Data API tape present.
+
+Do not weaken restart, controller, resolution, persistence, or cgroup authority on future starts.
