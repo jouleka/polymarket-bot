@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
@@ -79,3 +81,51 @@ listener.close()
     assert persisted["providers"] == updated["providers"]
     assert auth_file.stat().st_mode & 0o777 == 0o600
     assert not list(hermes_root.glob("auth.json.tmp.*"))
+
+
+@pytest.mark.parametrize("unsafe", ["target", "shape", "key", "size"])
+def test_auth_writer_client_rejects_unreviewed_requests(
+        monkeypatch, tmp_path, unsafe):
+    from polybot.hermes import auth_writer
+
+    root_auth = tmp_path / "auth.json"
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
+    store = {"providers": {}}
+    target = None
+    if unsafe == "target":
+        target = tmp_path / "other.json"
+    elif unsafe == "shape":
+        store = {"providers": []}
+    elif unsafe == "key":
+        store = {"providers": {}, "target": "/tmp/unsafe"}
+    elif unsafe == "size":
+        store = {"providers": {"dummy": {"value": "x" * (1024 * 1024)}}}
+
+    with pytest.raises(RuntimeError, match="auth writer"):
+        auth_writer.write_auth_store(store, target_path=target)
+
+
+def test_auth_writer_server_rejects_non_root_peer_before_read_or_save():
+    from polybot.hermes import auth_writer
+
+    class NonRootConnection:
+        sent = []
+
+        def getsockopt(self, *args):
+            return auth_writer._PEER_CREDENTIALS.pack(123, 1000, 1000)
+
+        def recv(self, size):
+            raise AssertionError("non-root request must not be read")
+
+        def sendall(self, payload):
+            self.sent.append(payload)
+
+    connection = NonRootConnection()
+    with pytest.raises(RuntimeError, match="non-root peer"):
+        auth_writer.serve_connection(
+            connection,
+            save_auth_store=lambda *args, **kwargs: pytest.fail(
+                "non-root request must not save"
+            ),
+        )
+    assert connection.sent == [b"ER"]
