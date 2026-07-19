@@ -46,9 +46,16 @@ class RestartReconciler:
         # monotonic epoch is NOT comparable to this process's now; an unconfirmed pre-restart fill is
         # fail-closed DIVERGED, never SETTLING).
         internal = internal_balances(self._store.fills_log(), in_session=False)
-        envs = self._event_store.all()
-        clob = clob_balances(envs)
-        onchain = onchain_balances(envs, wallet=self._wallet)
+        if self._wallet is None:
+            # Pure paper has no external authority to reconcile. Keep replaying
+            # the durable internal leg, but do not materialize the unbounded
+            # historical EventStore merely to reach the DORMANT sentinel.
+            clob = {}
+            onchain = None
+        else:
+            envs = self._event_store.all()
+            clob = clob_balances(envs)
+            onchain = onchain_balances(envs, wallet=self._wallet)
         result = self._reconciler.reconcile(
             internal, clob, onchain, wallet=self._wallet, now=self._clock())
         portfolio = self._rebuild_portfolio()
