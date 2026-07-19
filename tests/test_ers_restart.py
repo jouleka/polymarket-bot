@@ -64,6 +64,35 @@ def test_dormant_no_wallet_transitions_running_and_rebuilds_portfolio(tmp_path):
         events.close()
 
 
+def test_dormant_no_wallet_never_scans_historical_event_store(tmp_path):
+    class HistoricalStoreMustStayCold:
+        def all(self):
+            raise AssertionError(
+                "walletless paper boot must not materialize Market-Memory"
+            )
+
+    store = IntentStore(str(tmp_path / "i.db"), MonotonicStamper())
+    try:
+        _accept_one(store)
+        ctl = SafetyController(caps=RiskCaps(), store=store, clock=lambda: 0)
+        rr = RestartReconciler(
+            store=store,
+            event_store=HistoricalStoreMustStayCold(),
+            reconciler=ThreeWayReconciler(caps=RiskCaps()),
+            controller=ctl,
+            caps=RiskCaps(),
+            clock=lambda: 0,
+            wallet=None,
+        )
+
+        portfolio = rr.reconcile_on_boot()
+
+        assert ctl.state() == _safety.RUNNING
+        assert [position.token_id for position in portfolio.positions] == ["t1"]
+    finally:
+        store.close()
+
+
 def _onchain_env(token_id, value, *, wallet, observed_at, kind="transfer_single"):
     # A Polygon ERC-1155 credit TO the wallet: source="polygon-chain", content carries the decoded
     # transfer event in the {"log":.., "event":..} shape onchain_balances parses. For a single
