@@ -363,3 +363,70 @@ def test_lock_lease_rejects_unlocked_decoy_for_locked_native_path(
     finally:
         os.close(decoy_fd)
         os.close(holder_fd)
+
+
+def test_server_holds_transferred_lock_while_saving_after_caller_death(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    auth_file = tmp_path / "auth.json"
+    lock_file = auth_file.with_suffix(".lock")
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", auth_file)
+    store = {
+        "version": 1,
+        "providers": {"openai-codex": {}},
+        "credential_pool": {"openai-codex": []},
+    }
+    payload = json.dumps(store).encode("utf-8")
+    holder_fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(holder_fd, fcntl.LOCK_EX)
+    client, server = socket.socketpair()
+    saved = []
+    entered_save = threading.Event()
+    caller_closed = threading.Event()
+
+    def save(value, **unused):
+        entered_save.set()
+        if not caller_closed.wait(timeout=5):
+            raise RuntimeError("caller did not close before lock probe")
+        probe_fd = os.open(lock_file, os.O_RDWR)
+        try:
+            try:
+                fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                fcntl.flock(probe_fd, fcntl.LOCK_UN)
+                raise RuntimeError("transferred lock was released before save")
+        finally:
+            os.close(probe_fd)
+        saved.append(value)
+
+    worker = threading.Thread(
+        target=auth_writer.serve_connection,
+        args=(server,),
+        kwargs={
+            "load_auth_store": lambda unused: store,
+            "save_auth_store": save,
+        },
+    )
+    worker.start()
+    try:
+        auth_writer._send_header_with_lock(
+            client, auth_writer._HEADER.pack(len(payload)), holder_fd,
+        )
+        client.sendall(payload)
+        assert entered_save.wait(timeout=5)
+        os.close(holder_fd)
+        holder_fd = None
+        caller_closed.set()
+        assert auth_writer._recv_exact(client, 2) == b"OK"
+    finally:
+        caller_closed.set()
+        if holder_fd is not None:
+            os.close(holder_fd)
+        client.close()
+        server.close()
+        worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert saved == [store]
