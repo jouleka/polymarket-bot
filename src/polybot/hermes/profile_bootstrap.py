@@ -24,6 +24,7 @@ _ROOT_AUTH_FILE = Path("/root/.hermes/auth.json")
 def _use_native_root_auth_store() -> None:
     """Keep the proposal profile on Hermes's one native root auth store."""
     from hermes_cli import auth
+    from polybot.hermes import auth_writer
 
     active_path = auth._auth_file_path()
     global_path = auth._global_auth_file_path()
@@ -52,6 +53,7 @@ def _use_native_root_auth_store() -> None:
         raise RuntimeError("Hermes native root auth store is unsafe")
 
     auth._auth_file_path = lambda: _ROOT_AUTH_FILE
+    auth._save_auth_store = auth_writer.write_auth_store
 
 
 def _disable_unselected_auth_maintenance() -> None:
