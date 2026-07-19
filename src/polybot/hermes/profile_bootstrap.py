@@ -39,7 +39,10 @@ def _use_native_root_auth_store() -> None:
     ):
         raise RuntimeError("Hermes profile must use only the native root auth store")
 
-    root_stat = _ROOT_AUTH_FILE.lstat()
+    try:
+        root_stat = _ROOT_AUTH_FILE.lstat()
+    except OSError as exc:
+        raise RuntimeError("Hermes native root auth store is unsafe") from exc
     if (
         not stat.S_ISREG(root_stat.st_mode)
         or stat.S_IMODE(root_stat.st_mode) != 0o600
