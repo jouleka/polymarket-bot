@@ -40,6 +40,12 @@ PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent /usr/local/bin/hermes
+# Hermes's native atomic auth save creates auth.json.tmp.<pid>.<uuid> beside
+# auth.json before rename+directory fsync, so the parent must be writable.
+# Everything model/config/state-bearing at the root remains masked below;
+# only the reviewed profile is reopened inside the read-only profiles tree.
+ReadWritePaths=/root/.hermes
+ReadOnlyPaths=/root/.hermes/profiles
 ReadWritePaths=/root/.hermes/profiles/polymarket
 ReadWritePaths=/root/.hermes/auth.json
 ReadWritePaths=-/root/.hermes/auth.lock
@@ -50,8 +56,21 @@ InaccessiblePaths=-/root/.config
 InaccessiblePaths=-/root/.gnupg
 InaccessiblePaths=-/root/.kube
 InaccessiblePaths=-/root/.hermes/.env
+InaccessiblePaths=-/root/.hermes/SOUL.md
 InaccessiblePaths=-/root/.hermes/config.yaml
+InaccessiblePaths=-/root/.hermes/cron
 InaccessiblePaths=-/root/.hermes/gateway.json
+InaccessiblePaths=-/root/.hermes/hooks
+InaccessiblePaths=-/root/.hermes/kanban
+InaccessiblePaths=-/root/.hermes/memories
+InaccessiblePaths=-/root/.hermes/scripts
+InaccessiblePaths=-/root/.hermes/sessions
+InaccessiblePaths=-/root/.hermes/skills
+InaccessiblePaths=-/root/.hermes/state
+InaccessiblePaths=-/root/.hermes/state.db
+InaccessiblePaths=-/root/.hermes/state.db-shm
+InaccessiblePaths=-/root/.hermes/state.db-wal
+InaccessiblePaths=-/root/.hermes/verification_evidence.db
 InaccessiblePaths=-/root/.hermes/profiles/coder
 InaccessiblePaths=-/root/.hermes/profiles/memecoin-trader
 InaccessiblePaths=-/root/.hermes/profiles/optionsbot

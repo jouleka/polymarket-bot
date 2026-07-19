@@ -26,6 +26,12 @@ import. Verify exact profile/root identity and forbidden local artifact absence,
 Hermes's native active auth resolver. Run the focused test, the POL-18 profile/deploy tests, and the
 canonical full suite. Checkpoint the passing cycle.
 
+Pin the systemd mount requirement separately: native `_save_auth_store` creates a sibling temp and
+atomically renames it, so file-only write exceptions are insufficient. Keep `/root/.hermes`
+writable only for that native boundary, mask root model/config/state stores, make the profiles tree
+read-only, and reopen only `profiles/polymarket`. Prove the exact mount behavior with a stopped
+sandbox probe before installation.
+
 ## 4. Fail-closed and preservation pins
 
 Serially add tests for:

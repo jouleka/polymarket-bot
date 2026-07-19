@@ -54,6 +54,22 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "WantedBy=multi-user.target" in text
 
 
+def test_brain_unit_allows_native_atomic_root_auth_replacement():
+    lines = UNIT.read_text(encoding="utf-8").splitlines()
+
+    # Hermes writes auth.json.tmp.<pid>.<uuid> beside auth.json, fsyncs it,
+    # then atomically replaces auth.json. File-only RW mounts cannot do that.
+    assert "ReadWritePaths=/root/.hermes" in lines
+    assert "ReadOnlyPaths=/root/.hermes/profiles" in lines
+    assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
+    for path in (
+        "SOUL.md", "cron", "hooks", "kanban", "memories", "scripts",
+        "sessions", "skills", "state", "state.db", "state.db-shm",
+        "state.db-wal", "verification_evidence.db",
+    ):
+        assert f"InaccessiblePaths=-/root/.hermes/{path}" in lines
+
+
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     text = INSTALLER.read_text(encoding="utf-8")
     project = PYPROJECT.read_text(encoding="utf-8")
