@@ -3,6 +3,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT = ROOT / "deploy" / "polymarket-hermes.service"
+AUTH_WRITER_SOCKET = ROOT / "deploy" / "polymarket-hermes-auth-writer.socket"
+AUTH_WRITER_SERVICE = ROOT / "deploy" / "polymarket-hermes-auth-writer@.service"
 INSTALLER = ROOT / "deploy" / "install.sh"
 CONFIG = ROOT / "deploy" / "config.example.toml"
 RUNBOOK = ROOT / "deploy" / "hermes" / "README.md"
@@ -54,56 +56,16 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "WantedBy=multi-user.target" in text
 
 
-def test_brain_unit_allows_native_atomic_root_auth_replacement():
+def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     lines = UNIT.read_text(encoding="utf-8").splitlines()
+    writer = AUTH_WRITER_SERVICE.read_text(encoding="utf-8").splitlines()
 
-    # Hermes writes auth.json.tmp.<pid>.<uuid> beside auth.json, fsyncs it,
-    # then atomically replaces auth.json. File-only RW mounts cannot do that.
-    assert "ReadWritePaths=/root/.hermes" in lines
-    assert "ReadOnlyPaths=/root/.hermes/profiles" in lines
+    assert "ReadWritePaths=/root/.hermes" not in lines
+    assert "Requires=polymarket-hermes-auth-writer.socket" in lines
+    assert "ReadWritePaths=/root/.hermes" in writer
+    assert "RestrictAddressFamilies=AF_UNIX" in writer
+    assert "StandardInput=socket" in writer
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
-    for path in (
-        "SOUL.md", "cron", "hooks", "kanban", "memories", "scripts",
-        "sessions", "skills", "state", "state.db", "state.db-shm",
-        "state.db-wal", "verification_evidence.db",
-    ):
-        assert f"InaccessiblePaths=-/root/.hermes/{path}" in lines
-
-    expected_protected = {
-        ".codex_gpt55_autoraise_notice", ".env", ".hermes_history",
-        ".update_check", "SOUL.md", "audio_cache", "backups", "bin",
-        "cache", "channel_directory.json", "config.yaml",
-        "config.yaml.bak.20260623_202711",
-        "config.yaml.bak.20260623_204207",
-        "config.yaml.bak.20260623_210124",
-        "config.yaml.bak.20260623_212641",
-        "config.yaml.bak.20260708_134437",
-        "config.yaml.bak.20260708_135104",
-        "config.yaml.bak.20260708_135146",
-        "context_length_cache.yaml", "cron", "gateway.lock", "gateway.pid",
-        "gateway_state.json", "hooks", "image_cache", "images", "kanban",
-        "kanban.db", "kanban.db.dispatch.lock", "kanban.db.init.lock", "logs",
-        "lsp", "memories", "models_dev_cache.json", "node",
-        "ollama_cloud_models_cache.json", "pairing", "pastes", "platforms",
-        "processes.json", "provider_models_cache.json", "sandboxes", "scripts",
-        "sessions", "shared", "skills", "state", "state-snapshots", "state.db",
-        "state.db-shm", "state.db-wal", "verification_evidence.db",
-    }
-    protected = set()
-    for line in lines:
-        if not line.startswith(("ReadOnlyPaths=", "InaccessiblePaths=")):
-            continue
-        for raw_path in line.split("=", 1)[1].split():
-            path = Path(raw_path.removeprefix("-"))
-            if path.parent == Path("/root/.hermes"):
-                protected.add(path.name)
-    assert expected_protected <= protected
-    live_root = Path("/root/.hermes")
-    if live_root.is_dir():
-        live_shared = {
-            path.name for path in live_root.iterdir()
-        } - {"auth.json", "auth.lock", "profiles"}
-        assert live_shared <= protected
 
 
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():

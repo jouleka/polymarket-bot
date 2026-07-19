@@ -1,0 +1,32 @@
+[Unit]
+Description=polymarket Hermes root-auth atomic writer
+
+[Service]
+Type=exec
+User=root
+Group=root
+Environment=HOME=/root
+Environment=HERMES_HOME=/root/.hermes
+Environment=PYTHONPATH=/opt/polymarket-bot/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.auth_writer
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent
+ReadWritePaths=/root/.hermes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryAccounting=true
+MemoryHigh=64M
+MemoryMax=128M
+MemorySwapMax=0
+OOMPolicy=stop
+TimeoutStartSec=20

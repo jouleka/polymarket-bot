@@ -36,11 +36,17 @@ call sites. All native auth locks, atomic saves, token rotation, pool status, an
 merge behavior remain intact and operate on one store. No rotated refresh token is discarded.
 
 Hermes's native atomic save creates a random sibling temporary file before replacing `auth.json`
-and fsyncing `/root/.hermes`. The systemd unit therefore grants write access to that parent—not just
-the two existing auth files—while masking root-level model/config/state stores, mounting the whole
-profiles tree read-only, and reopening only the reviewed `polymarket` profile. The exact-five,
-no-shell/no-file-tool application boundary remains the filename-level guard: the only reviewed
-root-parent writer is Hermes's native auth implementation.
+and fsyncing `/root/.hermes`; a file-only systemd write exception cannot support that operation.
+The LLM-bearing Hermes process must nevertheless never receive write access to the shared parent:
+new root-level Hermes files can appear concurrently, so a static mask list is inherently racy.
+
+The deployment therefore uses a socket-activated, one-request auth writer. Hermes retains a
+read-only `/root/.hermes` and sends only the complete native auth-store dictionary over a root-only
+Unix socket. The writer has no model, tools, network, profile, persistence loop, or target selector;
+it validates the bounded JSON request, invokes Hermes 0.18.2's native `_save_auth_store` against the
+one fixed `/root/.hermes/auth.json`, returns success/failure, and exits. Socket activation means it
+consumes no persistent process memory between the rare auth writes. The shared native `auth.lock`
+remains held by the caller, preserving serialization with other Hermes processes.
 
 ## 3. Contract
 
@@ -57,14 +63,20 @@ import auth helpers.
 
 The fixed literal paths are deliberate deployment identity pins, not user configuration.
 
+`polybot.hermes.auth_writer` adds a bounded length-prefixed Unix-socket client plus a one-request
+server. The bootstrap replaces `hermes_cli.auth._save_auth_store` with that client after preserving
+the exact root target; the socket-activated server alone calls the unmodified native save.
+
 ## 4. Invariants
 
 - Paper/shadow only; no signer, wallet, order, cancellation, redemption, or chain-write surface.
 - The profile remains the existing `polymarket` profile using `openai-codex` and high reasoning.
 - The profile never owns credentials and never creates a local auth/env store.
 - The global root store remains the only OAuth authority and retains native atomic locking/saves.
-- The systemd mount namespace permits native sibling-temp replacement while root Hermes
-  model/config/state stores and every other profile remain non-writable or inaccessible.
+- The LLM-bearing Hermes unit cannot write `/root/.hermes`; only the no-model auth writer can create
+  the native sibling temp, and it has exactly one fixed target.
+- Auth writer requests are root-peer-only, bounded, JSON-object-only, single-request, and fail closed.
+- The writer is socket-activated and exits after one request, so it has zero idle memory footprint.
 - Token refresh and pool status updates persist; the correction must not silently drop rotation.
 - Other global providers and independent pool entries survive a Codex update unchanged.
 - Any unexpected profile/global path or forbidden local artifact fails before Hermes starts.
@@ -89,7 +101,7 @@ authoritative.
 | No profile-local persistence | The same pool update writes only the global root; the profile path remains absent. |
 | Refresh is not dropped | Updated dummy access/refresh tokens and pool metadata are present in the global test store. |
 | Global merge is preserved | An unrelated provider and independent Codex pool entry remain unchanged. |
-| Systemd permits atomic save | The reviewed unit exposes the auth parent for native sibling-temp replacement while masking other root authorities; a stopped sandbox probe performs the real atomic save. |
+| Systemd permits atomic save | A stopped socket-activated writer probe performs the real native atomic save while the Hermes unit rejects shared-root writes. |
 | Fail closed | Wrong active/global paths and any local `.env`, `.op.env`, or `auth.json` refuse bootstrap. |
 | No authority expansion | Profile config, model, cron, MCP grant, proposal facade, and signer surfaces are untouched. |
 | Installed proof | Native Hermes 0.18.2 temp-path probe passes; stopped preflight passes after incident cleanup. |
