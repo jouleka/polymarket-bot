@@ -1,0 +1,10 @@
+[Unit]
+Description=polymarket Hermes root-auth atomic writer socket
+PartOf=polymarket-hermes.service
+
+[Socket]
+ListenStream=/run/polymarket-hermes-auth-writer.sock
+SocketMode=0600
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes

@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-16)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-19)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -771,6 +771,23 @@ economic/outbox/raw rows, or cgroup pressure/OOM events. Dependabot's graph resc
 and automatically closed all three alerts at 16:18 UTC; none was manually dismissed. POL-17/POL-18
 repository and live-ticket summaries are reconciled to their active deployment. Exact evidence is
 in [`VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md`](VERIFICATION-POL13-MCP-SECURITY-UPGRADE.md).
+
+**UPDATE 2026-07-19 — Hermes Codex OAuth persistence correction reviewed; services stopped.** During
+the continued shadow observation, Hermes 0.18.2's selected-provider credential-pool persistence
+created the forbidden profile-local `/root/.hermes/profiles/polymarket/auth.json`. Both paper/shadow
+services were stopped and disabled immediately; the root-owned mode-0600 incident artifact is
+preserved without exposing or copying its contents, and the newer native root auth store remains
+authoritative. Branch `pol-13-codex-auth-isolation` exact head `bf9e317` redirects the native active
+auth resolver to the root store and delegates atomic saves to a root-only, socket-activated one-shot
+writer. Hermes retains no shared-root write access; the writer permits only bounded Codex provider/
+pool updates and receives the caller's actual locked `auth.lock` description with `SCM_RIGHTS`, so
+serialization survives caller death. Security review found and closed both the missing lease transfer
+and unlocked-decoy flaws; exact-head security PASS and a deterministic caller-death test are recorded.
+The canonical suite passes 2,363 tests and the isolated mutation battery has zero survivors. Do not
+restart from the development checkout: first land the reviewed branch, fast-forward the service
+checkout, run stopped installation/preflight, then remove only the recorded incident artifact under
+the guarded runbook. Exact evidence is in
+[`VERIFICATION-POL13-CODEX-AUTH-ISOLATION.md`](VERIFICATION-POL13-CODEX-AUTH-ISOLATION.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and

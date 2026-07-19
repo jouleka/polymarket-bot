@@ -3,6 +3,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT = ROOT / "deploy" / "polymarket-hermes.service"
+AUTH_WRITER_SOCKET = ROOT / "deploy" / "polymarket-hermes-auth-writer.socket"
+AUTH_WRITER_SERVICE = ROOT / "deploy" / "polymarket-hermes-auth-writer@.service"
 INSTALLER = ROOT / "deploy" / "install.sh"
 CONFIG = ROOT / "deploy" / "config.example.toml"
 RUNBOOK = ROOT / "deploy" / "hermes" / "README.md"
@@ -44,7 +46,7 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in text
-    assert "ReadWritePaths=/root/.hermes/auth.json" in text
+    assert "ReadWritePaths=/root/.hermes/auth.json" not in text
     assert "InaccessiblePaths=-/root/.ssh" in text
     assert "InaccessiblePaths=-/root/.codex" in text
     assert "InaccessiblePaths=-/root/.hermes/profiles/coder" in text
@@ -52,6 +54,49 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "InaccessiblePaths=-/opt/polymarket-bot/.env" in text
     assert "InaccessiblePaths=-/opt/polymarket-bot/data" in text
     assert "WantedBy=multi-user.target" in text
+
+
+def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
+    lines = UNIT.read_text(encoding="utf-8").splitlines()
+    writer = AUTH_WRITER_SERVICE.read_text(encoding="utf-8").splitlines()
+    writer_socket = AUTH_WRITER_SOCKET.read_text(encoding="utf-8").splitlines()
+
+    assert "ReadWritePaths=/root/.hermes" not in lines
+    assert "Requires=polymarket-hermes-auth-writer.socket" in lines
+    assert "ReadWritePaths=/root/.hermes" in writer
+    assert "RestrictAddressFamilies=AF_UNIX" in writer
+    assert "StandardInput=socket" in writer
+    assert "BindsTo=polymarket-hermes.service" in writer
+    assert "PartOf=polymarket-hermes.service" in writer
+    assert "ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.auth_writer" in writer
+    assert "ListenStream=/run/polymarket-hermes-auth-writer.sock" in writer_socket
+    assert "SocketMode=0600" in writer_socket
+    assert "Accept=yes" in writer_socket
+    assert "MaxConnections=1" in writer_socket
+    assert "PartOf=polymarket-hermes.service" in writer_socket
+    assert "NoNewPrivileges=true" in writer
+    assert "ProtectSystem=strict" in writer
+    assert "MemoryMax=128M" in writer
+    assert "MemorySwapMax=0" in writer
+    assert "RuntimeMaxSec=20" in writer
+    assert "TimeoutStopSec=5" in writer
+    assert "CollectMode=inactive-or-failed" in writer
+    assert "InaccessiblePaths=-/root/.hermes/.env" in writer
+    assert "InaccessiblePaths=-/root/.hermes/config.yaml" in writer
+    assert "InaccessiblePaths=-/root/.hermes/profiles" in writer
+
+    client = (ROOT / "src" / "polybot" / "hermes" / "auth_writer.py").read_text(
+        encoding="utf-8"
+    )
+    client = client[
+        client.index("def write_auth_store"):client.index("def serve_connection")
+    ]
+    assert client.index("connection.settimeout(5.0)") < client.index(
+        "connection.connect"
+    ) < client.index("connection.settimeout(None)") < client.index(
+        "connection.sendall"
+    )
+    assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
 
 
 def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
@@ -66,7 +111,9 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert "polybot-proposal" in text
     assert "usermod -a -G \"$BRIDGE_GROUP\" \"$SVC_USER\"" in text
     assert "polymarket-hermes.service" in text
-    assert "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service" in text
+    assert 'cp "$APP/deploy/polymarket-hermes-auth-writer.socket"' in text
+    assert 'cp "$APP/deploy/polymarket-hermes-auth-writer@.service"' in text
+    assert "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service polymarket-hermes-auth-writer.socket" in text
     assert "systemctl enable" not in text
     assert "systemctl start" not in text
     assert "hermes profile create" not in text

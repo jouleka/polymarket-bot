@@ -1,8 +1,9 @@
 [Unit]
 Description=polymarket propose-only Hermes brain (paper/shadow)
-After=network-online.target polymarket-ingestion.service
+After=network-online.target polymarket-ingestion.service polymarket-hermes-auth-writer.socket
 Wants=network-online.target
 Requisite=polymarket-ingestion.service
+Requires=polymarket-hermes-auth-writer.socket
 PartOf=polymarket-ingestion.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -41,7 +42,6 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent /usr/local/bin/hermes
 ReadWritePaths=/root/.hermes/profiles/polymarket
-ReadWritePaths=/root/.hermes/auth.json
 ReadWritePaths=-/root/.hermes/auth.lock
 InaccessiblePaths=-/root/.ssh
 InaccessiblePaths=-/root/.aws

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import types
 
@@ -331,10 +332,16 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     )
     monkeypatch.setitem(sys.modules, "hermes_cli.main", hermes_main)
 
-    from polybot.hermes.profile_bootstrap import main
+    from polybot.hermes import profile_bootstrap
 
-    assert main() == 0
-    assert calls == [(
+    monkeypatch.setattr(
+        profile_bootstrap,
+        "_use_native_root_auth_store",
+        lambda: calls.append("root-auth"),
+    )
+
+    assert profile_bootstrap.main() == 0
+    assert calls == ["root-auth", (
         "hermes",
         "/usr/local/lib/hermes-agent/venv/bin/python",
         (
@@ -342,6 +349,295 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
             "--profile", "polymarket", "gateway", "run", "--replace",
         ),
     )]
+
+
+def test_gateway_codex_pool_persistence_uses_only_native_root_auth_store(
+        tmp_path):
+    """A borrowed Codex refresh must rotate in root without creating profile auth."""
+    home = tmp_path / "home"
+    root = home / ".hermes"
+    profile = root / "profiles" / "polymarket"
+    root.mkdir(parents=True)
+    profile.mkdir(parents=True)
+    root_auth = root / "auth.json"
+    profile_auth = profile / "auth.json"
+    root_auth.write_text(json.dumps({
+        "version": 1,
+        "providers": {
+            "openai-codex": {
+                "tokens": {
+                    "access_token": "old-access",
+                    "refresh_token": "old-refresh",
+                },
+                "auth_mode": "chatgpt",
+            },
+            "unrelated": {"api_key": "preserve-provider"},
+        },
+        "credential_pool": {
+            "openai-codex": [{
+                "id": "borrowed",
+                "label": "borrowed",
+                "auth_type": "oauth",
+                "priority": 0,
+                "source": "device_code",
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+            }, {
+                "id": "independent",
+                "label": "independent",
+                "auth_type": "oauth",
+                "priority": 1,
+                "source": "manual:device_code",
+                "access_token": "independent-access",
+                "refresh_token": "independent-refresh",
+            }],
+        },
+    }), encoding="utf-8")
+    root_auth.chmod(0o600)
+
+    writer_socket = tmp_path / "profile-writer.sock"
+    script = """
+import os
+from pathlib import Path
+import socket
+import threading
+
+from hermes_cli.auth import (
+    _load_auth_store as native_load_auth_store,
+    _save_auth_store as native_save_auth_store,
+)
+from polybot.hermes import auth_writer, profile_bootstrap
+
+profile_bootstrap._PROFILE_HOME = Path(os.environ["HERMES_HOME"])
+profile_bootstrap._ROOT_AUTH_FILE = Path(os.environ["ROOT_AUTH_FILE"])
+auth_writer._ROOT_AUTH_FILE = Path(os.environ["ROOT_AUTH_FILE"])
+auth_writer._AUTH_WRITER_SOCKET = Path(os.environ["AUTH_WRITER_SOCKET"])
+listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+listener.bind(os.environ["AUTH_WRITER_SOCKET"])
+listener.listen(2)
+
+def write_twice():
+    for _ in range(2):
+        connection, _ = listener.accept()
+        with connection:
+            auth_writer.serve_connection(
+                connection,
+                load_auth_store=native_load_auth_store,
+                save_auth_store=native_save_auth_store,
+            )
+
+writer = threading.Thread(target=write_twice, daemon=True)
+writer.start()
+guard = getattr(profile_bootstrap, "_use_native_root_auth_store", None)
+if guard is not None:
+    guard()
+
+from agent.credential_pool import CredentialPool, PooledCredential
+
+entry = PooledCredential(
+    provider="openai-codex",
+    id="borrowed",
+    label="borrowed",
+    auth_type="oauth",
+    priority=0,
+    source="device_code",
+    access_token="new-access",
+    refresh_token="new-refresh",
+    last_refresh="2026-07-19T00:00:00Z",
+)
+pool = CredentialPool("openai-codex", [entry])
+pool._persist()
+pool._sync_device_code_entry_to_auth_store(entry)
+writer.join(timeout=5)
+assert not writer.is_alive()
+listener.close()
+"""
+    env = {
+        "AUTH_WRITER_SOCKET": str(writer_socket),
+        "HOME": str(home),
+        "HERMES_HOME": str(profile),
+        "PYTHONPATH": f"{ROOT / 'src'}:/usr/local/lib/hermes-agent",
+        "ROOT_AUTH_FILE": str(root_auth),
+    }
+    subprocess.run(
+        ["/usr/local/lib/hermes-agent/venv/bin/python", "-c", script],
+        check=True,
+        env=env,
+    )
+
+    assert not profile_auth.exists()
+    persisted = json.loads(root_auth.read_text(encoding="utf-8"))
+    assert persisted["providers"]["openai-codex"]["tokens"] == {
+        "access_token": "new-access",
+        "refresh_token": "new-refresh",
+    }
+    assert persisted["providers"]["unrelated"] == {
+        "api_key": "preserve-provider",
+    }
+    pools = {entry["id"]: entry for entry in
+             persisted["credential_pool"]["openai-codex"]}
+    assert pools["borrowed"]["refresh_token"] == "new-refresh"
+    assert pools["independent"]["refresh_token"] == "independent-refresh"
+
+
+def test_gateway_auth_guard_fails_closed_when_native_root_store_is_missing(
+        monkeypatch, tmp_path):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="native root auth store is unsafe"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+def test_gateway_auth_guard_delegates_native_saves_to_isolated_writer(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer, profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{\"providers\": {}}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    auth._save_auth_store = lambda *args, **kwargs: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
+
+    profile_bootstrap._use_native_root_auth_store()
+
+    assert auth._auth_file_path() == root_auth
+    assert auth._save_auth_store is auth_writer.write_auth_store
+
+
+def test_gateway_auth_guard_rejects_unreviewed_writer_endpoint(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer, profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{\"providers\": {}}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    auth._save_auth_store = lambda *args, **kwargs: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", tmp_path / "other.json")
+
+    with pytest.raises(RuntimeError, match="writer endpoint"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+@pytest.mark.parametrize("wrong_path", ["active", "global"])
+def test_gateway_auth_guard_rejects_unreviewed_auth_paths(
+        monkeypatch, tmp_path, wrong_path):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    active_path = profile / "auth.json"
+    global_path = root_auth
+    if wrong_path == "active":
+        active_path = tmp_path / "other-profile" / "auth.json"
+    else:
+        global_path = tmp_path / "other-root" / "auth.json"
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: active_path
+    auth._global_auth_file_path = lambda: global_path
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="auth paths violate"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+@pytest.mark.parametrize("name", [".env", ".op.env", "auth.json"])
+def test_gateway_auth_guard_rejects_profile_local_secret_artifacts(
+        monkeypatch, tmp_path, name):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    (profile / name).symlink_to(tmp_path / "missing-secret")
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="only the native root auth store"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+@pytest.mark.parametrize("unsafe_kind", ["mode", "directory", "symlink"])
+def test_gateway_auth_guard_rejects_unsafe_native_root_store(
+        monkeypatch, tmp_path, unsafe_kind):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    if unsafe_kind == "directory":
+        root_auth.mkdir()
+    elif unsafe_kind == "symlink":
+        target = tmp_path / "real-auth.json"
+        target.write_text("{}", encoding="utf-8")
+        target.chmod(0o600)
+        root_auth.symlink_to(target)
+    else:
+        root_auth.write_text("{}", encoding="utf-8")
+        root_auth.chmod(0o644)
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="native root auth store is unsafe"):
+        profile_bootstrap._use_native_root_auth_store()
 
 
 def test_installed_profile_launch_execs_reviewed_bootstrap(monkeypatch, tmp_path):

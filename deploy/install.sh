@@ -13,7 +13,7 @@ RUNTIME_LOCK="$APP/data/shadow-runtime.lock"
 
 verify_services_not_active() {
     local unit active_state load_state
-    for unit in polymarket-ingestion.service polymarket-hermes.service; do
+    for unit in polymarket-ingestion.service polymarket-hermes.service polymarket-hermes-auth-writer.socket; do
         active_state=
         load_state=
         if active_state=$(systemctl show --property=ActiveState --value "$unit" 2>&1); then :; fi
@@ -22,7 +22,8 @@ verify_services_not_active() {
            [ "$active_state" = "inactive" ] && [ "$load_state" = "loaded" ]; then
             continue
         fi
-        if [ "$unit" = "polymarket-hermes.service" ] && \
+        if { [ "$unit" = "polymarket-hermes.service" ] || \
+             [ "$unit" = "polymarket-hermes-auth-writer.socket" ]; } && \
            [ "$active_state" = "inactive" ] && \
            { [ "$load_state" = "loaded" ] || [ "$load_state" = "not-found" ]; }; then
             continue
@@ -49,6 +50,12 @@ verify_service_stopped_disabled() {
             return 1
         fi
     done
+    active_state=
+    if active_state=$(systemctl is-active polymarket-hermes-auth-writer.socket 2>&1); then :; fi
+    if [ "$active_state" != "inactive" ]; then
+        echo "ERROR: expected auth-writer socket inactive, got: $active_state" >&2
+        return 1
+    fi
 }
 
 verify_services_not_active
@@ -119,8 +126,10 @@ echo "== 6. systemd units (install only; remain stopped + disabled) =="
 # Activation is a separate owner-approved action. An update must never restart or enable capture implicitly.
 cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service
 cp "$APP/deploy/polymarket-hermes.service" /etc/systemd/system/polymarket-hermes.service
+cp "$APP/deploy/polymarket-hermes-auth-writer.socket" /etc/systemd/system/polymarket-hermes-auth-writer.socket
+cp "$APP/deploy/polymarket-hermes-auth-writer@.service" /etc/systemd/system/polymarket-hermes-auth-writer@.service
 systemctl daemon-reload
-systemctl disable --now polymarket-ingestion.service polymarket-hermes.service
+systemctl disable --now polymarket-ingestion.service polymarket-hermes.service polymarket-hermes-auth-writer.socket
 verify_service_stopped_disabled
 
 echo

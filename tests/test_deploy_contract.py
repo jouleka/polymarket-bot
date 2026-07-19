@@ -21,7 +21,7 @@ def test_installer_leaves_service_stopped_and_disabled():
     install = 'cp "$APP/deploy/polymarket-ingestion.service" /etc/systemd/system/polymarket-ingestion.service'
     install_brain = 'cp "$APP/deploy/polymarket-hermes.service" /etc/systemd/system/polymarket-hermes.service'
     reload = "systemctl daemon-reload"
-    disable = "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service"
+    disable = "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service polymarket-hermes-auth-writer.socket"
     verify = "verify_service_stopped_disabled"
 
     assert install in commands
@@ -112,6 +112,10 @@ systemctl() {{
         show:--property=ActiveState:polymarket-hermes.service)
             printf '%s\n' "$MOCK_BRAIN_ACTIVE"; return 0 ;;
         show:--property=LoadState:polymarket-hermes.service)
+            printf '%s\n' "$MOCK_BRAIN_LOAD"; return 0 ;;
+        show:--property=ActiveState:polymarket-hermes-auth-writer.socket)
+            printf '%s\n' "$MOCK_BRAIN_ACTIVE"; return 0 ;;
+        show:--property=LoadState:polymarket-hermes-auth-writer.socket)
             printf '%s\n' "$MOCK_BRAIN_LOAD"; return 0 ;;
         *) return 99 ;;
     esac
