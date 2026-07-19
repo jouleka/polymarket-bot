@@ -23,11 +23,11 @@ Evidence at failure:
 An isolated production-construction probe completed at about 75 MiB maximum RSS, locating the
 growth after the 16 live websocket shards start rather than in registry/component construction.
 
-## Root cause and correction
+## Contributing bound and live result
 
 The real transport used `websockets.connect(..., ping_interval=None)` without an explicit receive
 queue bound. `websockets` therefore applied its default high-water mark independently to every
-shard, multiplying buffered-frame memory across the 16-connection production fan-out during host
+shard, multiplying the possible buffered-frame footprint across the production fan-out during host
 contention.
 
 The transport now passes `max_queue=1`. In the pinned websockets 16 implementation this sets a
@@ -37,6 +37,13 @@ and existing top-of-book divergence detection forces reconnect/resync if progres
 
 No universe, persistence, safety/controller, ERS, proposal, signer, auth, database, or live-money
 authority changed.
+
+The stopped-installed live retry showed this was useful hardening but not the dominant incident
+cause: virtual allocation fell by roughly 160 MiB and cgroup peak fell by about 15 MiB, but POL-17
+still crossed `MemoryHigh` and did not reach readiness. The service was stopped before timeout and
+Hermes remained off. A subsequent isolation probe found the primary allocation in walletless
+restart reconciliation materializing the 685 MiB historical EventStore; see
+`VERIFICATION-POL13-SHADOW-BOOT-MEMORY.md`.
 
 ## TDD and review evidence
 
