@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import types
 
@@ -331,10 +332,16 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
     )
     monkeypatch.setitem(sys.modules, "hermes_cli.main", hermes_main)
 
-    from polybot.hermes.profile_bootstrap import main
+    from polybot.hermes import profile_bootstrap
 
-    assert main() == 0
-    assert calls == [(
+    monkeypatch.setattr(
+        profile_bootstrap,
+        "_use_native_root_auth_store",
+        lambda: calls.append("root-auth"),
+    )
+
+    assert profile_bootstrap.main() == 0
+    assert calls == ["root-auth", (
         "hermes",
         "/usr/local/lib/hermes-agent/venv/bin/python",
         (
@@ -342,6 +349,108 @@ def test_gateway_launcher_disables_unselected_nous_auth_maintenance(
             "--profile", "polymarket", "gateway", "run", "--replace",
         ),
     )]
+
+
+def test_gateway_codex_pool_persistence_uses_only_native_root_auth_store(
+        tmp_path):
+    """A borrowed Codex refresh must rotate in root without creating profile auth."""
+    home = tmp_path / "home"
+    root = home / ".hermes"
+    profile = root / "profiles" / "polymarket"
+    root.mkdir(parents=True)
+    profile.mkdir(parents=True)
+    root_auth = root / "auth.json"
+    profile_auth = profile / "auth.json"
+    root_auth.write_text(json.dumps({
+        "version": 1,
+        "providers": {
+            "openai-codex": {
+                "tokens": {
+                    "access_token": "old-access",
+                    "refresh_token": "old-refresh",
+                },
+                "auth_mode": "chatgpt",
+            },
+            "unrelated": {"api_key": "preserve-provider"},
+        },
+        "credential_pool": {
+            "openai-codex": [{
+                "id": "borrowed",
+                "label": "borrowed",
+                "auth_type": "oauth",
+                "priority": 0,
+                "source": "device_code",
+                "access_token": "old-access",
+                "refresh_token": "old-refresh",
+            }, {
+                "id": "independent",
+                "label": "independent",
+                "auth_type": "oauth",
+                "priority": 1,
+                "source": "manual:device_code",
+                "access_token": "independent-access",
+                "refresh_token": "independent-refresh",
+            }],
+        },
+    }), encoding="utf-8")
+    root_auth.chmod(0o600)
+
+    script = """
+import dataclasses
+import json
+import os
+from pathlib import Path
+
+from polybot.hermes import profile_bootstrap
+
+profile_bootstrap._PROFILE_HOME = Path(os.environ["HERMES_HOME"])
+profile_bootstrap._ROOT_AUTH_FILE = Path(os.environ["ROOT_AUTH_FILE"])
+guard = getattr(profile_bootstrap, "_use_native_root_auth_store", None)
+if guard is not None:
+    guard()
+
+from agent.credential_pool import CredentialPool, PooledCredential
+
+entry = PooledCredential(
+    provider="openai-codex",
+    id="borrowed",
+    label="borrowed",
+    auth_type="oauth",
+    priority=0,
+    source="device_code",
+    access_token="new-access",
+    refresh_token="new-refresh",
+    last_refresh="2026-07-19T00:00:00Z",
+)
+pool = CredentialPool("openai-codex", [entry])
+pool._persist()
+pool._sync_device_code_entry_to_auth_store(entry)
+"""
+    env = {
+        "HOME": str(home),
+        "HERMES_HOME": str(profile),
+        "PYTHONPATH": f"{ROOT / 'src'}:/usr/local/lib/hermes-agent",
+        "ROOT_AUTH_FILE": str(root_auth),
+    }
+    subprocess.run(
+        ["/usr/local/lib/hermes-agent/venv/bin/python", "-c", script],
+        check=True,
+        env=env,
+    )
+
+    assert not profile_auth.exists()
+    persisted = json.loads(root_auth.read_text(encoding="utf-8"))
+    assert persisted["providers"]["openai-codex"]["tokens"] == {
+        "access_token": "new-access",
+        "refresh_token": "new-refresh",
+    }
+    assert persisted["providers"]["unrelated"] == {
+        "api_key": "preserve-provider",
+    }
+    pools = {entry["id"]: entry for entry in
+             persisted["credential_pool"]["openai-codex"]}
+    assert pools["borrowed"]["refresh_token"] == "new-refresh"
+    assert pools["independent"]["refresh_token"] == "independent-refresh"
 
 
 def test_installed_profile_launch_execs_reviewed_bootstrap(monkeypatch, tmp_path):
