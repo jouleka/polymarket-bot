@@ -51,6 +51,8 @@ def _use_native_root_auth_store() -> None:
         or root_stat.st_gid != os.getegid()
     ):
         raise RuntimeError("Hermes native root auth store is unsafe")
+    if auth_writer._ROOT_AUTH_FILE != _ROOT_AUTH_FILE:
+        raise RuntimeError("Hermes auth writer endpoint violates the reviewed contract")
 
     auth._auth_file_path = lambda: _ROOT_AUTH_FILE
     auth._save_auth_store = auth_writer.write_auth_store

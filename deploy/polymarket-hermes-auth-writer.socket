@@ -6,6 +6,5 @@ PartOf=polymarket-hermes.service
 ListenStream=/run/polymarket-hermes-auth-writer.sock
 SocketMode=0600
 Accept=yes
-MaxConnections=4
+MaxConnections=1
 RemoveOnStop=yes
-

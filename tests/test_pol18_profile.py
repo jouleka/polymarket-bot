@@ -515,11 +515,37 @@ def test_gateway_auth_guard_delegates_native_saves_to_isolated_writer(
     monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
     monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
     monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
 
     profile_bootstrap._use_native_root_auth_store()
 
     assert auth._auth_file_path() == root_auth
     assert auth._save_auth_store is auth_writer.write_auth_store
+
+
+def test_gateway_auth_guard_rejects_unreviewed_writer_endpoint(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer, profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{\"providers\": {}}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    auth._save_auth_store = lambda *args, **kwargs: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", tmp_path / "other.json")
+
+    with pytest.raises(RuntimeError, match="writer endpoint"):
+        profile_bootstrap._use_native_root_auth_store()
 
 
 @pytest.mark.parametrize("wrong_path", ["active", "global"])

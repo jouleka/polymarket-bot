@@ -70,7 +70,15 @@ def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     assert "ListenStream=/run/polymarket-hermes-auth-writer.sock" in writer_socket
     assert "SocketMode=0600" in writer_socket
     assert "Accept=yes" in writer_socket
+    assert "MaxConnections=1" in writer_socket
     assert "PartOf=polymarket-hermes.service" in writer_socket
+    assert "NoNewPrivileges=true" in writer
+    assert "ProtectSystem=strict" in writer
+    assert "MemoryMax=128M" in writer
+    assert "MemorySwapMax=0" in writer
+    assert "InaccessiblePaths=-/root/.hermes/.env" in writer
+    assert "InaccessiblePaths=-/root/.hermes/config.yaml" in writer
+    assert "InaccessiblePaths=-/root/.hermes/profiles" in writer
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
 
 
