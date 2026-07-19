@@ -1,5 +1,9 @@
 [Unit]
 Description=polymarket Hermes root-auth atomic writer
+BindsTo=polymarket-hermes.service
+PartOf=polymarket-hermes.service
+After=polymarket-hermes.service
+CollectMode=inactive-or-failed
 
 [Service]
 Type=exec

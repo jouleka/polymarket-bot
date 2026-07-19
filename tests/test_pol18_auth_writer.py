@@ -5,12 +5,26 @@ from pathlib import Path
 import socket
 import subprocess
 import threading
+from contextlib import contextmanager
+
+import fcntl
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 HERMES_PYTHON = "/usr/local/lib/hermes-agent/venv/bin/python"
+
+
+@contextmanager
+def _held_native_lock(auth_file):
+    lock_file = auth_file.with_suffix(".lock")
+    with lock_file.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def test_native_auth_writer_atomically_updates_only_fixed_store(
@@ -93,7 +107,8 @@ listener.close()
             "openai-codex": [{"id": "codex", "access_token": "new"}],
         },
     }
-    assert auth_writer.write_auth_store(updated) == auth_file
+    with _held_native_lock(auth_file):
+        assert auth_writer.write_auth_store(updated) == auth_file
     stdout, stderr = process.communicate(timeout=10)
     assert process.returncode == 0, (stdout, stderr)
 
@@ -205,8 +220,9 @@ def test_auth_writer_preserves_every_non_codex_root_credential(
             "openai-codex": [{"id": "codex"}],
         },
     }
-    with pytest.raises(RuntimeError, match="refused persistence"):
-        auth_writer.write_auth_store(unsafe)
+    with _held_native_lock(root_auth):
+        with pytest.raises(RuntimeError, match="refused persistence"):
+            auth_writer.write_auth_store(unsafe)
     server.join(timeout=5)
     listener.close()
     assert not server.is_alive()
@@ -250,8 +266,82 @@ def test_auth_writer_allows_first_native_codex_pool_seed(
     server.start()
     monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
     monkeypatch.setattr(auth_writer, "_AUTH_WRITER_SOCKET", writer_socket)
-    assert auth_writer.write_auth_store(requested) == root_auth
+    with _held_native_lock(root_auth):
+        assert auth_writer.write_auth_store(requested) == root_auth
     server.join(timeout=5)
     listener.close()
     assert not server.is_alive()
     assert saved == [requested]
+
+
+def test_auth_writer_rejects_request_without_transferred_native_lock(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    root_auth = tmp_path / "auth.json"
+    writer_socket = tmp_path / "writer.sock"
+    store = {
+        "version": 1,
+        "providers": {
+            "openai-codex": {"tokens": {"access_token": "old"}},
+        },
+        "credential_pool": {"openai-codex": []},
+    }
+    saved = []
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(writer_socket))
+    listener.listen(1)
+
+    def serve():
+        connection, _ = listener.accept()
+        with connection:
+            with pytest.raises(RuntimeError, match="lock lease"):
+                auth_writer.serve_connection(
+                    connection,
+                    load_auth_store=lambda unused: store,
+                    save_auth_store=lambda value, **unused: saved.append(value),
+                )
+
+    server = threading.Thread(target=serve)
+    server.start()
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.connect(str(writer_socket))
+        payload = json.dumps(store).encode("utf-8")
+        client.sendall(auth_writer._HEADER.pack(len(payload)) + payload)
+        assert client.recv(2) == b"ER"
+    server.join(timeout=5)
+    listener.close()
+    assert not server.is_alive()
+    assert saved == []
+
+
+def test_transferred_lock_lease_survives_caller_fd_close(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    auth_file = tmp_path / "auth.json"
+    lock_file = auth_file.with_suffix(".lock")
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", auth_file)
+    handle = lock_file.open("a+", encoding="utf-8")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    client, server = socket.socketpair()
+    auth_writer._send_header_with_lock(
+        client, auth_writer._HEADER.pack(1), handle.fileno(),
+    )
+    header, transferred_fd = auth_writer._recv_header_with_lock(server)
+    assert header == auth_writer._HEADER.pack(1)
+    handle.close()  # simulates the caller dying and releasing every local fd
+
+    auth_writer._validate_lock_lease(transferred_fd)
+    probe_fd = os.open(lock_file, os.O_RDWR)
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.close(transferred_fd)
+        fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(probe_fd)
+        client.close()
+        server.close()

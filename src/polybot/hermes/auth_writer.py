@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import array
+import fcntl
 import json
 import os
 from pathlib import Path
 import socket
+import stat
 import struct
 from typing import Callable
 
@@ -33,6 +36,87 @@ def _recv_exact(connection: socket.socket, size: int) -> bytes:
             raise RuntimeError("auth writer connection closed early")
         chunks.extend(chunk)
     return bytes(chunks)
+
+
+def _validate_lock_lease(lock_fd: int) -> None:
+    lock_path = _ROOT_AUTH_FILE.with_suffix(".lock")
+    try:
+        observed = Path(f"/proc/self/fd/{lock_fd}").resolve(strict=True)
+        lock_stat = os.fstat(lock_fd)
+    except OSError as exc:
+        raise RuntimeError("auth writer rejected invalid lock lease") from exc
+    if observed != lock_path or not stat.S_ISREG(lock_stat.st_mode):
+        raise RuntimeError("auth writer rejected invalid lock lease")
+
+    probe_fd = os.open(lock_path, os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        fcntl.flock(probe_fd, fcntl.LOCK_UN)
+        raise RuntimeError("auth writer rejected unheld lock lease")
+    finally:
+        os.close(probe_fd)
+
+
+def _find_held_auth_lock_fd() -> int:
+    expected = _ROOT_AUTH_FILE.with_suffix(".lock")
+    for entry in Path("/proc/self/fd").iterdir():
+        duplicated = None
+        try:
+            fd = int(entry.name)
+            if fd <= 2 or entry.resolve(strict=True) != expected:
+                continue
+            duplicated = os.dup(fd)
+            _validate_lock_lease(duplicated)
+            return duplicated
+        except (OSError, RuntimeError, ValueError):
+            if duplicated is not None:
+                try:
+                    os.close(duplicated)
+                except OSError:
+                    pass
+    raise RuntimeError("auth writer requires the held native auth lock")
+
+
+def _send_header_with_lock(
+        connection: socket.socket, header: bytes, lock_fd: int) -> None:
+    rights = array.array("i", [lock_fd])
+    sent = connection.sendmsg(
+        [header],
+        [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)],
+    )
+    if sent < len(header):
+        connection.sendall(header[sent:])
+
+
+def _recv_header_with_lock(connection: socket.socket) -> tuple[bytes, int]:
+    item_size = array.array("i").itemsize
+    header, ancillary, flags, _address = connection.recvmsg(
+        _HEADER.size,
+        socket.CMSG_SPACE(item_size),
+    )
+    if flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC):
+        raise RuntimeError("auth writer rejected truncated lock lease")
+    received_fds: list[int] = []
+    for level, kind, data in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            rights = array.array("i")
+            rights.frombytes(data[:len(data) - (len(data) % item_size)])
+            received_fds.extend(rights)
+    if len(received_fds) != 1:
+        for fd in received_fds:
+            os.close(fd)
+        raise RuntimeError("auth writer rejected missing lock lease")
+    received_fd = received_fds[0]
+    try:
+        if len(header) < _HEADER.size:
+            header += _recv_exact(connection, _HEADER.size - len(header))
+        return header, received_fd
+    except BaseException:
+        os.close(received_fd)
+        raise
 
 
 def _validate_store(auth_store: object) -> dict:
@@ -102,8 +186,13 @@ def write_auth_store(auth_store: dict, target_path: Path | None = None) -> Path:
         # bounded writer exits or replies. A response timeout could release
         # the lock while a disk-stalled writer later overwrites newer state.
         connection.settimeout(None)
-        connection.sendall(_HEADER.pack(len(payload)) + payload)
-        response = _recv_exact(connection, 2)
+        lock_fd = _find_held_auth_lock_fd()
+        try:
+            _send_header_with_lock(connection, _HEADER.pack(len(payload)), lock_fd)
+            connection.sendall(payload)
+            response = _recv_exact(connection, 2)
+        finally:
+            os.close(lock_fd)
     if response != b"OK":
         raise RuntimeError("native auth writer refused persistence")
     return _ROOT_AUTH_FILE
@@ -116,6 +205,7 @@ def serve_connection(
         save_auth_store: Callable[..., Path],
 ) -> None:
     """Validate one root peer/request and invoke the pinned native save."""
+    lock_fd = None
     try:
         peer = connection.getsockopt(
             socket.SOL_SOCKET,
@@ -125,7 +215,9 @@ def serve_connection(
         _pid, uid, _gid = _PEER_CREDENTIALS.unpack(peer)
         if uid != 0:
             raise RuntimeError("auth writer rejected non-root peer")
-        length = _HEADER.unpack(_recv_exact(connection, _HEADER.size))[0]
+        header, lock_fd = _recv_header_with_lock(connection)
+        _validate_lock_lease(lock_fd)
+        length = _HEADER.unpack(header)[0]
         if length == 0 or length > _MAX_PAYLOAD_BYTES:
             raise RuntimeError("auth writer rejected payload length")
         payload = _recv_exact(connection, length)
@@ -133,13 +225,16 @@ def serve_connection(
         current = load_auth_store(_ROOT_AUTH_FILE)
         _validate_codex_only_update(current, store)
         save_auth_store(store, target_path=_ROOT_AUTH_FILE)
+        connection.sendall(b"OK")
     except Exception:
         try:
             connection.sendall(b"ER")
         except OSError:
             pass
         raise
-    connection.sendall(b"OK")
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
 
 def main() -> int:

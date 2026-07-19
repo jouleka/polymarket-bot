@@ -66,6 +66,8 @@ def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     assert "ReadWritePaths=/root/.hermes" in writer
     assert "RestrictAddressFamilies=AF_UNIX" in writer
     assert "StandardInput=socket" in writer
+    assert "BindsTo=polymarket-hermes.service" in writer
+    assert "PartOf=polymarket-hermes.service" in writer
     assert "ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.auth_writer" in writer
     assert "ListenStream=/run/polymarket-hermes-auth-writer.sock" in writer_socket
     assert "SocketMode=0600" in writer_socket
@@ -78,6 +80,7 @@ def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     assert "MemorySwapMax=0" in writer
     assert "RuntimeMaxSec=20" in writer
     assert "TimeoutStopSec=5" in writer
+    assert "CollectMode=inactive-or-failed" in writer
     assert "InaccessiblePaths=-/root/.hermes/.env" in writer
     assert "InaccessiblePaths=-/root/.hermes/config.yaml" in writer
     assert "InaccessiblePaths=-/root/.hermes/profiles" in writer
@@ -85,6 +88,9 @@ def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     client = (ROOT / "src" / "polybot" / "hermes" / "auth_writer.py").read_text(
         encoding="utf-8"
     )
+    client = client[
+        client.index("def write_auth_store"):client.index("def serve_connection")
+    ]
     assert client.index("connection.settimeout(5.0)") < client.index(
         "connection.connect"
     ) < client.index("connection.settimeout(None)") < client.index(
