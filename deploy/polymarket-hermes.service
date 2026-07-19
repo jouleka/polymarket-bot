@@ -42,7 +42,6 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadOnlyPaths=/opt/polymarket-bot /usr/local/lib/hermes-agent /usr/local/bin/hermes
 ReadWritePaths=/root/.hermes/profiles/polymarket
-ReadWritePaths=/root/.hermes/auth.json
 ReadWritePaths=-/root/.hermes/auth.lock
 InaccessiblePaths=-/root/.ssh
 InaccessiblePaths=-/root/.aws

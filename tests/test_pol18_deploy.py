@@ -46,7 +46,7 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
     assert "NoNewPrivileges=true" in text
     assert "ProtectSystem=strict" in text
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in text
-    assert "ReadWritePaths=/root/.hermes/auth.json" in text
+    assert "ReadWritePaths=/root/.hermes/auth.json" not in text
     assert "InaccessiblePaths=-/root/.ssh" in text
     assert "InaccessiblePaths=-/root/.codex" in text
     assert "InaccessiblePaths=-/root/.hermes/profiles/coder" in text
