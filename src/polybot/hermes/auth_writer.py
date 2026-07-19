@@ -57,10 +57,12 @@ def _non_codex_projection(auth_store: dict) -> dict:
                 if provider != "openai-codex"
             }
         elif key == "credential_pool":
-            projection[key] = {
+            non_codex_pool = {
                 provider: entries for provider, entries in value.items()
                 if provider != "openai-codex"
             }
+            if non_codex_pool:
+                projection[key] = non_codex_pool
         else:
             projection[key] = value
     return projection
@@ -76,7 +78,7 @@ def _validate_codex_only_update(current: dict, requested: dict) -> None:
     if (
         not isinstance(current_codex, dict)
         or not isinstance(requested_codex, dict)
-        or not isinstance(current_pool, list)
+        or (current_pool is not None and not isinstance(current_pool, list))
         or not isinstance(requested_pool, list)
         or _non_codex_projection(current) != _non_codex_projection(requested)
     ):
@@ -94,8 +96,12 @@ def write_auth_store(auth_store: dict, target_path: Path | None = None) -> Path:
         raise RuntimeError("auth writer payload exceeds the reviewed bound")
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(20.0)
+        connection.settimeout(5.0)
         connection.connect(str(_AUTH_WRITER_SOCKET))
+        # Once connected, retain the caller's shared auth.lock until the
+        # bounded writer exits or replies. A response timeout could release
+        # the lock while a disk-stalled writer later overwrites newer state.
+        connection.settimeout(None)
         connection.sendall(_HEADER.pack(len(payload)) + payload)
         response = _recv_exact(connection, 2)
     if response != b"OK":

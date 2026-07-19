@@ -76,9 +76,20 @@ def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     assert "ProtectSystem=strict" in writer
     assert "MemoryMax=128M" in writer
     assert "MemorySwapMax=0" in writer
+    assert "RuntimeMaxSec=20" in writer
+    assert "TimeoutStopSec=5" in writer
     assert "InaccessiblePaths=-/root/.hermes/.env" in writer
     assert "InaccessiblePaths=-/root/.hermes/config.yaml" in writer
     assert "InaccessiblePaths=-/root/.hermes/profiles" in writer
+
+    client = (ROOT / "src" / "polybot" / "hermes" / "auth_writer.py").read_text(
+        encoding="utf-8"
+    )
+    assert client.index("connection.settimeout(5.0)") < client.index(
+        "connection.connect"
+    ) < client.index("connection.settimeout(None)") < client.index(
+        "connection.sendall"
+    )
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
 
 

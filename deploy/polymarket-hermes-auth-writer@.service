@@ -41,3 +41,5 @@ MemoryMax=128M
 MemorySwapMax=0
 OOMPolicy=stop
 TimeoutStartSec=20
+RuntimeMaxSec=20
+TimeoutStopSec=5

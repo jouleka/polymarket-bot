@@ -211,3 +211,47 @@ def test_auth_writer_preserves_every_non_codex_root_credential(
     listener.close()
     assert not server.is_alive()
     assert saved == []
+
+
+def test_auth_writer_allows_first_native_codex_pool_seed(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    root_auth = tmp_path / "auth.json"
+    writer_socket = tmp_path / "writer.sock"
+    current = {
+        "version": 1,
+        "providers": {
+            "unrelated": {"api_key": "preserve"},
+            "openai-codex": {"tokens": {"access_token": "old"}},
+        },
+    }
+    requested = {
+        **current,
+        "credential_pool": {
+            "openai-codex": [{"id": "first", "access_token": "old"}],
+        },
+    }
+    saved = []
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(writer_socket))
+    listener.listen(1)
+
+    def serve():
+        connection, _ = listener.accept()
+        with connection:
+            auth_writer.serve_connection(
+                connection,
+                load_auth_store=lambda unused: current,
+                save_auth_store=lambda store, **unused: saved.append(store),
+            )
+
+    server = threading.Thread(target=serve)
+    server.start()
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_AUTH_WRITER_SOCKET", writer_socket)
+    assert auth_writer.write_auth_store(requested) == root_auth
+    server.join(timeout=5)
+    listener.close()
+    assert not server.is_alive()
+    assert saved == [requested]
