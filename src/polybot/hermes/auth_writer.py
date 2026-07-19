@@ -46,6 +46,43 @@ def _validate_store(auth_store: object) -> dict:
     return auth_store
 
 
+def _non_codex_projection(auth_store: dict) -> dict:
+    projection = {}
+    for key, value in auth_store.items():
+        if key in {"updated_at", "version"}:
+            continue
+        if key == "providers":
+            projection[key] = {
+                provider: state for provider, state in value.items()
+                if provider != "openai-codex"
+            }
+        elif key == "credential_pool":
+            projection[key] = {
+                provider: entries for provider, entries in value.items()
+                if provider != "openai-codex"
+            }
+        else:
+            projection[key] = value
+    return projection
+
+
+def _validate_codex_only_update(current: dict, requested: dict) -> None:
+    current = _validate_store(current)
+    requested = _validate_store(requested)
+    current_codex = current["providers"].get("openai-codex")
+    requested_codex = requested["providers"].get("openai-codex")
+    current_pool = current.get("credential_pool", {}).get("openai-codex")
+    requested_pool = requested.get("credential_pool", {}).get("openai-codex")
+    if (
+        not isinstance(current_codex, dict)
+        or not isinstance(requested_codex, dict)
+        or not isinstance(current_pool, list)
+        or not isinstance(requested_pool, list)
+        or _non_codex_projection(current) != _non_codex_projection(requested)
+    ):
+        raise RuntimeError("auth writer rejected non-Codex store mutation")
+
+
 def write_auth_store(auth_store: dict, target_path: Path | None = None) -> Path:
     """Ask the socket-activated writer to perform one native atomic save."""
     target = _ROOT_AUTH_FILE if target_path is None else Path(target_path)
@@ -69,6 +106,7 @@ def write_auth_store(auth_store: dict, target_path: Path | None = None) -> Path:
 def serve_connection(
         connection: socket.socket,
         *,
+        load_auth_store: Callable[..., dict],
         save_auth_store: Callable[..., Path],
 ) -> None:
     """Validate one root peer/request and invoke the pinned native save."""
@@ -86,6 +124,8 @@ def serve_connection(
             raise RuntimeError("auth writer rejected payload length")
         payload = _recv_exact(connection, length)
         store = _validate_store(json.loads(payload.decode("utf-8")))
+        current = load_auth_store(_ROOT_AUTH_FILE)
+        _validate_codex_only_update(current, store)
         save_auth_store(store, target_path=_ROOT_AUTH_FILE)
     except Exception:
         try:
@@ -97,10 +137,14 @@ def serve_connection(
 
 
 def main() -> int:
-    from hermes_cli.auth import _save_auth_store
+    from hermes_cli.auth import _load_auth_store, _save_auth_store
 
     with socket.socket(fileno=os.dup(0)) as connection:
-        serve_connection(connection, save_auth_store=_save_auth_store)
+        serve_connection(
+            connection,
+            load_auth_store=_load_auth_store,
+            save_auth_store=_save_auth_store,
+        )
     return 0
 
 

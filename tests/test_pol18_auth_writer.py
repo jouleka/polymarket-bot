@@ -1,7 +1,10 @@
 import json
+import inspect
 import os
 from pathlib import Path
+import socket
 import subprocess
+import threading
 
 import pytest
 
@@ -20,7 +23,15 @@ def test_native_auth_writer_atomically_updates_only_fixed_store(
     auth_file = hermes_root / "auth.json"
     auth_file.write_text(json.dumps({
         "version": 1,
-        "providers": {"unrelated": {"value": "preserve"}},
+        "active_provider": "unrelated",
+        "providers": {
+            "unrelated": {"value": "preserve"},
+            "openai-codex": {"tokens": {"access_token": "old"}},
+        },
+        "credential_pool": {
+            "unrelated": [{"id": "preserve"}],
+            "openai-codex": [{"id": "codex", "access_token": "old"}],
+        },
     }), encoding="utf-8")
     auth_file.chmod(0o600)
     socket_path = tmp_path / "writer.sock"
@@ -30,7 +41,7 @@ from pathlib import Path
 import socket
 
 from polybot.hermes import auth_writer
-from hermes_cli.auth import _save_auth_store
+from hermes_cli.auth import _load_auth_store, _save_auth_store
 
 auth_writer._ROOT_AUTH_FILE = Path(os.environ["ROOT_AUTH_FILE"])
 listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -39,7 +50,11 @@ listener.listen(1)
 print("ready", flush=True)
 connection, _ = listener.accept()
 with connection:
-    auth_writer.serve_connection(connection, save_auth_store=_save_auth_store)
+    auth_writer.serve_connection(
+        connection,
+        load_auth_store=_load_auth_store,
+        save_auth_store=_save_auth_store,
+    )
 listener.close()
 """
     env = {
@@ -63,6 +78,7 @@ listener.close()
     monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", auth_file)
     updated = {
         "version": 1,
+        "active_provider": "unrelated",
         "providers": {
             "unrelated": {"value": "preserve"},
             "openai-codex": {
@@ -72,6 +88,10 @@ listener.close()
                 },
             },
         },
+        "credential_pool": {
+            "unrelated": [{"id": "preserve"}],
+            "openai-codex": [{"id": "codex", "access_token": "new"}],
+        },
     }
     assert auth_writer.write_auth_store(updated) == auth_file
     stdout, stderr = process.communicate(timeout=10)
@@ -79,6 +99,8 @@ listener.close()
 
     persisted = json.loads(auth_file.read_text(encoding="utf-8"))
     assert persisted["providers"] == updated["providers"]
+    assert persisted["active_provider"] == "unrelated"
+    assert persisted["credential_pool"]["unrelated"] == [{"id": "preserve"}]
     assert auth_file.stat().st_mode & 0o777 == 0o600
     assert not list(hermes_root.glob("auth.json.tmp.*"))
 
@@ -124,8 +146,68 @@ def test_auth_writer_server_rejects_non_root_peer_before_read_or_save():
     with pytest.raises(RuntimeError, match="non-root peer"):
         auth_writer.serve_connection(
             connection,
+            load_auth_store=lambda *args, **kwargs: pytest.fail(
+                "non-root request must not load"
+            ),
             save_auth_store=lambda *args, **kwargs: pytest.fail(
                 "non-root request must not save"
             ),
         )
     assert connection.sent == [b"ER"]
+
+
+def test_auth_writer_preserves_every_non_codex_root_credential(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    root_auth = tmp_path / "auth.json"
+    writer_socket = tmp_path / "writer.sock"
+    current = {
+        "version": 1,
+        "active_provider": "unrelated",
+        "providers": {
+            "unrelated": {"api_key": "preserve"},
+            "openai-codex": {"tokens": {"access_token": "old"}},
+        },
+        "credential_pool": {
+            "unrelated": [{"id": "preserve"}],
+            "openai-codex": [{"id": "codex"}],
+        },
+    }
+    saved = []
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(writer_socket))
+    listener.listen(1)
+
+    def serve():
+        connection, _ = listener.accept()
+        kwargs = {
+            "save_auth_store": lambda store, **unused: saved.append(store),
+        }
+        if "load_auth_store" in inspect.signature(
+                auth_writer.serve_connection).parameters:
+            kwargs["load_auth_store"] = lambda unused: current
+        with connection:
+            with pytest.raises(RuntimeError, match="non-Codex"):
+                auth_writer.serve_connection(connection, **kwargs)
+
+    server = threading.Thread(target=serve)
+    server.start()
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", root_auth)
+    monkeypatch.setattr(auth_writer, "_AUTH_WRITER_SOCKET", writer_socket)
+    unsafe = {
+        "version": 1,
+        "active_provider": "unrelated",
+        "providers": {
+            "openai-codex": {"tokens": {"access_token": "new"}},
+        },
+        "credential_pool": {
+            "openai-codex": [{"id": "codex"}],
+        },
+    }
+    with pytest.raises(RuntimeError, match="refused persistence"):
+        auth_writer.write_auth_store(unsafe)
+    server.join(timeout=5)
+    listener.close()
+    assert not server.is_alive()
+    assert saved == []

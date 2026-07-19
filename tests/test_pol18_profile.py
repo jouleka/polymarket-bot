@@ -402,7 +402,10 @@ from pathlib import Path
 import socket
 import threading
 
-from hermes_cli.auth import _save_auth_store as native_save_auth_store
+from hermes_cli.auth import (
+    _load_auth_store as native_load_auth_store,
+    _save_auth_store as native_save_auth_store,
+)
 from polybot.hermes import auth_writer, profile_bootstrap
 
 profile_bootstrap._PROFILE_HOME = Path(os.environ["HERMES_HOME"])
@@ -418,7 +421,9 @@ def write_twice():
         connection, _ = listener.accept()
         with connection:
             auth_writer.serve_connection(
-                connection, save_auth_store=native_save_auth_store,
+                connection,
+                load_auth_store=native_load_auth_store,
+                save_auth_store=native_save_auth_store,
             )
 
 writer = threading.Thread(target=write_twice, daemon=True)
