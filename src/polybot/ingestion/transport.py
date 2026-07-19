@@ -70,7 +70,11 @@ async def open_market_ws(url=CLOB_MARKET_WS):
     app-level keepalive (client sends "PING", server replies "PONG" — driven by
     MarketSocket's keepalive task) governs liveness instead.
     """
-    return await websockets.connect(url, ping_interval=None)
+    # One independent queue per shard otherwise multiplies websockets' default
+    # high-water mark across the production fan-out. A single queued frame keeps
+    # memory bounded; TCP backpressure plus the existing top-of-book gap detector
+    # preserve fail-closed resync semantics if the event loop falls behind.
+    return await websockets.connect(url, ping_interval=None, max_queue=1)
 
 
 def is_transient_rpc_error(exc):
