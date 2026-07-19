@@ -474,6 +474,93 @@ def test_gateway_auth_guard_fails_closed_when_native_root_store_is_missing(
         profile_bootstrap._use_native_root_auth_store()
 
 
+@pytest.mark.parametrize("wrong_path", ["active", "global"])
+def test_gateway_auth_guard_rejects_unreviewed_auth_paths(
+        monkeypatch, tmp_path, wrong_path):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    active_path = profile / "auth.json"
+    global_path = root_auth
+    if wrong_path == "active":
+        active_path = tmp_path / "other-profile" / "auth.json"
+    else:
+        global_path = tmp_path / "other-root" / "auth.json"
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: active_path
+    auth._global_auth_file_path = lambda: global_path
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="auth paths violate"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+@pytest.mark.parametrize("name", [".env", ".op.env", "auth.json"])
+def test_gateway_auth_guard_rejects_profile_local_secret_artifacts(
+        monkeypatch, tmp_path, name):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    root_auth.write_text("{}", encoding="utf-8")
+    root_auth.chmod(0o600)
+    (profile / name).symlink_to(tmp_path / "missing-secret")
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="only the native root auth store"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
+@pytest.mark.parametrize("unsafe_kind", ["mode", "directory", "symlink"])
+def test_gateway_auth_guard_rejects_unsafe_native_root_store(
+        monkeypatch, tmp_path, unsafe_kind):
+    from polybot.hermes import profile_bootstrap
+
+    profile = tmp_path / "profiles" / "polymarket"
+    profile.mkdir(parents=True)
+    root_auth = tmp_path / "auth.json"
+    if unsafe_kind == "directory":
+        root_auth.mkdir()
+    elif unsafe_kind == "symlink":
+        target = tmp_path / "real-auth.json"
+        target.write_text("{}", encoding="utf-8")
+        target.chmod(0o600)
+        root_auth.symlink_to(target)
+    else:
+        root_auth.write_text("{}", encoding="utf-8")
+        root_auth.chmod(0o644)
+    auth = types.ModuleType("hermes_cli.auth")
+    auth._auth_file_path = lambda: profile / "auth.json"
+    auth._global_auth_file_path = lambda: root_auth
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.auth = auth
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.auth", auth)
+    monkeypatch.setattr(profile_bootstrap, "_PROFILE_HOME", profile)
+    monkeypatch.setattr(profile_bootstrap, "_ROOT_AUTH_FILE", root_auth)
+
+    with pytest.raises(RuntimeError, match="native root auth store is unsafe"):
+        profile_bootstrap._use_native_root_auth_store()
+
+
 def test_installed_profile_launch_execs_reviewed_bootstrap(monkeypatch, tmp_path):
     from polybot.hermes import profile_gateway
 
