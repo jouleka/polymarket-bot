@@ -345,3 +345,21 @@ def test_transferred_lock_lease_survives_caller_fd_close(
         os.close(probe_fd)
         client.close()
         server.close()
+
+
+def test_lock_lease_rejects_unlocked_decoy_for_locked_native_path(
+        monkeypatch, tmp_path):
+    from polybot.hermes import auth_writer
+
+    auth_file = tmp_path / "auth.json"
+    lock_file = auth_file.with_suffix(".lock")
+    monkeypatch.setattr(auth_writer, "_ROOT_AUTH_FILE", auth_file)
+    holder_fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+    decoy_fd = os.open(lock_file, os.O_RDWR)
+    try:
+        fcntl.flock(holder_fd, fcntl.LOCK_EX)
+        with pytest.raises(RuntimeError, match="unheld lock lease"):
+            auth_writer._validate_lock_lease(decoy_fd)
+    finally:
+        os.close(decoy_fd)
+        os.close(holder_fd)

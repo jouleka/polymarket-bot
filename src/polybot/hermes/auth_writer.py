@@ -53,11 +53,17 @@ def _validate_lock_lease(lock_fd: int) -> None:
         try:
             fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            return
-        fcntl.flock(probe_fd, fcntl.LOCK_UN)
-        raise RuntimeError("auth writer rejected unheld lock lease")
+            pass
+        else:
+            fcntl.flock(probe_fd, fcntl.LOCK_UN)
+            raise RuntimeError("auth writer rejected unheld lock lease")
     finally:
         os.close(probe_fd)
+
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        raise RuntimeError("auth writer rejected unheld lock lease") from exc
 
 
 def _find_held_auth_lock_fd() -> int:
