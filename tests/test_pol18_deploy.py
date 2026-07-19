@@ -59,12 +59,18 @@ def test_brain_unit_uses_existing_root_hermes_profile_and_does_not_activate_pol1
 def test_brain_unit_delegates_atomic_auth_without_shared_root_write_access():
     lines = UNIT.read_text(encoding="utf-8").splitlines()
     writer = AUTH_WRITER_SERVICE.read_text(encoding="utf-8").splitlines()
+    writer_socket = AUTH_WRITER_SOCKET.read_text(encoding="utf-8").splitlines()
 
     assert "ReadWritePaths=/root/.hermes" not in lines
     assert "Requires=polymarket-hermes-auth-writer.socket" in lines
     assert "ReadWritePaths=/root/.hermes" in writer
     assert "RestrictAddressFamilies=AF_UNIX" in writer
     assert "StandardInput=socket" in writer
+    assert "ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m polybot.hermes.auth_writer" in writer
+    assert "ListenStream=/run/polymarket-hermes-auth-writer.sock" in writer_socket
+    assert "SocketMode=0600" in writer_socket
+    assert "Accept=yes" in writer_socket
+    assert "PartOf=polymarket-hermes.service" in writer_socket
     assert "ReadWritePaths=/root/.hermes/profiles/polymarket" in lines
 
 
@@ -80,7 +86,9 @@ def test_code_installer_installs_mcp_and_both_units_but_leaves_both_stopped():
     assert "polybot-proposal" in text
     assert "usermod -a -G \"$BRIDGE_GROUP\" \"$SVC_USER\"" in text
     assert "polymarket-hermes.service" in text
-    assert "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service" in text
+    assert 'cp "$APP/deploy/polymarket-hermes-auth-writer.socket"' in text
+    assert 'cp "$APP/deploy/polymarket-hermes-auth-writer@.service"' in text
+    assert "systemctl disable --now polymarket-ingestion.service polymarket-hermes.service polymarket-hermes-auth-writer.socket" in text
     assert "systemctl enable" not in text
     assert "systemctl start" not in text
     assert "hermes profile create" not in text
