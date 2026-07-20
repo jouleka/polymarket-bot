@@ -11,7 +11,7 @@ from polybot.hermes.rpc import ProposalRpcDispatcher, ProposalRpcServer
 
 
 APPROVED = {
-    "propose_trade", "get_market", "get_book", "get_ledger", "get_flags",
+    "propose_trade", "get_market", "get_book", "get_news", "get_ledger", "get_flags",
 }
 
 
@@ -24,7 +24,7 @@ class _Client:
         return {"method": method, "params": params}
 
 
-def test_mcp_discovery_is_exactly_five_strict_tools_and_no_other_capability():
+def test_mcp_discovery_is_exactly_six_strict_tools_and_no_other_capability():
     from polybot.hermes.mcp_bridge import ProposalMcpServer
 
     bridge = ProposalMcpServer(_Client())
@@ -38,6 +38,9 @@ def test_mcp_discovery_is_exactly_five_strict_tools_and_no_other_capability():
     assert proposal["properties"]["target_price"] == {"type": "string"}
     assert proposal["properties"]["size_usd_suggestion"] == {"type": "string"}
     assert proposal["properties"]["citations"]["items"] == {"type": "string"}
+    assert by_name["get_news"].inputSchema["properties"]["limit"] == {
+        "type": "integer", "minimum": 1, "maximum": 50,
+    }
     assert bridge.capabilities.resources is None
     assert bridge.capabilities.prompts is None
     assert bridge.capabilities.tools is not None
@@ -79,7 +82,7 @@ def test_mcp_bridge_imports_only_sdk_and_socket_client_capabilities():
     }
 
 
-def test_real_stdio_mcp_discovers_five_and_calls_the_unix_boundary(tmp_path):
+def test_real_stdio_mcp_discovers_six_and_calls_the_unix_boundary(tmp_path):
     class Facade:
         def get_book(self, *, token_id):
             return {"token_id": token_id, "midpoint": "0.42"}
