@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy" / "hermes" / "polymarket-profile" / "config.yaml"
 APPROVED = {
-    "propose_trade", "get_market", "get_book", "get_ledger", "get_flags",
+    "propose_trade", "get_market", "get_book", "get_news", "get_ledger", "get_flags",
 }
 MODEL_VISIBLE = {f"mcp__polymarket__{name}" for name in APPROVED}
 GATEWAY_PLATFORMS = {
@@ -57,7 +57,7 @@ def test_effective_inventory_verifier_rejects_vulnerable_mcp_version():
         )
 
 
-def test_profile_template_grants_only_one_exact_five_tool_mcp_server():
+def test_profile_template_grants_only_one_exact_six_tool_mcp_server():
     config = json.loads(PROFILE.read_text(encoding="utf-8"))
 
     assert set(config["mcp_servers"]) == {"polymarket"}
@@ -813,12 +813,16 @@ def test_cron_contract_requires_one_exact_job_and_exact_model_visible_tools():
         )
 
 
-def test_cron_prompt_uses_only_tokens_advertised_as_fresh_live_books():
+def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
               "cron-prompt.md").read_text(encoding="utf-8")
 
     assert "If `live_book_tokens` is empty, stop without proposing" in prompt
-    assert "token_id is present in `live_book_tokens`" in prompt
+    assert "nearest positive resolution first" in prompt
+    assert "`live_book=true`" in prompt
+    assert "`get_news`" in prompt
+    assert "`citation_eligible=true`" in prompt
+    assert "returned `citation_id`" in prompt
 
 
 def test_activation_requires_nonempty_owner_selected_model_and_provider():

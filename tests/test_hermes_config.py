@@ -1,6 +1,6 @@
 """S6 / POL-8 — deploy/hermes/config.yaml reviewed artifact (Task 10).
 
-Safety property under test: the Hermes harness is granted EXACTLY the four
+Safety property under test: the Hermes harness is granted EXACTLY the five
 read tools plus the single INSERT-only write tool `propose_trade`, and is
 granted NONE of the signing/admin/status-mutation tools that would let it
 reach the signer or flip an intent's status. The artifact also documents the
@@ -20,7 +20,7 @@ _CONFIG_PATH = Path(__file__).resolve().parents[1] / "deploy" / "hermes" / "conf
 
 # The pinned contract: the complete allowed tool surface.
 _ALLOWED_TOOLS = frozenset(
-    {"propose_trade", "get_market", "get_book", "get_ledger", "get_flags"}
+    {"propose_trade", "get_market", "get_book", "get_news", "get_ledger", "get_flags"}
 )
 
 # Tools that MUST never appear — anything that signs, moves money, mutates an

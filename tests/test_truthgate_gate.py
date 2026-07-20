@@ -17,7 +17,7 @@ from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.envelope import make_envelope
 from polybot.ingestion.news import DISCOVERY, PRIMARY, Source
 from polybot.ingestion.orderbook import LocalBook
-from polybot.storage.market_memory import EventStore
+from polybot.storage.market_memory import EventStore, ReadOnlyEventStore
 from polybot.truthgate.gate import (
     REASON_SAME_SOURCE,
     REASON_TRUTH_GATE_REFUSE,
@@ -85,6 +85,61 @@ def test_two_distinct_groups_corroborated(tmp_path):
     assert v.refused is False and v.reason is None
     assert v.corroborated is True
     assert set(v.primary_groups) == {"federalreserve.gov", "sec.gov"}
+
+
+def test_truth_gate_uses_exact_bounded_query_with_large_market_data_decoys(tmp_path):
+    path = str(tmp_path / "ev.db")
+    stamper = MonotonicStamper()
+    with EventStore(path) as store:
+        _seed(store, stamper, _FED, "fed1", link="https://www.federalreserve.gov/1")
+        _seed(store, stamper, _SEC, "sec1", link="https://www.sec.gov/1")
+        store._conn.executemany(
+            "INSERT INTO events (observed_at, source, source_tier, event_id, content, "
+            "published_at, entities, market_links, trust) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                (100_000 + index, "data-api", "DATA", f"decoy-{index}", "{}",
+                 None, "[]", "[]", "UNTRUSTED")
+                for index in range(20_000)
+            ),
+        )
+        store._conn.commit()
+        now = stamper.stamp()
+
+    with ReadOnlyEventStore(path) as reader:
+        reader.all = lambda: pytest.fail("truth gate materialized the market firehose")
+        verdict = verify(
+            ("fed1", "sec1"), event_store=reader, book=_book(),
+            allowlist=_ALLOWLIST, now_ns=now, config=_CFG,
+        )
+
+    assert verdict.corroborated is True
+    assert set(verdict.primary_groups) == {"federalreserve.gov", "sec.gov"}
+
+
+def test_truth_gate_refuses_when_collision_beyond_match_cap_could_change_group(tmp_path):
+    path = str(tmp_path / "ev.db")
+    with EventStore(path) as store:
+        store._conn.executemany(
+            "INSERT INTO events (observed_at, source, source_tier, event_id, content, "
+            "published_at, entities, market_links, trust) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (index, "fed-press", PRIMARY, f"fed-{index}", "text", None,
+                 '["shared"]', "[]", "UNTRUSTED")
+                for index in range(1024)
+            ] + [
+                (1024, "sec-press", PRIMARY, "sec-late", "text", None,
+                 '["shared"]', "[]", "UNTRUSTED"),
+            ],
+        )
+        store._conn.commit()
+        verdict = verify(
+            ("shared",), event_store=store, book=_book(), allowlist=_ALLOWLIST,
+            now_ns=2000, config=_CFG,
+        )
+
+    assert verdict.refused is True
+    assert verdict.reason == REASON_TRUTH_GATE_REFUSE
+    assert verdict.primary_groups == ()
 
 
 def test_same_publisher_group_not_corroborated_regression(tmp_path):

@@ -78,7 +78,7 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
             or len(include) != len(set(include))
             or set(include) != APPROVED_METHODS
             or tools["resources"] is not False or tools["prompts"] is not False):
-        raise RuntimeError("profile MCP tool grant is not exactly the approved five")
+        raise RuntimeError("profile MCP tool grant is not exactly the approved six")
 
     authored_platforms = config.get("platform_toolsets")
     if (not isinstance(authored_platforms, dict)
@@ -131,7 +131,7 @@ def verify_effective_contract(config, *, hermes_version, mcp_version,
     observed_names = [item[0] if isinstance(item, tuple) else item for item in observed]
     if (len(observed_names) != len(set(observed_names))
             or set(observed_names) != APPROVED_METHODS):
-        raise RuntimeError("effective MCP tools are not exactly the approved five")
+        raise RuntimeError("effective MCP tools are not exactly the approved six")
     return True
 
 
@@ -171,7 +171,7 @@ def verify_cron_contract(jobs, expected_prompt, model_visible_tool_names):
         raise RuntimeError("cron job repeat state violates the reviewed contract")
     names = list(model_visible_tool_names)
     if len(names) != len(set(names)) or set(names) != _MODEL_VISIBLE_METHODS:
-        raise RuntimeError("cron model-visible tools are not exactly the approved five")
+        raise RuntimeError("cron model-visible tools are not exactly the approved six")
     return True
 
 
@@ -187,7 +187,7 @@ def verify_effective_gateway_contract(platforms):
 def _verify_model_visible_tools(names):
     names = list(names)
     if len(names) != len(set(names)) or set(names) != _MODEL_VISIBLE_METHODS:
-        raise RuntimeError("cron model-visible tools are not exactly the approved five")
+        raise RuntimeError("cron model-visible tools are not exactly the approved six")
 
 
 def _verify_profile_filesystem(home):
@@ -300,7 +300,7 @@ def main(argv=None):
     parser.add_argument("--expect-no-cron", action="store_true")
     args = parser.parse_args(argv)
     verify_installed_profile(args.profile_home, expect_no_cron=args.expect_no_cron)
-    print("POL-18 Hermes profile effective inventory: exact five; PASS")
+    print("POL-18 Hermes profile effective inventory: exact six; PASS")
     return 0
 
 

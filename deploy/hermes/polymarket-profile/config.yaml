@@ -24,6 +24,7 @@
           "propose_trade",
           "get_market",
           "get_book",
+          "get_news",
           "get_ledger",
           "get_flags"
         ],

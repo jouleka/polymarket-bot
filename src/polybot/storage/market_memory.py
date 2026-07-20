@@ -16,6 +16,74 @@ _COLUMNS = (
 )
 
 
+class EventQueryTooBroad(RuntimeError):
+    """A citation lookup exceeded its fixed fail-closed result bound."""
+
+
+def _recent_by_sources(conn, source_names, *, offset, limit,
+                       max_content_chars, max_event_id_chars):
+    sources = tuple(source_names)
+    if (not sources or len(sources) != len(set(sources))
+            or any(not isinstance(source, str) or not source for source in sources)):
+        raise ValueError("recent event sources must be non-empty unique strings")
+    if (isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 1000
+            or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50):
+        raise ValueError("recent event pagination must be bounded positive integers")
+    if (isinstance(max_content_chars, bool) or not isinstance(max_content_chars, int)
+            or not 1 <= max_content_chars <= 4096
+            or isinstance(max_event_id_chars, bool)
+            or not isinstance(max_event_id_chars, int)
+            or not 1 <= max_event_id_chars <= 2048):
+        raise ValueError("recent event field bounds are invalid")
+    placeholders = ",".join("?" for _source in sources)
+    rows = conn.execute(
+        "SELECT observed_at, source, source_tier, event_id, "
+        "substr(content, 1, ?), published_at, '[]', '[]', 'UNTRUSTED' "
+        f"FROM events WHERE source IN ({placeholders}) "
+        "AND trust = 'UNTRUSTED' AND length(event_id) <= ? "
+        "ORDER BY observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
+        (max_content_chars, *sources, max_event_id_chars, limit, offset),
+    ).fetchall()
+    return [EventStore._row_to_envelope(row) for row in rows]
+
+
+def _matching_citations(conn, citations, source_names, *, max_matches):
+    citation_values = tuple(citations)
+    sources = tuple(source_names)
+    if (len(citation_values) > 32 or len(citation_values) != len(set(citation_values))
+            or any(not isinstance(value, str) or not value for value in citation_values)):
+        raise ValueError("citation lookup values must be bounded unique strings")
+    if (len(sources) != len(set(sources))
+            or any(not isinstance(source, str) or not source for source in sources)):
+        raise ValueError("citation lookup sources must be unique strings")
+    if (isinstance(max_matches, bool) or not isinstance(max_matches, int)
+            or not 1 <= max_matches <= 4096):
+        raise ValueError("citation lookup result bound is invalid")
+    if not citation_values or not sources:
+        return []
+    source_slots = ",".join("?" for _source in sources)
+    citation_slots = ",".join("?" for _citation in citation_values)
+    rows = conn.execute(
+        "SELECT observed_at, source, source_tier, "
+        "CASE WHEN length(event_id) <= 2048 THEN event_id ELSE '' END, "
+        "'', published_at, COALESCE(("
+        "SELECT json_group_array(entity.value) "
+        "FROM json_each(events.entities) AS entity "
+        f"WHERE entity.value IN ({citation_slots})"
+        "), '[]'), '[]', 'UNTRUSTED' FROM events "
+        f"WHERE source IN ({source_slots}) AND ("
+        f"event_id IN ({citation_slots}) OR EXISTS ("
+        "SELECT 1 FROM json_each(events.entities) AS entity "
+        f"WHERE entity.value IN ({citation_slots})"
+        ")) AND trust = 'UNTRUSTED' ORDER BY observed_at, rowid LIMIT ?",
+        (*citation_values, *sources,
+         *citation_values, *citation_values, max_matches + 1),
+    ).fetchall()
+    if len(rows) > max_matches:
+        raise EventQueryTooBroad("citation lookup exceeded its fixed result bound")
+    return [EventStore._row_to_envelope(row) for row in rows]
+
+
 class EventStore:
     def __init__(self, path, *, check_same_thread=True):
         # check_same_thread=False lets the off-loop single-writer (POL-12) drive
@@ -85,6 +153,21 @@ class EventStore:
             (observed_at_cutoff,),
         )
 
+    def recent_by_sources(self, source_names, *, offset, limit,
+                          max_content_chars=4096, max_event_id_chars=2048):
+        """Return one bounded newest-first page for exact configured sources."""
+        return _recent_by_sources(
+            self._conn, source_names, offset=offset, limit=limit,
+            max_content_chars=max_content_chars,
+            max_event_id_chars=max_event_id_chars,
+        )
+
+    def matching_citations(self, citations, source_names, *, max_matches=1024):
+        """Return only bounded exact citation matches for configured sources."""
+        return _matching_citations(
+            self._conn, citations, source_names, max_matches=max_matches,
+        )
+
     def max_observed_at(self):
         """Return the durable history floor, or zero for an empty store."""
         row = self._conn.execute(
@@ -137,6 +220,21 @@ class ReadOnlyEventStore:
             f"SELECT {_COLUMNS} FROM events WHERE observed_at <= ? "
             "ORDER BY observed_at, rowid",
             (observed_at_cutoff,),
+        )
+
+    def recent_by_sources(self, source_names, *, offset, limit,
+                          max_content_chars=4096, max_event_id_chars=2048):
+        """Return one bounded newest-first page for exact configured sources."""
+        return _recent_by_sources(
+            self._conn, source_names, offset=offset, limit=limit,
+            max_content_chars=max_content_chars,
+            max_event_id_chars=max_event_id_chars,
+        )
+
+    def matching_citations(self, citations, source_names, *, max_matches=1024):
+        """Return only bounded exact citation matches for configured sources."""
+        return _matching_citations(
+            self._conn, citations, source_names, max_matches=max_matches,
         )
 
     def close(self):

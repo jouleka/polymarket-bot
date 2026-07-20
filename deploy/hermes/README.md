@@ -3,7 +3,7 @@
 This runbook installs the propose-only Hermes brain as a normal named profile in the existing
 root-owned Hermes installation beside the composite POL-17 paper
 runtime. It never grants wallet/trading keys, database access, a shell, or tools beyond the exact
-five-tool MCP surface. The existing root-owned default, coder, memecoin, and optionsbot profiles
+six-tool MCP surface. The existing root-owned default, coder, memecoin, and optionsbot profiles
 must not be cloned, edited, stopped, or restarted.
 
 Code/unit installation, profile creation/model selection, cron creation, POL-17 activation,
@@ -175,7 +175,7 @@ setpriv --reuid=0 --regid=0 --groups="$(getent group polybot-proposal | cut -d: 
   --expect-no-cron
 ```
 
-Required output ends with `exact five; PASS`. Any version mismatch, extra/missing MCP tool,
+Required output ends with `exact six; PASS`. Any version mismatch, extra/missing MCP tool,
 resource/prompt capability, native/plugin toolset, second MCP server, unsafe command/env, or model
 placeholder is a hard failure. The authored per-platform lists must be empty (Hermes's explicit
 no-native-tools selection), while the effective resolver must layer back exactly the sole
@@ -277,7 +277,7 @@ Required before leaving it running:
 
 - POL-17 reports ready with healthy registry/books and zero raw `clob-ws` persistence;
 - runtime directory is `polybot:polybot-proposal` and socket is `polybot:polybot-proposal 0660`;
-- brain preflight reports exact five and the journal contains no terminal/file/browser/web/plugin
+- brain preflight reports exact six and the journal contains no terminal/file/browser/web/plugin
   tool, extra MCP server, profile migration, or credential/config error;
 - the journal reports no attempted messaging-platform connection, token collision, invalid
   toolset warning, kanban database open/dispatcher error, or system-wide profile interaction;

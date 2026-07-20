@@ -828,6 +828,23 @@ recorded: stopping during an in-flight upstream-503 cron made the main process r
 successful `ExecStop` and no survivor.  Exact evidence is in
 [`VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md`](VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md).
 
+**UPDATE 2026-07-20 — zero-proposal root cause corrected and independently reviewed; deployment
+pending.** Exact Hermes session evidence proved the active brain repeatedly inspected the arbitrary
+condition-ID page zero and had no sanitized EventStore read from which to discover valid citation
+IDs. It therefore could not perform the evidence-aware proposal job required by the master design;
+its no-proposal result was honest, not a Polymarket paper-account or signing failure. Branch
+`pol-13-hermes-opportunity-discovery` orders positive-resolution markets by nearest deadline,
+projects each outcome's availability from POL-17's shared live books, and adds bounded read-only
+`get_news` to the existing Hermes profile. `propose_trade` remains the sole unchanged write and no
+signer/runtime authority is added. The first independent review found and closed four production-
+scale resource gaps: full-store truth-gate reads, unbounded evidence offset, unbounded citation IDs,
+and pre-truncation content/entity allocation. Exact reviewed head `2f60a99` passes 2,390 tests; final
+specification/security review passes; and an isolated 27/27 mutation battery has zero survivors.
+This correction has not yet been installed: land it, update the existing profile/cron while stopped,
+run exact-six preflight, restart in order, and observe a natural cycle. Narrow trusted-source
+coverage can still yield an honest no-trade and must not be bypassed. Exact build evidence is in
+[`VERIFICATION-POL13-HERMES-OPPORTUNITY-DISCOVERY.md`](VERIFICATION-POL13-HERMES-OPPORTUNITY-DISCOVERY.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

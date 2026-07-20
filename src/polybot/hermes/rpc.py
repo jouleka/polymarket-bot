@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 
 PROTOCOL_VERSION = 1
 APPROVED_METHODS = frozenset({
-    "propose_trade", "get_market", "get_book", "get_ledger", "get_flags",
+    "propose_trade", "get_market", "get_book", "get_news", "get_ledger", "get_flags",
 })
 log = logging.getLogger("polybot.hermes.rpc")
 
@@ -144,6 +144,8 @@ class ProposalRpcDispatcher:
             return self._facade.get_market(**params)
         if method == "get_book":
             return self._facade.get_book(**params)
+        if method == "get_news":
+            return self._facade.get_news(**params)
         if method == "get_ledger":
             return self._facade.get_ledger(**params)
         if method == "get_flags":
@@ -159,6 +161,16 @@ class ProposalRpcDispatcher:
             return values
         if method == "get_flags":
             _exact_keys(values, set())
+            return values
+        if method == "get_news":
+            _exact_keys(values, set(), {"offset", "limit"})
+            for name in ("offset", "limit"):
+                if name in values:
+                    values[name] = _integer(
+                        values[name], name,
+                        minimum=0 if name == "offset" else 1,
+                        maximum=1000 if name == "offset" else 50,
+                    )
             return values
         if method == "get_market":
             _exact_keys(
@@ -234,9 +246,11 @@ def _text(value, name, maximum, *, allow_empty=False):
     return value
 
 
-def _integer(value, name, *, minimum):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise RpcProtocolError(f"{name} must be an integer >= {minimum}")
+def _integer(value, name, *, minimum, maximum=None):
+    if (isinstance(value, bool) or not isinstance(value, int) or value < minimum
+            or (maximum is not None and value > maximum)):
+        bound = f"in [{minimum}, {maximum}]" if maximum is not None else f">= {minimum}"
+        raise RpcProtocolError(f"{name} must be an integer {bound}")
     return value
 
 

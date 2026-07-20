@@ -16,6 +16,7 @@ from polybot.hermes.read_views import (
     FlagsReadView,
     LedgerReadView,
     MarketReadView,
+    NewsReadView,
 )
 from polybot.hermes.rpc import (
     ProposalRateLimiter,
@@ -194,7 +195,9 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
 
         proposal_facade = guarded(lambda: ProposeOnlyFacade(
             components.intent_store,
-            market_reader=MarketReadView(registry_provider),
+            market_reader=MarketReadView(
+                registry_provider, live_token_ids=live_book_tokens,
+            ),
             book_reader=BookReadView(
                 registry_book_for, token_ids=ingestion.token_ids,
             ),
@@ -207,6 +210,9 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
                 resolution_state=components.resolution_store.runtime_state,
                 registry_fresh=registry_fresh,
                 live_book_tokens=live_book_tokens,
+            ),
+            news_reader=NewsReadView(
+                components.event_reader, allowlist=DEFAULT_ALLOWLIST,
             ),
         ))
         proposal_server = guarded(lambda: ProposalRpcServer(

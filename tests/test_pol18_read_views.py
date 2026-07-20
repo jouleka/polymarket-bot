@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from polybot.core.models import Envelope
+from polybot.ingestion.news import DISCOVERY, PRIMARY, Source
+
 
 def _registry_provider():
     from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
@@ -69,6 +72,72 @@ def test_market_reader_returns_bounded_sanitized_current_registry_view():
     }
     assert "volume24hr" not in json.dumps(result)
     assert "provider label" not in json.dumps(result)
+
+
+def test_market_reader_prioritizes_nearest_positive_deadline_before_expired_rows():
+    from polybot.hermes.read_views import MarketReadView
+
+    def market(condition_suffix, event_id, tokens):
+        return {
+            "conditionId": "0x" + condition_suffix * 64,
+            "question": f"Market {event_id}?",
+            "slug": f"market-{event_id}",
+            "clobTokenIds": json.dumps(tokens),
+            "outcomes": json.dumps(["Yes", "No"]),
+            "outcomePrices": json.dumps(["0.4", "0.6"]),
+            "active": True,
+            "closed": False,
+            "acceptingOrders": True,
+            "events": [{"id": event_id}],
+        }
+
+    rows = (
+        market("1", "expired", ["11", "12"]),
+        market("2", "later", ["21", "22"]),
+        market("3", "nearest", ["31", "32"]),
+    )
+    seconds = {"expired": 0, "later": 600, "nearest": 30}
+
+    class Registry:
+        def metadata_for(self, identity):
+            return SimpleNamespace(
+                category="sports",
+                question_text=f"Market {identity.event_id}?",
+                seconds_to_resolution=seconds[identity.event_id],
+            )
+
+        def resolution_subject_for(self, identity):
+            return SimpleNamespace(event_id=identity.event_id)
+
+    provider = SimpleNamespace(
+        market_rows=rows,
+        require_fresh=lambda: Registry(),
+    )
+
+    page = MarketReadView(provider)(offset=0, limit=25)
+
+    assert [row["event_id"] for row in page["markets"]] == [
+        "nearest", "later", "expired",
+    ]
+
+
+def test_market_reader_samples_shared_live_tokens_once_and_marks_each_outcome():
+    from polybot.hermes.read_views import MarketReadView
+
+    provider, _condition_id = _registry_provider()
+    calls = []
+
+    def live_tokens():
+        calls.append(True)
+        return ("11",)
+
+    page = MarketReadView(provider, live_token_ids=live_tokens)()
+
+    assert calls == [True]
+    assert page["markets"][0]["outcomes"] == [
+        {"label": "Yes", "token_id": "11", "outcome_slot": 0, "live_book": True},
+        {"label": "No", "token_id": "22", "outcome_slot": 1, "live_book": False},
+    ]
 
 
 def test_market_reader_rejects_noncanonical_selectors_instead_of_returning_empty():
@@ -187,6 +256,78 @@ def test_book_reader_returns_exact_live_local_book_projection():
         "midpoint": "0.42",
         "stale": False,
     }
+
+
+def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evidence():
+    from polybot.hermes.read_views import NewsReadView
+
+    calls = []
+    events = [
+        Envelope(
+            source="primary-a", source_tier=PRIMARY, event_id="primary-id",
+            observed_at=30, published_at=123, content="headline\u202e" + "x" * 100,
+        ),
+        Envelope(
+            source="primary-a", source_tier=DISCOVERY, event_id="tier-mismatch",
+            observed_at=20, content="must not pass",
+        ),
+        Envelope(
+            source="discovery-a", source_tier=DISCOVERY, event_id="discovery-id",
+            observed_at=10, content="discovery headline",
+        ),
+        Envelope(
+            source="primary-a", source_tier=PRIMARY, event_id="x" * 2049,
+            observed_at=9, content="unsubmittable identity",
+        ),
+    ]
+
+    class Store:
+        def recent_by_sources(self, sources, *, offset, limit,
+                              max_content_chars, max_event_id_chars):
+            calls.append((
+                sources, offset, limit, max_content_chars, max_event_id_chars,
+            ))
+            return events
+
+    allowlist = (
+        Source("primary-a", "https://primary.test/feed", PRIMARY,
+               publisher_group="primary-group"),
+        Source("discovery-a", "https://discovery.test/feed", DISCOVERY,
+               publisher_group="discovery-group"),
+    )
+
+    page = NewsReadView(
+        Store(), allowlist=allowlist, max_content_chars=64,
+    )(offset=2, limit=3)
+
+    assert calls == [(('primary-a', 'discovery-a'), 2, 3, 40, 2048)]
+    assert [event["citation_id"] for event in page["events"]] == [
+        "primary-id", "discovery-id",
+    ]
+    assert page["events"][0] | {"content": None} == {
+        "source": "primary-a",
+        "source_tier": PRIMARY,
+        "publisher_group": "primary-group",
+        "citation_eligible": True,
+        "citation_id": "primary-id",
+        "published_at": 123,
+        "content": None,
+    }
+    assert page["events"][1]["citation_eligible"] is False
+    assert len(page["events"][0]["content"]) <= 64
+    assert page["events"][0]["content"].startswith("⟦UNTRUSTED⟧\n")
+    assert page["events"][0]["content"].endswith("\n⟦UNTRUSTED⟧")
+    assert "\u202e" not in page["events"][0]["content"]
+
+
+def test_news_reader_rejects_offsets_beyond_fixed_scan_bound():
+    from polybot.hermes.read_views import NewsReadView
+
+    store = SimpleNamespace(recent_by_sources=lambda *_args, **_kwargs: [])
+    source = Source("primary-a", "https://primary.test/feed", PRIMARY)
+
+    with pytest.raises(ValueError, match="offset"):
+        NewsReadView(store, allowlist=(source,))(offset=1001, limit=1)
 
 
 def test_book_reader_rejects_a_stale_shared_local_book():
