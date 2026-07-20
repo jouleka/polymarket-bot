@@ -8,7 +8,6 @@ can enforce "DISCOVERY (aggregator/GDELT) never triggers a trade".
 
 import asyncio
 import tempfile
-from xml.etree.ElementTree import ParseError
 
 import pytest
 
@@ -115,6 +114,25 @@ def test_recent_news_cache_bounds_each_source_and_filters_literal_content():
         max_content_chars=16, max_event_id_chars=2048,
         content_query="old",
     ) == []
+    assert cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="trailing",
+    ) == []
+    assert cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="%_missing",
+    ) == []
+
+
+@pytest.mark.parametrize("query", ["", "x" * 129, "Iran\n", "État", True, 7])
+def test_recent_news_cache_rejects_invalid_query(query):
+    cache = RecentNewsCache()
+    with pytest.raises(ValueError, match="printable ASCII"):
+        cache.recent_by_sources(
+            ("primary-a",), offset=0, limit=1, content_query=query,
+        )
 
 
 def test_poll_source_persists_untrusted_sanitized_news():
@@ -137,29 +155,39 @@ def test_poll_source_persists_untrusted_sanitized_news():
 
 
 def test_poll_source_atomically_replaces_bounded_recent_cache_after_success():
-    responses = iter((_RSS, "not xml <<<"))
+    responses = iter((_ATOM, _RSS))
 
     async def fetch(_url):
         return next(responses)
 
+    class Store:
+        def __init__(self):
+            self.calls = 0
+
+        def append(self, _envelope):
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("persistence failed mid-feed")
+
     cache = RecentNewsCache(max_items_per_source=2)
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
-        poller = NewsPoller(
-            fetch, MonotonicStamper(), store, allowlist=[_FED],
-            recent_cache=cache,
-        )
-        assert asyncio.run(poller.poll_source("fed-press")) == 2
-        before = cache.recent_by_sources(
-            ("fed-press",), offset=0, limit=2, content_query="Committee",
-        )
+    poller = NewsPoller(
+        fetch, MonotonicStamper(), Store(), allowlist=[_FED],
+        recent_cache=cache,
+    )
+    assert asyncio.run(poller.poll_source("fed-press")) == 1
+    before = cache.recent_by_sources(
+        ("fed-press",), offset=0, limit=2, content_query="Court",
+    )
 
-        with pytest.raises(ParseError):
-            asyncio.run(poller.poll_source("fed-press"))
+    with pytest.raises(RuntimeError, match="mid-feed"):
+        asyncio.run(poller.poll_source("fed-press"))
 
-        after = cache.recent_by_sources(
-            ("fed-press",), offset=0, limit=2, content_query="Committee",
-        )
-    assert [row.event_id for row in before] == ["https://primary.example/1"]
+    after = cache.recent_by_sources(
+        ("fed-press",), offset=0, limit=2, content_query="Court",
+    )
+    assert [row.event_id for row in before] == [
+        "tag:primary.example,2026:a1",
+    ]
     assert after == before
 
 

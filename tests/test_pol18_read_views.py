@@ -361,12 +361,19 @@ def test_news_reader_requires_bounded_query_store_but_none_uses_history():
         recent_by_sources=lambda *_args, **kwargs: calls.append(kwargs) or [],
     )
     source = Source("primary-a", "https://primary.test/feed", PRIMARY)
-    reader = NewsReadView(history, allowlist=(source,))
+    query_store = SimpleNamespace(
+        recent_by_sources=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("query=None must not use the cache")
+        ),
+    )
+    reader = NewsReadView(
+        history, allowlist=(source,), query_store=query_store,
+    )
 
     assert reader(query=None)["events"] == []
     assert "content_query" not in calls[0]
     with pytest.raises(ReadViewUnavailable, match="bounded recent"):
-        reader(query="Iran")
+        NewsReadView(history, allowlist=(source,))(query="Iran")
 
 
 def test_book_reader_rejects_a_stale_shared_local_book():
