@@ -20,6 +20,7 @@ consumes ``due_within`` and is wired later.
 
 import asyncio
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -28,6 +29,92 @@ from polybot.ingestion.sanitizer import neutralize, sanitize
 
 PRIMARY = "PRIMARY"
 DISCOVERY = "DISCOVERY"
+
+
+class RecentNewsCache:
+    """Fixed-memory current-feed snapshots for bounded Hermes content queries."""
+
+    def __init__(self, *, max_items_per_source=50, max_content_chars=4096):
+        if (isinstance(max_items_per_source, bool)
+                or not isinstance(max_items_per_source, int)
+                or not 1 <= max_items_per_source <= 50):
+            raise ValueError("recent news item bound must be in [1, 50]")
+        if (isinstance(max_content_chars, bool)
+                or not isinstance(max_content_chars, int)
+                or not 1 <= max_content_chars <= 4096):
+            raise ValueError("recent news content bound must be in [1, 4096]")
+        self._max_items_per_source = max_items_per_source
+        self._max_content_chars = max_content_chars
+        self._by_source = {}
+
+    def replace_source(self, source_name, envelopes):
+        if not isinstance(source_name, str) or not source_name:
+            raise ValueError("recent news source must be a non-empty string")
+        values = tuple(envelopes)
+        if any(
+                getattr(value, "source", None) != source_name
+                or not isinstance(getattr(value, "observed_at", None), int)
+                or isinstance(value.observed_at, bool)
+                or not isinstance(getattr(value, "content", None), str)
+                for value in values):
+            raise ValueError("recent news snapshot contains an invalid envelope")
+        selected = sorted(
+            values, key=lambda value: value.observed_at, reverse=True,
+        )[:self._max_items_per_source]
+        self._by_source[source_name] = tuple(
+            replace(value, content=value.content[:self._max_content_chars])
+            for value in selected
+        )
+
+    def recent_by_sources(self, source_names, *, offset, limit,
+                          max_content_chars=4096, max_event_id_chars=2048,
+                          priority_sources=(), content_query=None):
+        sources = tuple(source_names)
+        priority = tuple(priority_sources)
+        if (not sources or len(sources) != len(set(sources))
+                or any(not isinstance(source, str) or not source for source in sources)):
+            raise ValueError("recent news sources must be non-empty unique strings")
+        if (len(priority) != len(set(priority))
+                or any(not isinstance(source, str) or not source for source in priority)
+                or not set(priority).issubset(sources)):
+            raise ValueError("priority news sources must be a unique source subset")
+        if (isinstance(offset, bool) or not isinstance(offset, int)
+                or not 0 <= offset <= 1000
+                or isinstance(limit, bool) or not isinstance(limit, int)
+                or not 1 <= limit <= 50):
+            raise ValueError("recent news pagination must be bounded")
+        if (isinstance(max_content_chars, bool)
+                or not isinstance(max_content_chars, int)
+                or not 1 <= max_content_chars <= 4096
+                or isinstance(max_event_id_chars, bool)
+                or not isinstance(max_event_id_chars, int)
+                or not 1 <= max_event_id_chars <= 2048):
+            raise ValueError("recent news field bounds are invalid")
+        if content_query is not None and (
+                not isinstance(content_query, str) or not content_query
+                or len(content_query) > 128 or not content_query.isascii()
+                or not content_query.isprintable()):
+            raise ValueError("recent news content query must be printable ASCII")
+
+        rows = [
+            value
+            for source in sources
+            for value in self._by_source.get(source, ())
+            if len(value.event_id) <= max_event_id_chars
+            and (content_query is None
+                 or content_query.casefold() in value.content.casefold())
+        ]
+        priority_set = frozenset(priority)
+        rows.sort(key=lambda value: (
+            value.source not in priority_set,
+            -value.observed_at,
+            value.source,
+            value.event_id,
+        ))
+        return [
+            replace(value, content=value.content[:max_content_chars])
+            for value in rows[offset:offset + limit]
+        ]
 
 
 class Source:
@@ -144,12 +231,17 @@ def _epoch(published):
 
 
 class NewsPoller:
-    def __init__(self, fetch, stamper, store, allowlist, *, sanitizer=sanitize):
+    def __init__(self, fetch, stamper, store, allowlist, *, sanitizer=sanitize,
+                 recent_cache=None):
         self._fetch = fetch  # async (url) -> feed text
         self._stamper = stamper
         self._store = store
         self._sanitizer = sanitizer
         self._allowlist = {s.name: s for s in allowlist}
+        if recent_cache is not None and not callable(
+                getattr(recent_cache, "replace_source", None)):
+            raise TypeError("recent news cache must expose replace_source")
+        self._recent_cache = recent_cache
 
     async def poll_source(self, name):
         """Fetch + persist one allowlisted feed. Refuses an unknown source (the
@@ -167,12 +259,13 @@ class NewsPoller:
             raise ValueError(f"refusing news source not in the allowlist: {name!r}")
         items = parse_feed(await self._fetch(source.url))
         persisted = 0
+        snapshot = []
         for item in items:
             guid = neutralize(item["guid"])
             if not guid:
                 continue  # no stable id -> skip (cannot dedup / reference it)
             free_text = f"{item['title']}\n{item['summary']}".strip()
-            self._store.append(make_envelope(
+            envelope = make_envelope(
                 self._stamper,
                 source=source.name,
                 source_tier=source.tier,
@@ -180,8 +273,12 @@ class NewsPoller:
                 content=self._sanitizer(free_text),     # spotlighted, invisible chars stripped
                 published_at=_epoch(item["published"]),
                 entities=(neutralize(item["link"]),) if item["link"] else (),
-            ))
+            )
+            self._store.append(envelope)
+            snapshot.append(envelope)
             persisted += 1
+        if self._recent_cache is not None:
+            self._recent_cache.replace_source(source.name, snapshot)
         return persisted
 
     async def poll_all(self):

@@ -281,13 +281,13 @@ def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evide
         ),
     ]
 
-    class Store:
+    class QueryStore:
         def recent_by_sources(self, sources, *, offset, limit,
                               max_content_chars, max_event_id_chars,
-                              priority_sources):
+                              priority_sources, content_query):
             calls.append((
                 sources, offset, limit, max_content_chars, max_event_id_chars,
-                priority_sources,
+                priority_sources, content_query,
             ))
             return events
 
@@ -299,11 +299,14 @@ def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evide
     )
 
     page = NewsReadView(
-        Store(), allowlist=allowlist, max_content_chars=64,
-    )(offset=2, limit=3)
+        SimpleNamespace(recent_by_sources=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a queried read must not scan persisted history")
+        )),
+        allowlist=allowlist, max_content_chars=64, query_store=QueryStore(),
+    )(offset=2, limit=3, query="Iran")
 
     assert calls == [(
-        ('primary-a', 'discovery-a'), 2, 3, 40, 2048, ('primary-a',),
+        ('primary-a', 'discovery-a'), 2, 3, 40, 2048, ('primary-a',), "Iran",
     )]
     assert [event["citation_id"] for event in page["events"]] == [
         "primary-id", "discovery-id",
@@ -332,6 +335,45 @@ def test_news_reader_rejects_offsets_beyond_fixed_scan_bound():
 
     with pytest.raises(ValueError, match="offset"):
         NewsReadView(store, allowlist=(source,))(offset=1001, limit=1)
+
+
+@pytest.mark.parametrize("query", ["", "x" * 129, "Iran\n", "État", True, 7])
+def test_news_reader_rejects_invalid_query_before_store(query):
+    from polybot.hermes.read_views import NewsReadView
+
+    calls = []
+    store = SimpleNamespace(
+        recent_by_sources=lambda *_args, **_kwargs: calls.append(True) or [],
+    )
+    source = Source("primary-a", "https://primary.test/feed", PRIMARY)
+
+    with pytest.raises(ValueError, match="query"):
+        NewsReadView(store, allowlist=(source,))(query=query)
+
+    assert calls == []
+
+
+def test_news_reader_requires_bounded_query_store_but_none_uses_history():
+    from polybot.hermes.read_views import NewsReadView, ReadViewUnavailable
+
+    calls = []
+    history = SimpleNamespace(
+        recent_by_sources=lambda *_args, **kwargs: calls.append(kwargs) or [],
+    )
+    source = Source("primary-a", "https://primary.test/feed", PRIMARY)
+    query_store = SimpleNamespace(
+        recent_by_sources=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("query=None must not use the cache")
+        ),
+    )
+    reader = NewsReadView(
+        history, allowlist=(source,), query_store=query_store,
+    )
+
+    assert reader(query=None)["events"] == []
+    assert "content_query" not in calls[0]
+    with pytest.raises(ReadViewUnavailable, match="bounded recent"):
+        NewsReadView(history, allowlist=(source,))(query="Iran")
 
 
 def test_book_reader_rejects_a_stale_shared_local_book():

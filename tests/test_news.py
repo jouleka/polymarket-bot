@@ -12,12 +12,14 @@ import tempfile
 import pytest
 
 from polybot.core.clock import MonotonicStamper
+from polybot.core.models import Envelope
 from polybot.ingestion.news import (
     DISCOVERY,
     PRIMARY,
     Calendar,
     CalendarScheduler,
     NewsPoller,
+    RecentNewsCache,
     Source,
     parse_feed,
 )
@@ -77,6 +79,65 @@ def test_parse_atom_items():
     assert "Court held" in it["summary"]
 
 
+def test_recent_news_cache_bounds_each_source_and_filters_literal_content():
+    cache = RecentNewsCache(max_items_per_source=2, max_content_chars=16)
+    event = lambda event_id, observed_at, source, content: Envelope(
+        source=source, source_tier=PRIMARY, event_id=event_id,
+        observed_at=observed_at, content=content,
+    )
+    cache.replace_source("primary-a", (
+        event("old-dropped", 1, "primary-a", "Iran old evidence"),
+        event("new-unrelated", 2, "primary-a", "unrelated release"),
+        event("new-relevant", 3, "primary-a", "Iran 50%_done plus trailing"),
+    ))
+    cache.replace_source("primary-b", (
+        event("other-relevant", 4, "primary-b", "IRAN corroboration trailing"),
+    ))
+    cache.replace_source("primary-c", (
+        event("wildcard-decoy", 5, "primary-c", "prefix Xmissing suffix"),
+    ))
+
+    rows = cache.recent_by_sources(
+        ("primary-a", "primary-b"), offset=0, limit=2,
+        max_content_chars=8, max_event_id_chars=2048,
+        priority_sources=("primary-a",), content_query="iran",
+    )
+
+    assert [(row.event_id, row.content) for row in rows] == [
+        ("new-relevant", "Iran 50%"),
+        ("other-relevant", "IRAN cor"),
+    ]
+    assert [row.event_id for row in cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="%_",
+    )] == ["new-relevant"]
+    assert cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="old",
+    ) == []
+    assert cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="trailing",
+    ) == []
+    assert cache.recent_by_sources(
+        ("primary-a", "primary-c"), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="%_missing",
+    ) == []
+
+
+@pytest.mark.parametrize("query", ["", "x" * 129, "Iran\n", "État", True, 7])
+def test_recent_news_cache_rejects_invalid_query(query):
+    cache = RecentNewsCache()
+    with pytest.raises(ValueError, match="printable ASCII"):
+        cache.recent_by_sources(
+            ("primary-a",), offset=0, limit=1, content_query=query,
+        )
+
+
 def test_poll_source_persists_untrusted_sanitized_news():
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
         poller = NewsPoller(_fetch_returning(_RSS), MonotonicStamper(), store, allowlist=[_FED])
@@ -94,6 +155,43 @@ def test_poll_source_persists_untrusted_sanitized_news():
         g2 = next(r for r in rows if r.event_id == "g2")
         assert "​" not in g2.content and "‮" not in g2.content
         assert "⧦" in g2.content or "UNTRUSTED" in g2.content  # the spotlight marker
+
+
+def test_poll_source_atomically_replaces_bounded_recent_cache_after_success():
+    responses = iter((_ATOM, _RSS))
+
+    async def fetch(_url):
+        return next(responses)
+
+    class Store:
+        def __init__(self):
+            self.calls = 0
+
+        def append(self, _envelope):
+            self.calls += 1
+            if self.calls == 3:
+                raise RuntimeError("persistence failed mid-feed")
+
+    cache = RecentNewsCache(max_items_per_source=2)
+    poller = NewsPoller(
+        fetch, MonotonicStamper(), Store(), allowlist=[_FED],
+        recent_cache=cache,
+    )
+    assert asyncio.run(poller.poll_source("fed-press")) == 1
+    before = cache.recent_by_sources(
+        ("fed-press",), offset=0, limit=2, content_query="Court",
+    )
+
+    with pytest.raises(RuntimeError, match="mid-feed"):
+        asyncio.run(poller.poll_source("fed-press"))
+
+    after = cache.recent_by_sources(
+        ("fed-press",), offset=0, limit=2, content_query="Court",
+    )
+    assert [row.event_id for row in before] == [
+        "tag:primary.example,2026:a1",
+    ]
+    assert after == before
 
 
 def test_poll_refuses_a_non_allowlisted_source():
@@ -298,10 +396,32 @@ def test_default_allowlist_all_entries_construct_with_a_group():
     and exposes a non-empty publisher_group (explicit or derived)."""
     from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 
-    assert len(DEFAULT_ALLOWLIST) == 6
+    assert len(DEFAULT_ALLOWLIST) == 10
     for s in DEFAULT_ALLOWLIST:
         assert s.publisher_group, f"empty publisher_group for {s.name}"
     by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
     assert by_name["bea-news"].publisher_group == "bea.gov"          # apps.bea.gov -> bea.gov
     assert by_name["cftc-press"].publisher_group == "cftc.gov"
     assert by_name["google-news-top"].publisher_group == "google.com"
+    assert {
+        name: (by_name[name].url, by_name[name].tier, by_name[name].publisher_group)
+        for name in ("whitehouse-news", "un-middle-east", "war-releases", "iaea-news")
+    } == {
+        "whitehouse-news": (
+            "https://www.whitehouse.gov/news/feed/", PRIMARY, "whitehouse.gov",
+        ),
+        "un-middle-east": (
+            "https://news.un.org/feed/subscribe/en/news/region/middle-east/feed/rss.xml",
+            PRIMARY,
+            "un.org",
+        ),
+        "war-releases": (
+            "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=9&Site=945&max=20",
+            PRIMARY,
+            "war.gov",
+        ),
+        "iaea-news": (
+            "https://www.iaea.org/feeds/topnews", PRIMARY, "iaea.org",
+        ),
+    }
+    assert by_name["google-news-top"].tier == DISCOVERY
