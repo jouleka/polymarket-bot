@@ -16,6 +16,23 @@ _COLUMNS = (
 )
 
 
+def _recent_by_sources(conn, source_names, *, offset, limit):
+    sources = tuple(source_names)
+    if (not sources or len(sources) != len(set(sources))
+            or any(not isinstance(source, str) or not source for source in sources)):
+        raise ValueError("recent event sources must be non-empty unique strings")
+    if (isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+            or isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
+        raise ValueError("recent event pagination must be bounded positive integers")
+    placeholders = ",".join("?" for _source in sources)
+    rows = conn.execute(
+        f"SELECT {_COLUMNS} FROM events WHERE source IN ({placeholders}) "
+        "ORDER BY observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
+        (*sources, limit, offset),
+    ).fetchall()
+    return [EventStore._row_to_envelope(row) for row in rows]
+
+
 class EventStore:
     def __init__(self, path, *, check_same_thread=True):
         # check_same_thread=False lets the off-loop single-writer (POL-12) drive
@@ -85,6 +102,12 @@ class EventStore:
             (observed_at_cutoff,),
         )
 
+    def recent_by_sources(self, source_names, *, offset, limit):
+        """Return one bounded newest-first page for exact configured sources."""
+        return _recent_by_sources(
+            self._conn, source_names, offset=offset, limit=limit,
+        )
+
     def max_observed_at(self):
         """Return the durable history floor, or zero for an empty store."""
         row = self._conn.execute(
@@ -137,6 +160,12 @@ class ReadOnlyEventStore:
             f"SELECT {_COLUMNS} FROM events WHERE observed_at <= ? "
             "ORDER BY observed_at, rowid",
             (observed_at_cutoff,),
+        )
+
+    def recent_by_sources(self, source_names, *, offset, limit):
+        """Return one bounded newest-first page for exact configured sources."""
+        return _recent_by_sources(
+            self._conn, source_names, offset=offset, limit=limit,
         )
 
     def close(self):

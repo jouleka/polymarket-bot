@@ -7,13 +7,14 @@ replay is in observed_at order with no look-ahead.
 import threading
 
 from polybot.core.models import Envelope
-from polybot.storage.market_memory import EventStore
+from polybot.storage.market_memory import EventStore, ReadOnlyEventStore
 
 
-def _env(event_id, observed_at, *, content="x", entities=(), market_links=()):
+def _env(event_id, observed_at, *, source="reuters", source_tier="A",
+         content="x", entities=(), market_links=()):
     return Envelope(
-        source="reuters",
-        source_tier="A",
+        source=source,
+        source_tier=source_tier,
         event_id=event_id,
         observed_at=observed_at,
         content=content,
@@ -108,3 +109,20 @@ def test_replay_until_excludes_later_observations(tmp_path):
     replayed = store.replay_until(20)
 
     assert [e.event_id for e in replayed] == ["a", "b"]
+
+
+def test_recent_by_sources_is_bounded_newest_first_for_writer_and_read_only_reader(tmp_path):
+    path = str(tmp_path / "mm.db")
+    with EventStore(path) as store:
+        store.append(_env("old-news", 10, source="primary-a"))
+        store.append(_env("venue", 40, source="data-api"))
+        store.append(_env("new-news", 30, source="primary-b"))
+        store.append(_env("mid-news", 20, source="primary-a"))
+        assert [event.event_id for event in store.recent_by_sources(
+            ("primary-a", "primary-b"), offset=1, limit=2,
+        )] == ["mid-news", "old-news"]
+
+    with ReadOnlyEventStore(path) as reader:
+        assert [event.event_id for event in reader.recent_by_sources(
+            ("primary-a", "primary-b"), offset=0, limit=2,
+        )] == ["new-news", "mid-news"]
