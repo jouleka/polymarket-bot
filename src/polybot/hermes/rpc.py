@@ -167,7 +167,9 @@ class ProposalRpcDispatcher:
             for name in ("offset", "limit"):
                 if name in values:
                     values[name] = _integer(
-                        values[name], name, minimum=0 if name == "offset" else 1,
+                        values[name], name,
+                        minimum=0 if name == "offset" else 1,
+                        maximum=1000 if name == "offset" else 50,
                     )
             return values
         if method == "get_market":
@@ -244,9 +246,11 @@ def _text(value, name, maximum, *, allow_empty=False):
     return value
 
 
-def _integer(value, name, *, minimum):
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise RpcProtocolError(f"{name} must be an integer >= {minimum}")
+def _integer(value, name, *, minimum, maximum=None):
+    if (isinstance(value, bool) or not isinstance(value, int) or value < minimum
+            or (maximum is not None and value > maximum)):
+        bound = f"in [{minimum}, {maximum}]" if maximum is not None else f">= {minimum}"
+        raise RpcProtocolError(f"{name} must be an integer {bound}")
     return value
 
 
