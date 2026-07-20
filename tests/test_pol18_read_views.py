@@ -71,6 +71,53 @@ def test_market_reader_returns_bounded_sanitized_current_registry_view():
     assert "provider label" not in json.dumps(result)
 
 
+def test_market_reader_prioritizes_nearest_positive_deadline_before_expired_rows():
+    from polybot.hermes.read_views import MarketReadView
+
+    def market(condition_suffix, event_id, tokens):
+        return {
+            "conditionId": "0x" + condition_suffix * 64,
+            "question": f"Market {event_id}?",
+            "slug": f"market-{event_id}",
+            "clobTokenIds": json.dumps(tokens),
+            "outcomes": json.dumps(["Yes", "No"]),
+            "outcomePrices": json.dumps(["0.4", "0.6"]),
+            "active": True,
+            "closed": False,
+            "acceptingOrders": True,
+            "events": [{"id": event_id}],
+        }
+
+    rows = (
+        market("1", "expired", ["11", "12"]),
+        market("2", "later", ["21", "22"]),
+        market("3", "nearest", ["31", "32"]),
+    )
+    seconds = {"expired": 0, "later": 600, "nearest": 30}
+
+    class Registry:
+        def metadata_for(self, identity):
+            return SimpleNamespace(
+                category="sports",
+                question_text=f"Market {identity.event_id}?",
+                seconds_to_resolution=seconds[identity.event_id],
+            )
+
+        def resolution_subject_for(self, identity):
+            return SimpleNamespace(event_id=identity.event_id)
+
+    provider = SimpleNamespace(
+        market_rows=rows,
+        require_fresh=lambda: Registry(),
+    )
+
+    page = MarketReadView(provider)(offset=0, limit=25)
+
+    assert [row["event_id"] for row in page["markets"]] == [
+        "nearest", "later", "expired",
+    ]
+
+
 def test_market_reader_rejects_noncanonical_selectors_instead_of_returning_empty():
     from polybot.hermes.read_views import MarketReadView
 

@@ -93,7 +93,11 @@ class MarketReadView:
                     for index, outcome in enumerate(market.outcomes)
                 ],
             })
-        rows.sort(key=lambda item: item["condition_id"])
+        rows.sort(key=lambda item: (
+            item["seconds_to_resolution"] == 0,
+            item["seconds_to_resolution"],
+            item["condition_id"],
+        ))
         total = len(rows)
         return {
             "offset": offset,
