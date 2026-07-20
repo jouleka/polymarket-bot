@@ -45,6 +45,9 @@ class NewsReadView:
         self._recent = recent
         self._sources = sources
         self._source_names = names
+        self._priority_source_names = tuple(
+            source.name for source in sources if source.tier == "PRIMARY"
+        )
         self._source_by_name = {source.name: source for source in sources}
         self._default_limit = default_limit
         self._max_limit = max_limit
@@ -65,6 +68,7 @@ class NewsReadView:
             self._source_names, offset=offset, limit=limit,
             max_content_chars=payload_limit,
             max_event_id_chars=_MAX_CITATION_CHARS,
+            priority_sources=self._priority_source_names,
         )
         rows = []
         for envelope in envelopes:
