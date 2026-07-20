@@ -17,7 +17,8 @@ Keepalive: the venue's market channel uses a CLIENT-driven keepalive — the cli
 sends a bare ``"PING"`` text frame on an interval and the server replies bare
 ``"PONG"`` (verified live; the server never initiates pings). A per-connection
 keepalive task sends those PINGs so a long-running, idle socket is not dropped;
-the ``"PONG"`` reply is non-JSON and is dropped by the malformed-frame skip.
+the ``"PONG"`` reply may trigger a proactive snapshot reconnect after market
+silence but never reaches the book dispatcher or refreshes market-data health.
 """
 
 import asyncio
@@ -71,6 +72,8 @@ class MarketSocket:
                 or market_silence_resnapshot_seconds <= 0):
             raise ValueError("market_silence_resnapshot_seconds must be finite and > 0")
         self._market_silence_resnapshot_ns = market_silence_resnapshot_seconds * 1_000_000_000
+        if not callable(clock_ns):
+            raise TypeError("clock_ns must be callable")
         self._clock_ns = clock_ns
         if max_resyncs <= 0:
             raise ValueError("max_resyncs must be > 0")
