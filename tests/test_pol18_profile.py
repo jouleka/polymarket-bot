@@ -820,7 +820,9 @@ def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     assert "If `live_book_tokens` is empty, stop without proposing" in prompt
     assert "nearest positive resolution first" in prompt
     assert "`live_book=true`" in prompt
-    assert "`get_news`" in prompt
+    assert "get_news" in prompt
+    assert '`get_news(query="<one literal market-relevant term>", limit=20)`' in prompt
+    assert "not web search" in prompt
     assert "`citation_eligible=true`" in prompt
     assert "returned `citation_id`" in prompt
 
