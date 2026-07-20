@@ -71,7 +71,7 @@ def test_rpc_dispatches_one_approved_read_and_preserves_decimal_strings():
     assert facade.calls == [("get_book", {"token_id": "11"})]
 
 
-def test_rpc_dispatches_only_bounded_news_pagination_parameters():
+def test_rpc_dispatches_only_bounded_news_query_parameters():
     from polybot.hermes.rpc import ProposalRpcDispatcher
 
     facade = _Facade()
@@ -79,13 +79,17 @@ def test_rpc_dispatches_only_bounded_news_pagination_parameters():
         "version": 1,
         "id": "news-request",
         "method": "get_news",
-        "params": {"offset": 5, "limit": 10},
+        "params": {"offset": 5, "limit": 10, "query": "Iran"},
     })
 
     response = json.loads(ProposalRpcDispatcher(facade).handle(request))
 
-    assert response["result"] == {"events": [], "offset": 5, "limit": 10}
-    assert facade.calls == [("get_news", {"offset": 5, "limit": 10})]
+    assert response["result"] == {
+        "events": [], "offset": 5, "limit": 10, "query": "Iran",
+    }
+    assert facade.calls == [(
+        "get_news", {"offset": 5, "limit": 10, "query": "Iran"},
+    )]
 
 
 def test_rpc_rejects_news_pagination_beyond_fixed_bounds_before_facade():
@@ -101,6 +105,23 @@ def test_rpc_rejects_news_pagination_beyond_fixed_bounds_before_facade():
         })
 
         with pytest.raises(RpcProtocolError, match="integer"):
+            ProposalRpcDispatcher(facade).handle(request)
+        assert facade.calls == []
+
+
+def test_rpc_rejects_invalid_news_query_before_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    for query in ("", "x" * 129, "Iran\n", True, 7):
+        facade = _Facade()
+        request = _wire({
+            "version": 1, "id": "news-query", "method": "get_news",
+            "params": {"query": query},
+        })
+
+        with pytest.raises(RpcProtocolError, match="news query"):
             ProposalRpcDispatcher(facade).handle(request)
         assert facade.calls == []
 
