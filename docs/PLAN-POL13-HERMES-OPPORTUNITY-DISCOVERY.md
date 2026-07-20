@@ -40,3 +40,17 @@ No production file or service changes occur until the reviewed branch is complet
    runtime-authority expansion.
 3. Re-review every fix, rerun the entire suite, remove mutation residue/caches, and require a clean
    tree before publication or installation.
+
+## Pre-activation production-data correction
+
+The stopped exact-six preflight found that more than 1,001 newer DISCOVERY rows displaced every
+PRIMARY row from the bounded evidence scan. Resolve serially before starting Hermes:
+
+1. Add a failing storage test for one older priority source behind a discovery flood; minimally add
+   an optional exact-source priority order while preserving the no-priority behavior.
+2. Add a failing read-view test proving priority comes from the pinned PRIMARY allowlist identities;
+   minimally pass those exact source names into the bounded store query.
+3. Extend the existing whole-slice proof with newer discovery rows and require citable evidence to
+   remain first without changing truth-gate authority.
+4. Run focused and canonical suites, independent specification/security review, and mutations for
+   priority removal, row-tier priority, unbounded reads, pagination drift, and discovery promotion.
