@@ -6,10 +6,81 @@ from types import SimpleNamespace
 
 from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.ingestion.gamma import normalize_market
+from polybot.ingestion.sanitizer import sanitize
 
 
 class ReadViewUnavailable(LookupError):
     """A sanitized view has no current trustworthy value."""
+
+
+_SPOTLIGHT_MARKER = "⟦UNTRUSTED⟧"
+
+
+class NewsReadView:
+    """Bounded sanitized evidence projection over configured ingestion sources."""
+
+    def __init__(self, event_store, *, allowlist, default_limit=25, max_limit=50,
+                 max_content_chars=4096):
+        recent = getattr(event_store, "recent_by_sources", None)
+        if not callable(recent):
+            raise TypeError("news event store must expose bounded recent source reads")
+        sources = tuple(allowlist)
+        names = tuple(source.name for source in sources)
+        if (not sources or len(names) != len(set(names))
+                or any(not isinstance(name, str) or not name for name in names)):
+            raise ValueError("news allowlist must contain unique named sources")
+        if (isinstance(default_limit, bool) or not isinstance(default_limit, int)
+                or isinstance(max_limit, bool) or not isinstance(max_limit, int)
+                or default_limit <= 0 or max_limit <= 0 or default_limit > max_limit):
+            raise ValueError("news view limits must be positive and bounded")
+        minimum_content = 2 * len(_SPOTLIGHT_MARKER) + 3
+        if (isinstance(max_content_chars, bool)
+                or not isinstance(max_content_chars, int)
+                or max_content_chars < minimum_content):
+            raise ValueError("news content bound is too small for safe spotlighting")
+        self._recent = recent
+        self._sources = sources
+        self._source_names = names
+        self._source_by_name = {source.name: source for source in sources}
+        self._default_limit = default_limit
+        self._max_limit = max_limit
+        self._max_content_chars = max_content_chars
+
+    def __call__(self, *, offset=0, limit=None):
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("news offset must be a non-negative integer")
+        if limit is None:
+            limit = self._default_limit
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or limit <= 0 or limit > self._max_limit):
+            raise ValueError(f"news limit must be in [1, {self._max_limit}]")
+        envelopes = self._recent(self._source_names, offset=offset, limit=limit)
+        rows = []
+        payload_limit = self._max_content_chars - (2 * len(_SPOTLIGHT_MARKER) + 2)
+        for envelope in envelopes:
+            source = self._source_by_name.get(getattr(envelope, "source", None))
+            published_at = getattr(envelope, "published_at", None)
+            event_id = getattr(envelope, "event_id", None)
+            content = getattr(envelope, "content", None)
+            if (source is None
+                    or getattr(envelope, "source_tier", None) != source.tier
+                    or getattr(envelope, "trust", None) != "UNTRUSTED"
+                    or not isinstance(event_id, str) or not event_id
+                    or not isinstance(content, str)
+                    or (published_at is not None and (
+                        isinstance(published_at, bool) or not isinstance(published_at, int)
+                    ))):
+                continue
+            rows.append({
+                "source": source.name,
+                "source_tier": source.tier,
+                "publisher_group": source.publisher_group,
+                "citation_eligible": source.tier == "PRIMARY",
+                "citation_id": event_id,
+                "published_at": published_at,
+                "content": sanitize(content[:payload_limit]),
+            })
+        return {"offset": offset, "limit": limit, "events": rows}
 
 
 class MarketReadView:

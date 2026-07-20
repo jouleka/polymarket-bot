@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from polybot.core.models import Envelope
+from polybot.ingestion.news import DISCOVERY, PRIMARY, Source
+
 
 def _registry_provider():
     from polybot.runtime.registry_provider import FixedUniverseRegistryProvider
@@ -253,6 +256,61 @@ def test_book_reader_returns_exact_live_local_book_projection():
         "midpoint": "0.42",
         "stale": False,
     }
+
+
+def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evidence():
+    from polybot.hermes.read_views import NewsReadView
+
+    calls = []
+    events = [
+        Envelope(
+            source="primary-a", source_tier=PRIMARY, event_id="primary-id",
+            observed_at=30, published_at=123, content="headline\u202e" + "x" * 100,
+        ),
+        Envelope(
+            source="primary-a", source_tier=DISCOVERY, event_id="tier-mismatch",
+            observed_at=20, content="must not pass",
+        ),
+        Envelope(
+            source="discovery-a", source_tier=DISCOVERY, event_id="discovery-id",
+            observed_at=10, content="discovery headline",
+        ),
+    ]
+
+    class Store:
+        def recent_by_sources(self, sources, *, offset, limit):
+            calls.append((sources, offset, limit))
+            return events
+
+    allowlist = (
+        Source("primary-a", "https://primary.test/feed", PRIMARY,
+               publisher_group="primary-group"),
+        Source("discovery-a", "https://discovery.test/feed", DISCOVERY,
+               publisher_group="discovery-group"),
+    )
+
+    page = NewsReadView(
+        Store(), allowlist=allowlist, max_content_chars=64,
+    )(offset=2, limit=3)
+
+    assert calls == [(("primary-a", "discovery-a"), 2, 3)]
+    assert [event["citation_id"] for event in page["events"]] == [
+        "primary-id", "discovery-id",
+    ]
+    assert page["events"][0] | {"content": None} == {
+        "source": "primary-a",
+        "source_tier": PRIMARY,
+        "publisher_group": "primary-group",
+        "citation_eligible": True,
+        "citation_id": "primary-id",
+        "published_at": 123,
+        "content": None,
+    }
+    assert page["events"][1]["citation_eligible"] is False
+    assert len(page["events"][0]["content"]) <= 64
+    assert page["events"][0]["content"].startswith("⟦UNTRUSTED⟧\n")
+    assert page["events"][0]["content"].endswith("\n⟦UNTRUSTED⟧")
+    assert "\u202e" not in page["events"][0]["content"]
 
 
 def test_book_reader_rejects_a_stale_shared_local_book():
