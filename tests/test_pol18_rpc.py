@@ -88,6 +88,23 @@ def test_rpc_dispatches_only_bounded_news_pagination_parameters():
     assert facade.calls == [("get_news", {"offset": 5, "limit": 10})]
 
 
+def test_rpc_rejects_news_pagination_beyond_fixed_bounds_before_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    for params in ({"offset": 1001, "limit": 1}, {"offset": 0, "limit": 51}):
+        facade = _Facade()
+        request = _wire({
+            "version": 1, "id": "news-bound", "method": "get_news",
+            "params": params,
+        })
+
+        with pytest.raises(RpcProtocolError, match="integer"):
+            ProposalRpcDispatcher(facade).handle(request)
+        assert facade.calls == []
+
+
 def test_rpc_rejects_json_float_before_the_proposal_facade():
     import pytest
 

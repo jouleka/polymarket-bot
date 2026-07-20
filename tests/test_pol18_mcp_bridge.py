@@ -41,6 +41,9 @@ def test_mcp_discovery_is_exactly_six_strict_tools_and_no_other_capability():
     assert by_name["get_news"].inputSchema["properties"]["limit"] == {
         "type": "integer", "minimum": 1, "maximum": 50,
     }
+    assert by_name["get_news"].inputSchema["properties"]["offset"] == {
+        "type": "integer", "minimum": 0, "maximum": 1000,
+    }
     assert bridge.capabilities.resources is None
     assert bridge.capabilities.prompts is None
     assert bridge.capabilities.tools is not None

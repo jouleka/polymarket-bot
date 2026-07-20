@@ -313,6 +313,16 @@ def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evide
     assert "\u202e" not in page["events"][0]["content"]
 
 
+def test_news_reader_rejects_offsets_beyond_fixed_scan_bound():
+    from polybot.hermes.read_views import NewsReadView
+
+    store = SimpleNamespace(recent_by_sources=lambda *_args, **_kwargs: [])
+    source = Source("primary-a", "https://primary.test/feed", PRIMARY)
+
+    with pytest.raises(ValueError, match="offset"):
+        NewsReadView(store, allowlist=(source,))(offset=1001, limit=1)
+
+
 def test_book_reader_rejects_a_stale_shared_local_book():
     from polybot.hermes.read_views import BookReadView, ReadViewUnavailable
     from polybot.ingestion.orderbook import LocalBook

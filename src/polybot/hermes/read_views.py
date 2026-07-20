@@ -20,7 +20,7 @@ class NewsReadView:
     """Bounded sanitized evidence projection over configured ingestion sources."""
 
     def __init__(self, event_store, *, allowlist, default_limit=25, max_limit=50,
-                 max_content_chars=4096):
+                 max_offset=1000, max_content_chars=4096):
         recent = getattr(event_store, "recent_by_sources", None)
         if not callable(recent):
             raise TypeError("news event store must expose bounded recent source reads")
@@ -33,6 +33,9 @@ class NewsReadView:
                 or isinstance(max_limit, bool) or not isinstance(max_limit, int)
                 or default_limit <= 0 or max_limit <= 0 or default_limit > max_limit):
             raise ValueError("news view limits must be positive and bounded")
+        if (isinstance(max_offset, bool) or not isinstance(max_offset, int)
+                or max_offset < 0):
+            raise ValueError("news offset bound must be a non-negative integer")
         minimum_content = 2 * len(_SPOTLIGHT_MARKER) + 3
         if (isinstance(max_content_chars, bool)
                 or not isinstance(max_content_chars, int)
@@ -44,11 +47,13 @@ class NewsReadView:
         self._source_by_name = {source.name: source for source in sources}
         self._default_limit = default_limit
         self._max_limit = max_limit
+        self._max_offset = max_offset
         self._max_content_chars = max_content_chars
 
     def __call__(self, *, offset=0, limit=None):
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("news offset must be a non-negative integer")
+        if (isinstance(offset, bool) or not isinstance(offset, int)
+                or not 0 <= offset <= self._max_offset):
+            raise ValueError(f"news offset must be in [0, {self._max_offset}]")
         if limit is None:
             limit = self._default_limit
         if (isinstance(limit, bool) or not isinstance(limit, int)
