@@ -1,8 +1,8 @@
 # VERIFICATION — POL-13 Hermes opportunity discovery correction
 
 **Date:** 2026-07-20
-**Reviewed implementation head:** `2f60a99`
-**Result:** PR #48 landed; pre-activation production-data correction in review
+**Reviewed implementation heads:** `2f60a99` and follow-up `0e9d87a`
+**Result:** live paper/shadow activation PASS
 
 ## 1. Live diagnosis
 
@@ -133,3 +133,44 @@ exact source identities whose pinned allowlist tier is PRIMARY, with newest-firs
 within the PRIMARY and DISCOVERY classes. It does not trust a persisted row's tier for priority,
 promote discovery evidence, expand offsets/limits, or change deterministic truth-gating. Storage,
 read-view, and whole-slice tests reproduce the discovery flood.
+
+The follow-up passed independent specification/security review. Its first 10-mutation battery
+killed seven and exposed three test-coverage survivors; direct priority-subset and pagination-bound
+tests plus a non-vacuous exact discovery tail closed them. Closing re-review killed all 10/10. The
+final canonical suite passed 2,394 tests in 11.54 seconds at exact clean head `0e9d87a`.
+
+## 8. Landing and live-cycle verification
+
+PR #49 landed the production-data correction as merge `8c8b105`. The service checkout fast-forwarded
+to that exact merge and the stopped idempotent installer again preserved production config checksum
+`f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361`. Exact-six preflight passed.
+A stopped direct read against the 1.02 GB production EventStore returned 50/50 citation-eligible
+PRIMARY rows in 0.16 seconds at a 25 MiB probe peak.
+
+POL-17 then reached `RUNNING` in two seconds. Before Hermes start, live RPC proof showed:
+
+- 111 shared fresh-book tokens;
+- positive-resolution markets in ascending deadline order;
+- truthful per-outcome live-book availability; and
+- 50/50 citation-eligible records on evidence page zero.
+
+The existing Hermes service started through its exact-six `ExecStartPre`. Natural catch-up session
+`cron_ad1c2d9b8c30_20260720_203757` used `get_flags`, `get_market(offset=0, limit=10)`, a shared fresh
+`get_book`, `get_news(offset=0, limit=20)`, and `get_ledger`. It selected the live geopolitics market
+“Israel x Iran ceasefire continues through July 20?” with midpoint `0.981`. The returned CFTC, Fed,
+and BEA PRIMARY items did not bear on that resolution question, so Hermes correctly returned
+`[SILENT]` rather than inventing a citation or proposal. The job completed `ok`, advanced the same
+cron to completed run 974, cleared its fire claim, and scheduled the next five-minute run.
+
+Both units are active and enabled with `NRestarts=0`. Observed current/peak memory was
+78,721,024/80,175,104 bytes for POL-17 and 285,204,480/287,940,608 bytes for Hermes, below unchanged
+soft/hard ceilings. Both cgroups had zero swap, pressure-high, max, OOM, and OOM-kill events. The
+profile still has no local auth or environment file. Production has zero pending intents,
+execution/resolution outbox rows, fills, shadow trades, forecasts, resolution receipts, and raw
+`clob-ws` rows; historical raw-firehose checksums pass.
+
+This is a successful runtime correction, not evidence of a trading edge. The remaining cause of
+honest no-trade cycles is source coverage: the pinned PRIMARY feeds cover Fed/SEC/CFTC/BEA material,
+while urgent markets are frequently sports or geopolitics. Expanding that trust set requires a
+separately reviewed source-ingestion contract; Google discovery must not be promoted or fabricated
+into citable evidence merely to force activity. YouTrack evidence is comment `7-383`.

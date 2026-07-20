@@ -855,6 +855,18 @@ source identities pinned by the allowlist, preserves newest-first order within e
 not promote discovery evidence or widen any authority/bound. Do not restart from merge `007884c`;
 land and install the follow-up first.
 
+PR #49 landed the follow-up as merge `8c8b105` after 2,394 tests, independent specification/security
+PASS, and a closing 10/10 mutation gate. Stopped production evidence returned 50/50 citable PRIMARY
+rows from the 1.02 GB store in 0.16 seconds at 25 MiB RSS. The service checkout, exact-six profile,
+and cron were reconciled without changing model/auth/config/database identity. Both paper/shadow
+units are active+enabled with zero restarts, swap, pressure, or OOM; POL-17 advertised 111 live books.
+Natural session `cron_ad1c2d9b8c30_20260720_203757` used flags, nearest-deadline markets, a fresh
+book, `get_news`, and ledger, then honestly emitted no proposal: its selected Israel–Iran ceasefire
+market had no relevant evidence among the current CFTC/Fed/BEA PRIMARY rows. All proposal, economic,
+outbox, resolution, raw-WS, and profile-local-auth counts remain zero. The discovery/runtime defect
+is fixed; the next edge blocker is a separately reviewed market-relevant PRIMARY source coverage
+contract, not a weaker truth gate or synthetic trade. YouTrack evidence is comment `7-383`.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
