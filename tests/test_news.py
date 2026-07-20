@@ -8,16 +8,19 @@ can enforce "DISCOVERY (aggregator/GDELT) never triggers a trade".
 
 import asyncio
 import tempfile
+from xml.etree.ElementTree import ParseError
 
 import pytest
 
 from polybot.core.clock import MonotonicStamper
+from polybot.core.models import Envelope
 from polybot.ingestion.news import (
     DISCOVERY,
     PRIMARY,
     Calendar,
     CalendarScheduler,
     NewsPoller,
+    RecentNewsCache,
     Source,
     parse_feed,
 )
@@ -77,6 +80,43 @@ def test_parse_atom_items():
     assert "Court held" in it["summary"]
 
 
+def test_recent_news_cache_bounds_each_source_and_filters_literal_content():
+    cache = RecentNewsCache(max_items_per_source=2, max_content_chars=16)
+    event = lambda event_id, observed_at, source, content: Envelope(
+        source=source, source_tier=PRIMARY, event_id=event_id,
+        observed_at=observed_at, content=content,
+    )
+    cache.replace_source("primary-a", (
+        event("old-dropped", 1, "primary-a", "Iran old evidence"),
+        event("new-unrelated", 2, "primary-a", "unrelated release"),
+        event("new-relevant", 3, "primary-a", "Iran 50%_done plus trailing"),
+    ))
+    cache.replace_source("primary-b", (
+        event("other-relevant", 4, "primary-b", "IRAN corroboration trailing"),
+    ))
+
+    rows = cache.recent_by_sources(
+        ("primary-a", "primary-b"), offset=0, limit=2,
+        max_content_chars=8, max_event_id_chars=2048,
+        priority_sources=("primary-a",), content_query="iran",
+    )
+
+    assert [(row.event_id, row.content) for row in rows] == [
+        ("new-relevant", "Iran 50%"),
+        ("other-relevant", "IRAN cor"),
+    ]
+    assert [row.event_id for row in cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="%_",
+    )] == ["new-relevant"]
+    assert cache.recent_by_sources(
+        ("primary-a",), offset=0, limit=1,
+        max_content_chars=16, max_event_id_chars=2048,
+        content_query="old",
+    ) == []
+
+
 def test_poll_source_persists_untrusted_sanitized_news():
     with EventStore(tempfile.mktemp(suffix=".db")) as store:
         poller = NewsPoller(_fetch_returning(_RSS), MonotonicStamper(), store, allowlist=[_FED])
@@ -94,6 +134,33 @@ def test_poll_source_persists_untrusted_sanitized_news():
         g2 = next(r for r in rows if r.event_id == "g2")
         assert "​" not in g2.content and "‮" not in g2.content
         assert "⧦" in g2.content or "UNTRUSTED" in g2.content  # the spotlight marker
+
+
+def test_poll_source_atomically_replaces_bounded_recent_cache_after_success():
+    responses = iter((_RSS, "not xml <<<"))
+
+    async def fetch(_url):
+        return next(responses)
+
+    cache = RecentNewsCache(max_items_per_source=2)
+    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+        poller = NewsPoller(
+            fetch, MonotonicStamper(), store, allowlist=[_FED],
+            recent_cache=cache,
+        )
+        assert asyncio.run(poller.poll_source("fed-press")) == 2
+        before = cache.recent_by_sources(
+            ("fed-press",), offset=0, limit=2, content_query="Committee",
+        )
+
+        with pytest.raises(ParseError):
+            asyncio.run(poller.poll_source("fed-press"))
+
+        after = cache.recent_by_sources(
+            ("fed-press",), offset=0, limit=2, content_query="Committee",
+        )
+    assert [row.event_id for row in before] == ["https://primary.example/1"]
+    assert after == before
 
 
 def test_poll_refuses_a_non_allowlisted_source():

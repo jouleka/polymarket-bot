@@ -18,6 +18,7 @@ from polybot.hermes.rpc import (
 from polybot.harness.evidence import evaluate_category
 from polybot.ingestion.envelope import make_envelope
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+from polybot.ingestion.news import RecentNewsCache
 from polybot.ingestion.orderbook import LocalBook
 from polybot.resolution.models import (
     PUSD_ADDRESS,
@@ -156,25 +157,35 @@ def _warm_calibration(ledger):
 def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_path):
     config = _config(tmp_path)
     stamper = MonotonicStamper(clock=iter(range(1, 10000)).__next__)
+    recent_news = RecentNewsCache()
+    snapshots = {}
     with EventStore(config.ingestion.db_path) as events:
         for source, event_id in (("un-middle-east", "citation-1"),
                                  ("iaea-news", "citation-2")):
-            events.append(make_envelope(
+            envelope = make_envelope(
                 stamper, source=source, source_tier="PRIMARY",
                 event_id=event_id,
                 content="Official evidence about Iran and the reviewed event",
-            ))
+            )
+            events.append(envelope)
+            snapshots.setdefault(source, []).append(envelope)
         for index in range(60):
-            events.append(make_envelope(
+            envelope = make_envelope(
                 stamper, source="whitehouse-news", source_tier="PRIMARY",
                 event_id=f"unrelated-primary-{index}",
                 content="Newer unrelated official release",
-            ))
+            )
+            events.append(envelope)
+            snapshots.setdefault("whitehouse-news", []).append(envelope)
         for index in range(60):
-            events.append(make_envelope(
+            envelope = make_envelope(
                 stamper, source="google-news-top", source_tier="DISCOVERY",
                 event_id=f"discovery-{index}", content="newer discovery context",
-            ))
+            )
+            events.append(envelope)
+            snapshots.setdefault("google-news-top", []).append(envelope)
+    for source, envelopes in snapshots.items():
+        recent_news.replace_source(source, envelopes)
     registry = _registry()
     book = _book()
     providers = (_Provider("a"), _Provider("b"))
@@ -201,6 +212,7 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             },
             news_reader=NewsReadView(
                 first.event_reader, allowlist=DEFAULT_ALLOWLIST,
+                query_store=recent_news,
             ),
         )
 

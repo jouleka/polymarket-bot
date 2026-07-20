@@ -166,6 +166,11 @@ class ProposalRpcDispatcher:
             _exact_keys(values, set(), {"offset", "limit", "query"})
             if "query" in values:
                 values["query"] = _text(values["query"], "news query", 128)
+                if (not values["query"].isascii()
+                        or not values["query"].isprintable()):
+                    raise RpcProtocolError(
+                        "news query must be bounded printable ASCII"
+                    )
             for name in ("offset", "limit"):
                 if name in values:
                     values[name] = _integer(

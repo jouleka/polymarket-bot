@@ -24,7 +24,7 @@ from polybot.hermes.rpc import (
     ProposalRpcServer,
 )
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
-from polybot.ingestion.news import NewsPoller
+from polybot.ingestion.news import NewsPoller, RecentNewsCache
 from polybot.ers.market_meta import DEFAULT_CATEGORY_POLICY
 from polybot.harness.evidence import evaluate_category
 from polybot.runtime.harness_runtime import HarnessEvidenceRuntime
@@ -143,8 +143,10 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
         Heartbeat(config.ingestion.heartbeat_path).beat
         if config.ingestion.heartbeat_path else (lambda: None)
     )
+    recent_news_cache = guarded(RecentNewsCache)
     news_poller = guarded(lambda: NewsPoller(
-        news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST
+        news_fetch, history_stamper, ingestion.writer, DEFAULT_ALLOWLIST,
+        recent_cache=recent_news_cache,
     ))
     last_news_results = {}
     proposal_admission = {"enabled": False}
@@ -213,6 +215,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
             ),
             news_reader=NewsReadView(
                 components.event_reader, allowlist=DEFAULT_ALLOWLIST,
+                query_store=recent_news_cache,
             ),
         ))
         proposal_server = guarded(lambda: ProposalRpcServer(
@@ -333,6 +336,7 @@ def build_shadow_runtime(config, *, gamma_snapshot_fetch, resolution_providers,
     runtime._cycle = cycle
     runtime._collector = ingestion.collector
     runtime._news_poller = news_poller
+    runtime._recent_news_cache = recent_news_cache
     runtime._harness = harness
     runtime._status_reporter = status_reporter
     runtime._proposal_server = proposal_server

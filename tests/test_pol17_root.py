@@ -182,6 +182,8 @@ def test_root_composes_propose_only_server_without_a_second_store_or_collector(t
         ]
         news_reader = runtime._proposal_facade._ProposeOnlyFacade__news_reader
         assert news_reader._recent.__self__ is runtime._components.event_reader
+        assert news_reader._query_recent.__self__ is runtime._recent_news_cache
+        assert runtime._news_poller._recent_cache is runtime._recent_news_cache
         assert runtime._proposal_facade.get_news(limit=1)["events"] == []
     finally:
         runtime.close_unstarted()

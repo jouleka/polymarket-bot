@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-import unicodedata
 
 from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.ingestion.gamma import normalize_market
@@ -22,10 +21,16 @@ class NewsReadView:
     """Bounded sanitized evidence projection over configured ingestion sources."""
 
     def __init__(self, event_store, *, allowlist, default_limit=25, max_limit=50,
-                 max_offset=1000, max_content_chars=4096):
+                 max_offset=1000, max_content_chars=4096, query_store=None):
         recent = getattr(event_store, "recent_by_sources", None)
         if not callable(recent):
             raise TypeError("news event store must expose bounded recent source reads")
+        query_recent = (
+            None if query_store is None
+            else getattr(query_store, "recent_by_sources", None)
+        )
+        if query_store is not None and not callable(query_recent):
+            raise TypeError("news query store must expose bounded recent source reads")
         sources = tuple(allowlist)
         names = tuple(source.name for source in sources)
         if (not sources or len(names) != len(set(names))
@@ -44,6 +49,7 @@ class NewsReadView:
                 or max_content_chars < minimum_content):
             raise ValueError("news content bound is too small for safe spotlighting")
         self._recent = recent
+        self._query_recent = query_recent
         self._sources = sources
         self._source_names = names
         self._priority_source_names = tuple(
@@ -66,16 +72,22 @@ class NewsReadView:
             raise ValueError(f"news limit must be in [1, {self._max_limit}]")
         if query is not None and (
                 not isinstance(query, str) or not query or len(query) > 128
-                or any(unicodedata.category(char).startswith("C") for char in query)):
-            raise ValueError("news query must be a bounded exact string")
+                or not query.isascii() or not query.isprintable()):
+            raise ValueError("news query must be bounded printable ASCII")
+        if query is not None and self._query_recent is None:
+            raise ReadViewUnavailable("bounded recent news query is unavailable")
         payload_limit = self._max_content_chars - (2 * len(_SPOTLIGHT_MARKER) + 2)
-        envelopes = self._recent(
-            self._source_names, offset=offset, limit=limit,
-            max_content_chars=payload_limit,
-            max_event_id_chars=_MAX_CITATION_CHARS,
-            priority_sources=self._priority_source_names,
-            content_query=query,
-        )
+        read = self._recent if query is None else self._query_recent
+        params = {
+            "offset": offset,
+            "limit": limit,
+            "max_content_chars": payload_limit,
+            "max_event_id_chars": _MAX_CITATION_CHARS,
+            "priority_sources": self._priority_source_names,
+        }
+        if query is not None:
+            params["content_query"] = query
+        envelopes = read(self._source_names, **params)
         rows = []
         for envelope in envelopes:
             source = self._source_by_name.get(getattr(envelope, "source", None))
