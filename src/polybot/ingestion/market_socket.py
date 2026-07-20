@@ -22,6 +22,7 @@ the ``"PONG"`` reply is non-JSON and is dropped by the malformed-frame skip.
 
 import asyncio
 import json
+import time
 from json import JSONDecodeError
 
 _DIVERGENCE_HISTORY_LIMIT = 8
@@ -43,6 +44,11 @@ class MarketSocket:
         backoff_base=0.5,
         backoff_cap=30.0,
         ping_interval=10.0,
+        # A responsive but market-silent shard must demand replacement book
+        # snapshots before the 30s L5 last-market-frame deadline.  PONG only
+        # triggers the reconnect; it never refreshes market-data health itself.
+        market_silence_resnapshot_seconds=20.0,
+        clock_ns=time.monotonic_ns,
         # After this many CONSECUTIVE resyncs with no clean delta in between, HALT:
         # a book the resync can never reconcile is itself a fail-loud format-change
         # signal, not something to reconnect against forever.
@@ -58,6 +64,10 @@ class MarketSocket:
         if ping_interval <= 0:
             raise ValueError("ping_interval must be > 0 (a non-positive value hot-loops the keepalive)")
         self._ping_interval = ping_interval
+        if market_silence_resnapshot_seconds <= 0:
+            raise ValueError("market_silence_resnapshot_seconds must be > 0")
+        self._market_silence_resnapshot_ns = market_silence_resnapshot_seconds * 1_000_000_000
+        self._clock_ns = clock_ns
         if max_resyncs <= 0:
             raise ValueError("max_resyncs must be > 0")
         self._max_resyncs = max_resyncs
@@ -74,13 +84,23 @@ class MarketSocket:
             try:
                 transport = await self._connect()
                 await transport.send(self._subscribe_message())
+                connected_at = self._clock_ns()
                 keepalive = asyncio.create_task(self._keepalive(transport))
                 resync = False
+                silence_resnapshot = False
                 resync_detail = None
                 will_reconnect = max_connections is None or connections < max_connections
                 try:
                     try:
                         async for frame in transport:
+                            if (frame == "PONG"
+                                    and self._market_silence_resnapshot_due(connected_at)):
+                                # Revoke this generation before teardown can yield.
+                                # Only the replacement subscription's real BOOK can
+                                # make it authoritative again.
+                                self._stream.mark_all_stale()
+                                silence_resnapshot = True
+                                break
                             self._dispatch(frame)
                             if self._stream.consume_resync_request():
                                 resync_detail = self._stream.consume_resync_detail()
@@ -98,7 +118,7 @@ class MarketSocket:
                         # may observe it as fresh across the await in keepalive teardown.
                         self._stream.mark_all_stale()
                         raise
-                    if resync or will_reconnect:
+                    if resync or silence_resnapshot or will_reconnect:
                         self._stream.mark_all_stale()
                 finally:
                     keepalive.cancel()
@@ -130,6 +150,11 @@ class MarketSocket:
                     await self._sleep(self._backoff_delay(resync_failures))
                     failures = 0  # the connection was streaming; disconnect-backoff resets
                     continue
+                if silence_resnapshot:
+                    await self._safe_close(transport)
+                    await self._sleep(self._backoff_base)
+                    failures = 0
+                    continue
                 # A normal iterator exit is still a closed websocket. In unbounded
                 # production mode (or any bounded run with another connection left),
                 # stale the prior generation before reconnecting so a delta that races
@@ -153,6 +178,11 @@ class MarketSocket:
                 resync_failures = 0  # a real disconnect is not a resync storm
                 resync_history.clear()
                 await self._sleep(self._backoff_delay(failures))
+
+    def _market_silence_resnapshot_due(self, connected_at):
+        last_market_frame = self._stream.last_frame_at()
+        since = connected_at if last_market_frame is None else last_market_frame
+        return self._clock_ns() - since >= self._market_silence_resnapshot_ns
 
     async def _safe_close(self, transport):
         """Close a transport we are abandoning for a resync. Tolerates a transport

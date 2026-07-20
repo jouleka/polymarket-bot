@@ -318,6 +318,49 @@ def test_socket_skips_pong_keepalive_reply_without_halt():
     assert book.best_ask() == Decimal("0.62")  # ...and the loop kept consuming past the trailing PONG
 
 
+def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5():
+    """Production regression: a quiet shard used to stay connected on PONG while
+    ``last_frame_at`` crossed the 30-second L5 deadline, permanently halting ERS.
+    At the 20-second refresh boundary the responsive socket must be abandoned and
+    re-subscribed; only the replacement BOOK may restore authority.  Kills: treating
+    PONG as health, using ``>`` instead of ``>=``, or leaving the first socket open.
+    """
+    t1 = IdleAfterFramesTransport([_book_frame("A", "0.60", "0.62"), "PONG"])
+    t2 = IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    clock_values = iter((0, 20_000_000_001, 20_000_000_002))
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        market_silence_resnapshot_seconds=20.0,
+        clock_ns=lambda: next(clock_values, 20_000_000_002),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        try:
+            for _ in range(100):
+                book = stream.book_for("A")
+                if t2.sent and book is not None and book.best_bid() == Decimal("0.61"):
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert t2.sent[0] == json.dumps({"type": "market", "assets_ids": ["A"]})
+    assert stream.book_for("A").best_bid() == Decimal("0.61")
+
+
 def test_socket_keepalive_send_failure_does_not_trigger_spurious_reconnect():
     # The keepalive is best-effort: if a PING send fails, that must NOT be re-raised
     # through run's teardown and mistaken for a disconnect. The receive loop is the
