@@ -163,6 +163,11 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
                 stamper, source=source, source_tier="PRIMARY",
                 event_id=event_id, content="reviewed evidence",
             ))
+        for index in range(60):
+            events.append(make_envelope(
+                stamper, source="google-news-top", source_tier="DISCOVERY",
+                event_id=f"discovery-{index}", content="newer discovery context",
+            ))
     registry = _registry()
     book = _book()
     providers = (_Provider("a"), _Provider("b"))
@@ -296,10 +301,19 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             evidence_page = await bridge.call_tool(
                 "get_news", {"offset": 0, "limit": 10},
             )
-            assert [event["citation_id"] for event in evidence_page["events"]] == [
+            assert [event["citation_id"] for event in evidence_page["events"][:2]] == [
                 "citation-2", "citation-1",
             ]
-            assert all(event["citation_eligible"] for event in evidence_page["events"])
+            assert len(evidence_page["events"]) == 10
+            assert [
+                event["citation_id"] for event in evidence_page["events"][2:]
+            ] == [f"discovery-{index}" for index in range(59, 51, -1)]
+            assert all(
+                event["citation_eligible"] for event in evidence_page["events"][:2]
+            )
+            assert not any(
+                event["citation_eligible"] for event in evidence_page["events"][2:]
+            )
             assert all(
                 event["content"].startswith("⟦UNTRUSTED⟧\n")
                 for event in evidence_page["events"]

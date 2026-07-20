@@ -21,11 +21,17 @@ class EventQueryTooBroad(RuntimeError):
 
 
 def _recent_by_sources(conn, source_names, *, offset, limit,
-                       max_content_chars, max_event_id_chars):
+                       max_content_chars, max_event_id_chars,
+                       priority_sources=()):
     sources = tuple(source_names)
     if (not sources or len(sources) != len(set(sources))
             or any(not isinstance(source, str) or not source for source in sources)):
         raise ValueError("recent event sources must be non-empty unique strings")
+    priority = tuple(priority_sources)
+    if (len(priority) != len(set(priority))
+            or any(not isinstance(source, str) or not source for source in priority)
+            or not set(priority).issubset(sources)):
+        raise ValueError("priority event sources must be a unique source subset")
     if (isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 1000
             or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50):
         raise ValueError("recent event pagination must be bounded positive integers")
@@ -36,13 +42,18 @@ def _recent_by_sources(conn, source_names, *, offset, limit,
             or not 1 <= max_event_id_chars <= 2048):
         raise ValueError("recent event field bounds are invalid")
     placeholders = ",".join("?" for _source in sources)
+    if priority:
+        priority_slots = ",".join("?" for _source in priority)
+        priority_order = f"CASE WHEN source IN ({priority_slots}) THEN 0 ELSE 1 END, "
+    else:
+        priority_order = ""
     rows = conn.execute(
         "SELECT observed_at, source, source_tier, event_id, "
         "substr(content, 1, ?), published_at, '[]', '[]', 'UNTRUSTED' "
         f"FROM events WHERE source IN ({placeholders}) "
         "AND trust = 'UNTRUSTED' AND length(event_id) <= ? "
-        "ORDER BY observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
-        (max_content_chars, *sources, max_event_id_chars, limit, offset),
+        f"ORDER BY {priority_order}observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
+        (max_content_chars, *sources, max_event_id_chars, *priority, limit, offset),
     ).fetchall()
     return [EventStore._row_to_envelope(row) for row in rows]
 
@@ -154,12 +165,14 @@ class EventStore:
         )
 
     def recent_by_sources(self, source_names, *, offset, limit,
-                          max_content_chars=4096, max_event_id_chars=2048):
+                          max_content_chars=4096, max_event_id_chars=2048,
+                          priority_sources=()):
         """Return one bounded newest-first page for exact configured sources."""
         return _recent_by_sources(
             self._conn, source_names, offset=offset, limit=limit,
             max_content_chars=max_content_chars,
             max_event_id_chars=max_event_id_chars,
+            priority_sources=priority_sources,
         )
 
     def matching_citations(self, citations, source_names, *, max_matches=1024):
@@ -223,12 +236,14 @@ class ReadOnlyEventStore:
         )
 
     def recent_by_sources(self, source_names, *, offset, limit,
-                          max_content_chars=4096, max_event_id_chars=2048):
+                          max_content_chars=4096, max_event_id_chars=2048,
+                          priority_sources=()):
         """Return one bounded newest-first page for exact configured sources."""
         return _recent_by_sources(
             self._conn, source_names, offset=offset, limit=limit,
             max_content_chars=max_content_chars,
             max_event_id_chars=max_event_id_chars,
+            priority_sources=priority_sources,
         )
 
     def matching_citations(self, citations, source_names, *, max_matches=1024):
