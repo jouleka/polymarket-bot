@@ -22,6 +22,7 @@ the ``"PONG"`` reply is non-JSON and is dropped by the malformed-frame skip.
 
 import asyncio
 import json
+import math
 import time
 from json import JSONDecodeError
 
@@ -64,8 +65,9 @@ class MarketSocket:
         if ping_interval <= 0:
             raise ValueError("ping_interval must be > 0 (a non-positive value hot-loops the keepalive)")
         self._ping_interval = ping_interval
-        if market_silence_resnapshot_seconds <= 0:
-            raise ValueError("market_silence_resnapshot_seconds must be > 0")
+        if (not math.isfinite(market_silence_resnapshot_seconds)
+                or market_silence_resnapshot_seconds <= 0):
+            raise ValueError("market_silence_resnapshot_seconds must be finite and > 0")
         self._market_silence_resnapshot_ns = market_silence_resnapshot_seconds * 1_000_000_000
         self._clock_ns = clock_ns
         if max_resyncs <= 0:

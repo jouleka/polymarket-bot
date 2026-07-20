@@ -434,6 +434,18 @@ def test_socket_rejects_nonpositive_ping_interval():
         MarketSocket(lambda: None, stream, asset_ids=["A"], ping_interval=-1.0)
 
 
+@pytest.mark.parametrize("seconds", [float("nan"), float("inf"), float("-inf")])
+def test_socket_rejects_nonfinite_market_silence_resnapshot_deadlines(seconds):
+    """NaN makes every deadline comparison false and infinity disables refresh;
+    both would silently restore the production false-halt path, so fail at build.
+    """
+    with pytest.raises(ValueError, match="market_silence_resnapshot_seconds"):
+        MarketSocket(
+            lambda: None, _stream(), asset_ids=["A"],
+            market_silence_resnapshot_seconds=seconds,
+        )
+
+
 def test_socket_marks_books_stale_on_disconnect():
     # Book built on t1, then a disconnect; t2 reconnects but sends no resync yet,
     # so the book must read stale (ERS must not size off it until a fresh snapshot).
