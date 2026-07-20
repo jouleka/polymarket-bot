@@ -8,7 +8,7 @@ import pytest
 from polybot.core.clock import MonotonicStamper
 from polybot.ers.facade import ProposeOnlyFacade
 from polybot.hermes.mcp_bridge import ProposalMcpServer
-from polybot.hermes.read_views import BookReadView, LedgerReadView
+from polybot.hermes.read_views import BookReadView, LedgerReadView, NewsReadView
 from polybot.hermes.rpc import (
     ProposalRpcClient,
     ProposalRpcDispatcher,
@@ -17,6 +17,7 @@ from polybot.hermes.rpc import (
 )
 from polybot.harness.evidence import evaluate_category
 from polybot.ingestion.envelope import make_envelope
+from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 from polybot.ingestion.orderbook import LocalBook
 from polybot.resolution.models import (
     PUSD_ADDRESS,
@@ -186,6 +187,9 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             flags_reader=lambda: {
                 "runtime_ready": True, "trading_permission": False,
             },
+            news_reader=NewsReadView(
+                first.event_reader, allowlist=DEFAULT_ALLOWLIST,
+            ),
         )
 
         def proposal(intent_id):
@@ -289,6 +293,17 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             ))["records"]
             assert (await bridge.call_tool("get_flags", {}))[
                 "trading_permission"] is False
+            evidence_page = await bridge.call_tool(
+                "get_news", {"offset": 0, "limit": 10},
+            )
+            assert [event["citation_id"] for event in evidence_page["events"]] == [
+                "citation-2", "citation-1",
+            ]
+            assert all(event["citation_eligible"] for event in evidence_page["events"])
+            assert all(
+                event["content"].startswith("⟦UNTRUSTED⟧\n")
+                for event in evidence_page["events"]
+            )
             with pytest.raises(ValueError, match="not approved"):
                 await bridge.call_tool("record_decision", {})
             assert await bridge.call_tool(
