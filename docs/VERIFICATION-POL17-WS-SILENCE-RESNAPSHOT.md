@@ -79,3 +79,39 @@ The already-approved services may be updated only after the branch passes the in
 complete suite, GitHub landing, and stopped-install preservation checks.  A controlled ordered
 restart is required to run clean walletless reconciliation and clear the existing sticky halt.
 That restart grants only paper proposal processing; it grants no signing or live-money authority.
+
+## Landed installation and live recovery
+
+PR #46 merged as `775b05734d5f3db3fd362915e51b07e6705f5ebb`.  Both services were stopped
+in Hermes → auth-writer socket → POL-17 order before the service checkout fast-forwarded.  All
+seven databases returned `PRAGMA integrity_check=ok`, the historical raw-firehose manifest passed,
+and the production config checksum remained
+`f42f99379627f441e1363a7976430ef8a81c979cb5382c6a62afa587ab499361`.  Every database
+inode was identical before and after installation.  The root auth checksum remained
+`b286c30bf210cf65ce137ee5704b8d7d23319a1a8c1fac088a977317a9a45c7d`; profile-local
+`auth.json`, `.env`, and `.op.env` remained absent.
+
+Stopped preflight caught that the native Hermes environment had drifted from reviewed MCP 1.28.1
+back to 1.26.0.  Per the existing runbook, only MCP was replaced; resolver output showed exactly
+one uninstall/install.  Application and Hermes environments then reported MCP 1.28.1, and the
+effective inventory passed `exact five`.
+
+The controlled restart started POL-17 first.  Walletless restart reconciliation appended
+`restart_reconciled → RUNNING` at 19:20:42 UTC, with the earlier `l5_ws_down` halt preserved in the
+audit.  Runtime flags reported a fresh registry, `runtime_ready=true`, 159 usable live-book tokens,
+`trading_permission=false`, and zero pending/resolution/execution outboxes before Hermes started.
+Hermes then started with exact-five preflight, and its automatic 19:21:34 cron completed `ok`.
+
+After more than two keepalive intervals, both services remained active+enabled with `Result=success`
+and `NRestarts=0`.  POL-17 current/peak memory was approximately 82/84 MiB and Hermes 262/265 MiB;
+both had zero swap and every `memory.events` counter was zero.  No proactive-resnapshot, HALT,
+collector, registry, or runtime error appeared.  Intent/audit/fill/flow/execution/outbox, Maker,
+Shadow, and resolution-receipt counts remained zero.  EventStore sources included 5,739 midpoint
+batches and 582,000 deduplicated Data API trades plus sanitized news, with no `clob-ws` source.
+
+The ordered pre-install stop exposed a separate Hermes lifecycle defect: `ExecStop` succeeded and
+no process survived, but a cron request already in flight received upstream HTTP 503 during SIGTERM,
+so the Hermes main process returned 1 and systemd recorded `Result=exit-code`.  This did not affect
+POL-17 data or the corrected runtime and was cleared only after diagnosis.  It remains separate
+follow-up work: planned stop during an active research request must still terminate successfully
+without restarting or granting fallback authority.

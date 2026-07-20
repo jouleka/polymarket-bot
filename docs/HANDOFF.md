@@ -807,8 +807,8 @@ active+enabled; the writer socket is static/on-demand with no idle instance. The
 job completed `ok` at 11:11:04 UTC with zero pending intents/outboxes. Continue observation
 through a natural token-refresh boundary; no signer or live-money authority exists.
 
-**UPDATE 2026-07-20 — extended soak exposed a quiet-shard L5 false halt; corrective branch under
-release review.** Both services ran for about 31.5 hours with zero process restarts or OOM, and a
+**UPDATE 2026-07-20 — extended soak exposed and corrected a quiet-shard L5 false halt.** Both
+services ran for about 31.5 hours with zero process restarts or OOM, and a
 natural Codex token save proved root-only auth persistence while profile-local auth/env remained
 absent.  At 01:08:33 UTC, ERS correctly entered sticky `HALTED` with `l5_ws_down`; the live collector
 later recovered to a fresh registry and 62 usable books, but sticky safety correctly did not
@@ -819,7 +819,13 @@ inside the immutable 30-second L5 window.  Branch `pol-17-ws-silence-resnapshot`
 teardown and requiring real replacement snapshots for authority.  PONG never stamps market health;
 threshold plus keepalive cadence is capped at 20 seconds to reserve at least 10 seconds before L5;
 failed recovery still reaches the unchanged sticky halt.  Strict serial TDD, 2,379 closing tests,
-and the isolated mutation battery pass; independent re-review remains before landing/install/restart.  Exact evidence is in
+7/7 mutations, and independent specification/security review pass.  PR #46 merged as `775b057`;
+stopped installation preserved config/auth/database identities and all integrity/evidence checks.
+The controlled restart reconciled ERS to `RUNNING`, advertised 159 live books, and completed the
+first Hermes cron `ok`.  Both units are active+enabled with zero restarts/swap/pressure/OOM, zero
+economic/outbox rows, and zero raw `clob-ws` persistence.  A separate Hermes lifecycle defect was
+recorded: stopping during an in-flight upstream-503 cron made the main process return 1 despite a
+successful `ExecStop` and no survivor.  Exact evidence is in
 [`VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md`](VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
