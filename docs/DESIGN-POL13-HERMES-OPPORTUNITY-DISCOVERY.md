@@ -33,7 +33,10 @@ propose_trade  the unchanged INSERT-only untrusted proposal write
 ```
 
 `NewsReadView` reads through POL-17's existing `ReadOnlyEventStore`. A bounded SQL query selects only
-configured allowlist source names and orders newest observations first. The projection exposes only
+configured allowlist source names. Citation-eligible PRIMARY source names pinned by the allowlist
+are ordered first, newest-first within that class; remaining DISCOVERY context follows newest-first.
+This prevents a high-volume discovery feed from displacing every citable row within the fixed
+1,001-offset scan envelope without promoting or reclassifying that feed. The projection exposes only
 source name/tier/group, stable citation ID, published timestamp, and already-sanitized content.
 Venue rows, raw websocket data, arbitrary SQL, store handles, credentials, and mutation methods are
 never exposed.
@@ -83,6 +86,8 @@ ambiguous cross-publisher collision.
 3. News remains untrusted spotlight-delimited data. The view never fetches a citation and never
    changes trust tier; only the deterministic ERS truth gate decides whether citations count.
 4. The projection accepts only sources whose persisted tier matches the pinned allowlist tier.
+   Evidence priority is derived from the pinned source identity, never from a row's self-reported
+   tier.
 5. Every page and content field is bounded. The SQL path does not materialize the production market
    firehose and does not add persistence or an index migration. A broad exact-citation query fails
    closed rather than treating a truncated result as complete.
@@ -108,9 +113,9 @@ review, and mutation gate. No live-money activation exists in this slice.
    stable condition-ID tie break.
 2. Production-wired market rows truthfully identify live and unavailable books without a second
    collector or persisted-book authority.
-3. `get_news` returns only bounded allowlisted, tier-consistent, sanitized evidence newest first and
-   supplies the exact citation ID ERS can verify; pagination and field bounds apply before Python
-   allocation.
+3. `get_news` returns only bounded allowlisted, tier-consistent, sanitized evidence, with citable
+   PRIMARY sources first and newest-first within each eligibility class, and supplies the exact
+   citation ID ERS can verify; pagination and field bounds apply before Python allocation.
 4. RPC, MCP, authored config, effective inventory, cron inventory, and verifier agree on exactly six
    tools; missing or extra tools fail closed.
 5. The facade still exposes no mutation/signing path beyond unchanged `propose_trade`.

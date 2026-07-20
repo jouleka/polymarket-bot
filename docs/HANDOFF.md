@@ -845,6 +845,16 @@ run exact-six preflight, restart in order, and observe a natural cycle. Narrow t
 coverage can still yield an honest no-trade and must not be bypassed. Exact build evidence is in
 [`VERIFICATION-POL13-HERMES-OPPORTUNITY-DISCOVERY.md`](VERIFICATION-POL13-HERMES-OPPORTUNITY-DISCOVERY.md).
 
+PR #48 then landed as merge `007884c`; stopped installation preserved config/database/raw-evidence
+identity, and the existing `gpt-5.6-terra` profile, native auth, cron ID/schedule/history, and exact-
+six preflight all passed. A production RPC probe before Hermes start found that more than 1,001
+newer `google-news-top` DISCOVERY rows displaced every citable PRIMARY row from the bounded page
+range. Both services are stopped/disabled while follow-up branch
+`pol-13-hermes-primary-evidence-priority` is reviewed. It reserves page priority for exact PRIMARY
+source identities pinned by the allowlist, preserves newest-first order within each class, and does
+not promote discovery evidence or widen any authority/bound. Do not restart from merge `007884c`;
+land and install the follow-up first.
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

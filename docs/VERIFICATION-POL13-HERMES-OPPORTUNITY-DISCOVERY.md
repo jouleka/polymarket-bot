@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-20
 **Reviewed implementation head:** `2f60a99`
-**Result:** build PASS; installation and live verification pending
+**Result:** PR #48 landed; pre-activation production-data correction in review
 
 ## 1. Live diagnosis
 
@@ -108,3 +108,28 @@ only after they occur.
 The correction restores the ability to find urgent live markets and cite trusted evidence. It does
 not guarantee a proposal: the configured PRIMARY source set remains deliberately narrow, and an
 unsupported market must continue to produce an honest no-trade result.
+
+## 7. Stopped installation and production-data preflight
+
+PR #48 landed as merge `007884c`. Both enabled services stopped cleanly with `Result=success`, zero
+restarts, and no surviving proposal/runtime process. The historical raw-firehose checksums and all
+seven SQLite `quick_check` results passed. The service checkout fast-forwarded without changing the
+production config checksum or database inodes, and the idempotent installer kept both units stopped
+and disabled.
+
+The existing profile was updated in place: model `gpt-5.6-terra`, provider `openai-codex`, native
+root auth, cron ID `ad1c2d9b8c30`, five-minute schedule, and 973 completed runs were preserved.
+Exact-six preflight passed, both MCP environments remained pinned to 1.28.1, and no profile-local
+auth/environment file appeared.
+
+Before Hermes was started, a direct production RPC probe caught another real availability defect:
+offsets 0 through 1,000 returned only `google-news-top` DISCOVERY rows. The high-volume discovery
+feed made every PRIMARY citation-eligible row unreachable inside the deliberately bounded scan.
+Hermes remained stopped and POL-17 was stopped again after its clean readiness probe (151 live
+books, zero raw rows, zero memory pressure).
+
+Follow-up branch `pol-13-hermes-primary-evidence-priority` makes the bounded SQL read prioritize
+exact source identities whose pinned allowlist tier is PRIMARY, with newest-first order retained
+within the PRIMARY and DISCOVERY classes. It does not trust a persisted row's tier for priority,
+promote discovery evidence, expand offsets/limits, or change deterministic truth-gating. Storage,
+read-view, and whole-slice tests reproduce the discovery flood.
