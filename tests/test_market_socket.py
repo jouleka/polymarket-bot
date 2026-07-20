@@ -318,6 +318,289 @@ def test_socket_skips_pong_keepalive_reply_without_halt():
     assert book.best_ask() == Decimal("0.62")  # ...and the loop kept consuming past the trailing PONG
 
 
+def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5(caplog):
+    """Production regression: a quiet shard used to stay connected on PONG while
+    ``last_frame_at`` crossed the 30-second L5 deadline, permanently halting ERS.
+    At the 10-second refresh boundary the responsive socket must be abandoned and
+    re-subscribed; only the replacement BOOK may restore authority.  Kills: treating
+    PONG as health, using ``>`` instead of ``>=``, or leaving the first socket open.
+    """
+    t1 = IdleAfterFramesTransport([_book_frame("A", "0.60", "0.62"), "PONG"])
+    t2 = IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter([t1, t2])
+
+    async def connect():
+        return next(transports)
+
+    clock_values = iter((0, 10_000_000_001, 10_000_000_002))
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        market_silence_resnapshot_seconds=10.0,
+        ping_interval=10.0,
+        clock_ns=lambda: next(clock_values, 10_000_000_002),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        try:
+            for _ in range(100):
+                book = stream.book_for("A")
+                if t2.sent and book is not None and book.best_bid() == Decimal("0.61"):
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert t2.sent[0] == json.dumps({"type": "market", "assets_ids": ["A"]})
+    assert stream.book_for("A").best_bid() == Decimal("0.61")
+    assert "market shard silent; reconnecting for fresh snapshots" in caplog.text
+
+
+def test_default_silence_margin_handles_a_frame_just_after_pong():
+    """Worst cadence phase: a market frame lands just after one PONG, so the
+    next PONG is just below threshold and must do nothing; the following PONG must
+    reconnect below 20s, leaving >=10s for close/backoff/snapshot before L5 at 30.
+    Kills: restoring the 20-second threshold checked on a 10-second cadence.
+    """
+    pre_threshold = []
+    stream = _stream()
+
+    class WorstPhaseTransport(IdleAfterFramesTransport):
+        async def __aiter__(self):
+            yield "PONG"
+            yield _book_frame("A", "0.60", "0.62")
+            yield "PONG"
+            pre_threshold.append(stream.book_for("A").is_stale())
+            yield "PONG"
+            await asyncio.Event().wait()
+
+    t1 = WorstPhaseTransport([])
+    t2 = IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63")])
+    transports = iter((t1, t2))
+
+    async def connect():
+        return next(transports)
+
+    clock_values = iter((
+        0, 0, 9_999_999_999, 19_999_999_999, 20_000_000_000,
+    ))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        clock_ns=lambda: next(clock_values, 20_000_000_000),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        try:
+            for _ in range(100):
+                if t2.sent:
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert pre_threshold == [False]
+    assert t2.sent
+    assert stream.book_for("A").best_bid() == Decimal("0.61")
+
+
+def test_silence_timer_gives_each_replacement_connection_its_full_grace():
+    """A retained diagnostic frame can predate the current socket generation.
+    Silence age must start at max(connection-open, last-market-frame), otherwise
+    the first pre-threshold PONG immediately churns a healthy replacement socket.
+    """
+    stream = _stream()
+    stream.ingest(_book_event("A", "0.60", "0.62"))
+    retained_stamp = stream.last_frame_at()
+    transport = IdleAfterFramesTransport(["PONG"])
+    connections = []
+
+    async def connect():
+        connections.append(object())
+        return transport
+
+    clock_values = iter((100_000_000_000, 109_000_000_000))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        market_silence_resnapshot_seconds=10.0,
+        clock_ns=lambda: next(clock_values, 109_000_000_000),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        observed_before_cancel = None
+        try:
+            for _ in range(20):
+                await asyncio.sleep(0)
+            observed_before_cancel = stream.book_for("A").is_stale()
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        return observed_before_cancel
+
+    observed_before_cancel = asyncio.run(drive())
+
+    assert len(connections) == 1
+    assert stream.last_frame_at() == retained_stamp  # PONG is never market health
+    assert observed_before_cancel is False            # pre-threshold PONG does not revoke
+
+
+def test_silence_resnapshot_revokes_books_before_transport_close_awaits():
+    """A sibling controller task must never execute from the abandoned generation
+    while close awaits.  The transport observes the book already stale at entry.
+    Kills: moving mark_all_stale below _safe_close or relying on reconnect snapshots.
+    """
+    observed = []
+    stream = _stream()
+
+    class CloseObserver(IdleAfterFramesTransport):
+        async def close(self):
+            observed.append(stream.book_for("A").is_stale())
+            await asyncio.sleep(0)
+
+    t1 = CloseObserver([_book_frame("A", "0.60", "0.62"), "PONG"])
+
+    async def connect():
+        return t1
+
+    clock_values = iter((0, 20_000_000_001))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        clock_ns=lambda: next(clock_values, 20_000_000_002),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=1))
+        try:
+            for _ in range(100):
+                if observed:
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert observed == [True]
+    assert stream.last_frame_at() is not None  # PONG neither clears nor replaces market health
+
+
+def test_silence_replacement_without_snapshot_keeps_old_book_stale_and_health_unchanged():
+    """Reconnect/subscription is not authority.  If the replacement socket supplies
+    no BOOK, the retained diagnostic book stays stale and market health stays at the
+    original real frame.  Kills: freshening or stamping during reconnect/PONG.
+    """
+    original_health = []
+    stream = _stream()
+
+    class RecordThenPong(IdleAfterFramesTransport):
+        async def __aiter__(self):
+            yield _book_frame("A", "0.60", "0.62")
+            original_health.append(stream.last_frame_at())
+            yield "PONG"
+            await asyncio.Event().wait()
+
+    t1 = RecordThenPong([])
+    t2 = IdleAfterFramesTransport([])
+    transports = iter((t1, t2))
+
+    async def connect():
+        return next(transports)
+
+    clock_values = iter((0, 10_000_000_001, 10_000_000_002))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        clock_ns=lambda: next(clock_values, 10_000_000_002),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        try:
+            for _ in range(100):
+                if t2.sent:
+                    break
+                await asyncio.sleep(0)
+            return stream.book_for("A").is_stale(), stream.last_frame_at()
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    stale, health = asyncio.run(drive())
+
+    assert original_health and health == original_health[0]
+    assert stale is True
+
+
+def test_repeated_silence_resnapshots_do_not_consume_divergence_budget():
+    """Quiet responsive connections are not irreconcilable book divergence.
+    Even with a one-attempt divergence budget, repeated silence refreshes continue
+    until real replacement snapshots arrive.  Kills: sharing the resync counter.
+    """
+    transports = (
+        IdleAfterFramesTransport([_book_frame("A", "0.60", "0.62"), "PONG"]),
+        IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63"), "PONG"]),
+        IdleAfterFramesTransport([_book_frame("A", "0.62", "0.64")]),
+    )
+    transport_iter = iter(transports)
+
+    async def connect():
+        return next(transport_iter)
+
+    clock_values = iter((
+        0, 20_000_000_001,
+        20_000_000_002, 40_000_000_003,
+        40_000_000_004,
+    ))
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(), max_resyncs=1,
+        clock_ns=lambda: next(clock_values, 40_000_000_004),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=3))
+        try:
+            for _ in range(200):
+                book = stream.book_for("A")
+                if transports[2].sent and book.best_bid() == Decimal("0.62"):
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert all(transport.sent for transport in transports)
+    assert stream.book_for("A").best_bid() == Decimal("0.62")
+
+
 def test_socket_keepalive_send_failure_does_not_trigger_spurious_reconnect():
     # The keepalive is best-effort: if a PING send fails, that must NOT be re-raised
     # through run's teardown and mistaken for a disconnect. The receive loop is the
@@ -349,6 +632,43 @@ def test_socket_rejects_nonpositive_ping_interval():
         MarketSocket(lambda: None, stream, asset_ids=["A"], ping_interval=0)
     with pytest.raises(ValueError):
         MarketSocket(lambda: None, stream, asset_ids=["A"], ping_interval=-1.0)
+
+
+@pytest.mark.parametrize("seconds", [float("nan"), float("inf"), float("-inf")])
+def test_socket_rejects_nonfinite_market_silence_resnapshot_deadlines(seconds):
+    """NaN makes every deadline comparison false and infinity disables refresh;
+    both would silently restore the production false-halt path, so fail at build.
+    """
+    with pytest.raises(ValueError, match="market_silence_resnapshot_seconds"):
+        MarketSocket(
+            lambda: None, _stream(), asset_ids=["A"],
+            market_silence_resnapshot_seconds=seconds,
+        )
+
+
+def test_socket_rejects_a_noncallable_silence_clock_at_construction():
+    """The health clock is a construction-time safety dependency; delaying this
+    failure until the first live connection would tear down the supervised runtime.
+    """
+    with pytest.raises(TypeError, match="clock_ns"):
+        MarketSocket(lambda: None, _stream(), asset_ids=["A"], clock_ns=None)
+
+
+@pytest.mark.parametrize("ping_interval", [float("nan"), float("inf"), float("-inf")])
+def test_socket_rejects_nonfinite_ping_intervals(ping_interval):
+    with pytest.raises(ValueError, match="ping_interval"):
+        MarketSocket(lambda: None, _stream(), asset_ids=["A"], ping_interval=ping_interval)
+
+
+def test_socket_reserves_ten_seconds_between_refresh_budget_and_l5():
+    """The PONG phase can add one full ping interval to silence detection.
+    Reject construction unless threshold+cadence leaves >=10s before L5 at 30s.
+    """
+    with pytest.raises(ValueError, match="reserve the L5 recovery margin"):
+        MarketSocket(
+            lambda: None, _stream(), asset_ids=["A"], ping_interval=10.0,
+            market_silence_resnapshot_seconds=10.000000001,
+        )
 
 
 def test_socket_marks_books_stale_on_disconnect():
