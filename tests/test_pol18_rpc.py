@@ -114,7 +114,7 @@ def test_rpc_rejects_invalid_news_query_before_facade():
 
     from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
 
-    for query in ("", "x" * 129, "Iran\n", True, 7):
+    for query in ("", "x" * 129, "Iran\n", "État", True, 7):
         facade = _Facade()
         request = _wire({
             "version": 1, "id": "news-query", "method": "get_news",

@@ -1,21 +1,25 @@
 # PLAN — POL-13 primary-source coverage
 
-**Design:** `docs/DESIGN-POL13-PRIMARY-SOURCE-COVERAGE.md`  
+**Design:** `docs/DESIGN-POL13-PRIMARY-SOURCE-COVERAGE.md`
 **Method:** strict serial RED → minimal GREEN → focused tests → canonical suite → checkpoint
 
 ## 1. TDD sequence
 
 1. Add an exact default-allowlist contract test for the four approved identities; observe missing
    entries; add only those `Source` values.
-2. Add storage tests for the optional literal case-insensitive content filter, wildcard literals,
-   invalid input, and `None` compatibility; observe the missing keyword; implement parameterized SQL
-   before ordering and pagination for writable and read-only stores.
-3. Add `NewsReadView` forwarding and validation tests; observe missing `query`; add the optional seam.
-4. Add RPC acceptance/rejection tests; observe exact-schema rejection; add bounded query validation.
-5. Add MCP schema tests; observe schema mismatch; add the optional max-128/min-1 string only.
-6. Add profile/prompt contract tests; observe missing market-relevant query guidance; update the
+2. Add a bounded recent-feed cache test for literal case-insensitive content filtering, wildcard
+   literals, input validation, per-source item/content caps, and pagination; observe the missing
+   unit; implement the in-memory cache without touching EventStore persistence.
+3. Add a poller test proving a successful source poll atomically replaces its bounded cache snapshot;
+   preserve the prior snapshot on a source failure.
+4. Add `NewsReadView` query-provider forwarding and validation tests; preserve `query=None` on the
+   existing EventStore and fail a query closed when the bounded provider is unavailable.
+5. Add RPC acceptance/rejection tests; observe exact-schema rejection; add printable-ASCII bounded
+   query validation.
+6. Add MCP schema tests; observe schema mismatch; add the optional max-128/min-1 printable-ASCII string.
+7. Add profile/prompt contract tests; observe missing market-relevant query guidance; update the
    existing profile prompt without changing tool inventory, model, auth, or schedule.
-7. Extend the real whole-slice test with unrelated newer PRIMARY traffic and one relevant official
+8. Extend the real whole-slice test with unrelated newer PRIMARY traffic and one relevant official
    item; prove the queried exact citation reaches ERS and survives execution/restart/resolution to
    terminal mark and evidence.
 
@@ -25,7 +29,7 @@ review repeat the same serial RED/GREEN discipline.
 ## 2. Review and mutation gate
 
 Independent specification/security review checks the design table, additive diff, sacred-surface
-hashes, exact-six inventory, SQL parameterization/bounds, source trust groups, and whole-slice
+hashes, exact-six inventory, cache item/content bounds, source trust groups, and whole-slice
 non-vacuity.
 
 The isolated mutation battery must kill, at minimum:
@@ -33,7 +37,8 @@ The isolated mutation battery must kill, at minimum:
 - deletion or tier/group/URL drift for each approved source;
 - Google PRIMARY promotion or publisher-group collapse;
 - query-filter deletion, case-sensitivity, wildcard interpretation, and filter-after-pagination;
-- query cap/control/non-string acceptance and `None` regression;
+- per-source item/content cap removal, stale partial-snapshot publication, and EventStore fallback;
+- query cap/control/non-ASCII/non-string acceptance and `None` regression;
 - priority-order regression or broad `all()` materialization;
 - RPC/MCP query omission or a seventh authority-bearing tool;
 - prompt omission, citation fabrication, or forced-proposal wording; and

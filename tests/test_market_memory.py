@@ -150,43 +150,6 @@ def test_recent_sources_reserve_priority_evidence_ahead_of_discovery_flood(tmp_p
     assert [event.observed_at for event in events[1:]] == list(range(61, 12, -1))
 
 
-def test_recent_sources_filter_literal_content_in_sql_before_pagination(tmp_path):
-    path = str(tmp_path / "mm.db")
-    with EventStore(path) as store:
-        store.append(_env(
-            "relevant-old", 1, source="primary-a",
-            content="Official update: IRAN talks remain at 50%_complete.",
-        ))
-        for observed_at in range(2, 62):
-            store.append(_env(
-                f"unrelated-{observed_at}", observed_at,
-                source="primary-a", content="Unrelated official release",
-            ))
-
-        assert [event.event_id for event in store.recent_by_sources(
-            ("primary-a",), offset=0, limit=1, content_query="iran",
-        )] == ["relevant-old"]
-
-    with ReadOnlyEventStore(path) as reader:
-        assert [event.event_id for event in reader.recent_by_sources(
-            ("primary-a",), offset=0, limit=1, content_query="50%_complete",
-        )] == ["relevant-old"]
-        assert reader.recent_by_sources(
-            ("primary-a",), offset=0, limit=1, content_query="%_missing",
-        ) == []
-
-
-@pytest.mark.parametrize("content_query", ["", "x" * 129, "Iran\n", True, 7])
-def test_recent_sources_reject_invalid_content_query(tmp_path, content_query):
-    with EventStore(str(tmp_path / "mm.db")) as store:
-        store.append(_env("relevant", 1, source="primary-a", content="Iran"))
-
-        with pytest.raises(ValueError, match="content query"):
-            store.recent_by_sources(
-                ("primary-a",), offset=0, limit=1, content_query=content_query,
-            )
-
-
 @pytest.mark.parametrize("override", [
     {"priority_sources": ("outside-allowlist",)},
     {"offset": 1001},

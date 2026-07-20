@@ -7,7 +7,6 @@ and replays strictly in observed_at order so backtests never see the future.
 import json
 from pathlib import Path
 import sqlite3
-import unicodedata
 
 from polybot.core.models import Envelope
 
@@ -23,7 +22,7 @@ class EventQueryTooBroad(RuntimeError):
 
 def _recent_by_sources(conn, source_names, *, offset, limit,
                        max_content_chars, max_event_id_chars,
-                       priority_sources=(), content_query=None):
+                       priority_sources=()):
     sources = tuple(source_names)
     if (not sources or len(sources) != len(set(sources))
             or any(not isinstance(source, str) or not source for source in sources)):
@@ -48,25 +47,13 @@ def _recent_by_sources(conn, source_names, *, offset, limit,
         priority_order = f"CASE WHEN source IN ({priority_slots}) THEN 0 ELSE 1 END, "
     else:
         priority_order = ""
-    content_filter = ""
-    content_params = ()
-    if content_query is not None:
-        if (not isinstance(content_query, str) or not content_query
-                or len(content_query) > 128
-                or any(unicodedata.category(char).startswith("C")
-                       for char in content_query)):
-            raise ValueError("recent event content query must be a bounded exact string")
-        content_filter = "AND instr(lower(content), lower(?)) > 0 "
-        content_params = (content_query,)
     rows = conn.execute(
         "SELECT observed_at, source, source_tier, event_id, "
         "substr(content, 1, ?), published_at, '[]', '[]', 'UNTRUSTED' "
         f"FROM events WHERE source IN ({placeholders}) "
         "AND trust = 'UNTRUSTED' AND length(event_id) <= ? "
-        f"{content_filter}"
         f"ORDER BY {priority_order}observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
-        (max_content_chars, *sources, max_event_id_chars, *content_params,
-         *priority, limit, offset),
+        (max_content_chars, *sources, max_event_id_chars, *priority, limit, offset),
     ).fetchall()
     return [EventStore._row_to_envelope(row) for row in rows]
 
@@ -179,14 +166,13 @@ class EventStore:
 
     def recent_by_sources(self, source_names, *, offset, limit,
                           max_content_chars=4096, max_event_id_chars=2048,
-                          priority_sources=(), content_query=None):
+                          priority_sources=()):
         """Return one bounded newest-first page for exact configured sources."""
         return _recent_by_sources(
             self._conn, source_names, offset=offset, limit=limit,
             max_content_chars=max_content_chars,
             max_event_id_chars=max_event_id_chars,
             priority_sources=priority_sources,
-            content_query=content_query,
         )
 
     def matching_citations(self, citations, source_names, *, max_matches=1024):
@@ -251,14 +237,13 @@ class ReadOnlyEventStore:
 
     def recent_by_sources(self, source_names, *, offset, limit,
                           max_content_chars=4096, max_event_id_chars=2048,
-                          priority_sources=(), content_query=None):
+                          priority_sources=()):
         """Return one bounded newest-first page for exact configured sources."""
         return _recent_by_sources(
             self._conn, source_names, offset=offset, limit=limit,
             max_content_chars=max_content_chars,
             max_event_id_chars=max_event_id_chars,
             priority_sources=priority_sources,
-            content_query=content_query,
         )
 
     def matching_citations(self, citations, source_names, *, max_matches=1024):
