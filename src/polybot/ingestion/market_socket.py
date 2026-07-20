@@ -181,7 +181,8 @@ class MarketSocket:
 
     def _market_silence_resnapshot_due(self, connected_at):
         last_market_frame = self._stream.last_frame_at()
-        since = connected_at if last_market_frame is None else last_market_frame
+        since = (connected_at if last_market_frame is None
+                 else max(connected_at, last_market_frame))
         return self._clock_ns() - since >= self._market_silence_resnapshot_ns
 
     async def _safe_close(self, transport):

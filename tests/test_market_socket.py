@@ -361,6 +361,46 @@ def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5():
     assert stream.book_for("A").best_bid() == Decimal("0.61")
 
 
+def test_silence_timer_gives_each_replacement_connection_its_full_grace():
+    """A retained diagnostic frame can predate the current socket generation.
+    Silence age must start at max(connection-open, last-market-frame), otherwise
+    the first pre-threshold PONG immediately churns a healthy replacement socket.
+    """
+    stream = _stream()
+    stream.ingest(_book_event("A", "0.60", "0.62"))
+    retained_stamp = stream.last_frame_at()
+    transport = IdleAfterFramesTransport(["PONG"])
+    connections = []
+
+    async def connect():
+        connections.append(object())
+        return transport
+
+    clock_values = iter((100_000_000_000, 119_000_000_000))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        market_silence_resnapshot_seconds=20.0,
+        clock_ns=lambda: next(clock_values, 119_000_000_000),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=2))
+        try:
+            for _ in range(20):
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert len(connections) == 1
+    assert stream.last_frame_at() == retained_stamp  # PONG is never market health
+
+
 def test_socket_keepalive_send_failure_does_not_trigger_spurious_reconnect():
     # The keepalive is best-effort: if a PING send fails, that must NOT be re-raised
     # through run's teardown and mistaken for a disconnect. The receive loop is the
