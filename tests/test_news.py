@@ -93,6 +93,9 @@ def test_recent_news_cache_bounds_each_source_and_filters_literal_content():
     cache.replace_source("primary-b", (
         event("other-relevant", 4, "primary-b", "IRAN corroboration trailing"),
     ))
+    cache.replace_source("primary-c", (
+        event("wildcard-decoy", 5, "primary-c", "prefix Xmissing suffix"),
+    ))
 
     rows = cache.recent_by_sources(
         ("primary-a", "primary-b"), offset=0, limit=2,
@@ -120,7 +123,7 @@ def test_recent_news_cache_bounds_each_source_and_filters_literal_content():
         content_query="trailing",
     ) == []
     assert cache.recent_by_sources(
-        ("primary-a",), offset=0, limit=1,
+        ("primary-a", "primary-c"), offset=0, limit=1,
         max_content_chars=16, max_event_id_chars=2048,
         content_query="%_missing",
     ) == []
