@@ -2,7 +2,7 @@
 
 The allowlist is the FIRST injection-defense gate: ``NewsPoller`` REFUSES any source not
 listed here. Every URL below was VALIDATED live (fetched + parsed into items) on
-2026-06-26. This is a conservative STARTER set, not exhaustive.
+2026-06-26 or 2026-07-20. This is a conservative STARTER set, not exhaustive.
 
   >>> OPERATOR REVIEW REQUIRED <<<  The PRIMARY tier MAY inform trades (downstream still
   requires >= 2 independent primaries before non-tiny size), so adding a PRIMARY source
@@ -18,7 +18,8 @@ Validation notes (2026-06-26) -- candidates that did NOT make the cut, and why:
   - Treasury press feed declares a DOCTYPE/ENTITY -> ``parse_feed`` refuses it (the XXE
     defense working as designed); not ingestible without resolving that upstream.
   - BLS (bls.gov) returns 403 to a bot user-agent; not fetchable read-only here.
-  - WhiteHouse / uscourts / sec-litigation candidate URLs 404'd (feed paths move).
+  - State Department and MLB candidates returned non-feed/blocked responses that
+    ``parse_feed`` safely refuses.
   - GDELT is JSON/CSV, not RSS/Atom -> it is the SEPARATE slow-path, not this poller.
   - Sports / league feeds: add per the markets you actually trade (operator knows which).
 """
@@ -35,6 +36,23 @@ DEFAULT_ALLOWLIST = (
     Source("cftc-press", "https://www.cftc.gov/RSS/RSSGP/rssgp.xml", PRIMARY),
     # --- PRIMARY: macro econ releases (GDP / personal income / PCE) ---
     Source("bea-news", "https://apps.bea.gov/rss/rss.xml", PRIMARY),
+    # --- PRIMARY: official politics / geopolitics / nuclear-safety releases ---
+    Source("whitehouse-news", "https://www.whitehouse.gov/news/feed/", PRIMARY,
+           publisher_group="whitehouse.gov"),
+    Source(
+        "un-middle-east",
+        "https://news.un.org/feed/subscribe/en/news/region/middle-east/feed/rss.xml",
+        PRIMARY,
+        publisher_group="un.org",
+    ),
+    Source(
+        "war-releases",
+        "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=9&Site=945&max=20",
+        PRIMARY,
+        publisher_group="war.gov",
+    ),
+    Source("iaea-news", "https://www.iaea.org/feeds/topnews", PRIMARY,
+           publisher_group="iaea.org"),
     # --- DISCOVERY: aggregator -- NEVER triggers a trade (legal/ToS is the operator's call) ---
     Source("google-news-top", "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", DISCOVERY),
 )

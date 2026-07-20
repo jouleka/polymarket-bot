@@ -18,6 +18,7 @@ from polybot.hermes.rpc import (
 from polybot.harness.evidence import evaluate_category
 from polybot.ingestion.envelope import make_envelope
 from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
+from polybot.ingestion.news import RecentNewsCache
 from polybot.ingestion.orderbook import LocalBook
 from polybot.resolution.models import (
     PUSD_ADDRESS,
@@ -156,18 +157,35 @@ def _warm_calibration(ledger):
 def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_path):
     config = _config(tmp_path)
     stamper = MonotonicStamper(clock=iter(range(1, 10000)).__next__)
+    recent_news = RecentNewsCache()
+    snapshots = {}
     with EventStore(config.ingestion.db_path) as events:
-        for source, event_id in (("fed-press", "citation-1"),
-                                 ("sec-press", "citation-2")):
-            events.append(make_envelope(
+        for source, event_id in (("un-middle-east", "citation-1"),
+                                 ("iaea-news", "citation-2")):
+            envelope = make_envelope(
                 stamper, source=source, source_tier="PRIMARY",
-                event_id=event_id, content="reviewed evidence",
-            ))
+                event_id=event_id,
+                content="Official evidence about Iran and the reviewed event",
+            )
+            events.append(envelope)
+            snapshots.setdefault(source, []).append(envelope)
         for index in range(60):
-            events.append(make_envelope(
+            envelope = make_envelope(
+                stamper, source="whitehouse-news", source_tier="PRIMARY",
+                event_id=f"unrelated-primary-{index}",
+                content="Newer unrelated official release",
+            )
+            events.append(envelope)
+            snapshots.setdefault("whitehouse-news", []).append(envelope)
+        for index in range(60):
+            envelope = make_envelope(
                 stamper, source="google-news-top", source_tier="DISCOVERY",
                 event_id=f"discovery-{index}", content="newer discovery context",
-            ))
+            )
+            events.append(envelope)
+            snapshots.setdefault("google-news-top", []).append(envelope)
+    for source, envelopes in snapshots.items():
+        recent_news.replace_source(source, envelopes)
     registry = _registry()
     book = _book()
     providers = (_Provider("a"), _Provider("b"))
@@ -194,10 +212,11 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             },
             news_reader=NewsReadView(
                 first.event_reader, allowlist=DEFAULT_ALLOWLIST,
+                query_store=recent_news,
             ),
         )
 
-        def proposal(intent_id):
+        def proposal(intent_id, *, citations=("citation-1", "citation-2")):
             return {
                 "intent_id": intent_id,
                 "token_id": "101",
@@ -209,8 +228,10 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
                 "size_usd_suggestion": "12",
                 "p": "0.90",
                 "p_confidence": "0.75",
-                "citations": ["citation-1", "citation-2"],
+                "citations": list(citations),
             }
+
+        queried_citations = None
 
         async def with_restarted_brain(action):
             socket_path = tmp_path / "whole-slice.sock"
@@ -289,6 +310,7 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
         })
 
         async def successful_proposal(bridge, _socket_path):
+            nonlocal queried_citations
             assert (await bridge.call_tool("get_book", {"token_id": "101"}))[
                 "midpoint"] == "0.50"
             assert (await bridge.call_tool("get_market", {"limit": 1}))[
@@ -299,20 +321,17 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             assert (await bridge.call_tool("get_flags", {}))[
                 "trading_permission"] is False
             evidence_page = await bridge.call_tool(
-                "get_news", {"offset": 0, "limit": 10},
+                "get_news", {"offset": 0, "limit": 10, "query": "iran"},
             )
-            assert [event["citation_id"] for event in evidence_page["events"][:2]] == [
+            assert [event["citation_id"] for event in evidence_page["events"]] == [
                 "citation-2", "citation-1",
             ]
-            assert len(evidence_page["events"]) == 10
-            assert [
-                event["citation_id"] for event in evidence_page["events"][2:]
-            ] == [f"discovery-{index}" for index in range(59, 51, -1)]
-            assert all(
-                event["citation_eligible"] for event in evidence_page["events"][:2]
+            queried_citations = tuple(
+                event["citation_id"] for event in evidence_page["events"]
+                if event["citation_eligible"]
             )
-            assert not any(
-                event["citation_eligible"] for event in evidence_page["events"][2:]
+            assert all(
+                event["citation_eligible"] for event in evidence_page["events"]
             )
             assert all(
                 event["content"].startswith("⟦UNTRUSTED⟧\n")
@@ -321,10 +340,12 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             with pytest.raises(ValueError, match="not approved"):
                 await bridge.call_tool("record_decision", {})
             assert await bridge.call_tool(
-                "propose_trade", proposal("intent-1"),
+                "propose_trade",
+                proposal("intent-1", citations=queried_citations),
             ) is True
 
         asyncio.run(with_restarted_brain(successful_proposal))
+        assert queried_citations == ("citation-2", "citation-1")
         unresolved, = first.resolution_feed.poll((subject,))
         assert unresolved.disposition.value == "UNRESOLVED"
 

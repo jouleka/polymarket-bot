@@ -75,11 +75,16 @@ TOOL_DEFINITIONS = (
         name="get_news",
         description=(
             "Read bounded sanitized untrusted evidence from configured ingestion sources. "
+            "An optional query is a literal case-insensitive content substring, not web search. "
             "Only citation_eligible IDs may be proposed as citations."
         ),
         inputSchema=_object({
             "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
             "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            "query": {
+                "type": "string", "minLength": 1, "maxLength": 128,
+                "pattern": "^[ -~]+$",
+            },
         }),
     ),
     types.Tool(

@@ -867,6 +867,22 @@ outbox, resolution, raw-WS, and profile-local-auth counts remain zero. The disco
 is fixed; the next edge blocker is a separately reviewed market-relevant PRIMARY source coverage
 contract, not a weaker truth gate or synthetic trade. YouTrack evidence is comment `7-383`.
 
+**UPDATE 2026-07-20 — market-relevant PRIMARY source coverage reviewed; landing and installation
+pending.** Owner-approved source identities add exact White House news, UN Middle East, War/Defense
+releases, and IAEA top news as independent PRIMARY publishers while Google remains DISCOVERY. A
+printable-ASCII literal `get_news(query=...)` searches a same-process current-feed cache capped at
+50 items and 4,096 content characters per source; `query=None` retains the existing EventStore path,
+and a missing bounded cache fails closed. The existing poller atomically publishes snapshots after
+successful persistence, so there is no second collector, database migration, persisted-history scan,
+or new authority. Initial independent review rejected a parameterized SQLite version because its
+historical content work grew without bound; that path was removed completely. Exact reviewed head
+`cc1641b` passes 2,410 tests and closing review/mutations pass with zero survivors. The whole slice
+ties queried UN/IAEA citation IDs through proposal, ERS, atomic shadow outboxes, crash/restart replay,
+resolution fanout, and terminal evidence behind unrelated PRIMARY/DISCOVERY traffic. Do not install
+from the development branch: land it first, then use the stopped-first existing-profile runbook.
+Exact evidence is in
+[`VERIFICATION-POL13-PRIMARY-SOURCE-COVERAGE.md`](VERIFICATION-POL13-PRIMARY-SOURCE-COVERAGE.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing
