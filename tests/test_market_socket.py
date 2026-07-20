@@ -318,7 +318,7 @@ def test_socket_skips_pong_keepalive_reply_without_halt():
     assert book.best_ask() == Decimal("0.62")  # ...and the loop kept consuming past the trailing PONG
 
 
-def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5():
+def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5(caplog):
     """Production regression: a quiet shard used to stay connected on PONG while
     ``last_frame_at`` crossed the 30-second L5 deadline, permanently halting ERS.
     At the 20-second refresh boundary the responsive socket must be abandoned and
@@ -359,6 +359,7 @@ def test_socket_resnapshots_a_responsive_market_silent_connection_before_l5():
 
     assert t2.sent[0] == json.dumps({"type": "market", "assets_ids": ["A"]})
     assert stream.book_for("A").best_bid() == Decimal("0.61")
+    assert "market shard silent; reconnecting for fresh snapshots" in caplog.text
 
 
 def test_silence_timer_gives_each_replacement_connection_its_full_grace():

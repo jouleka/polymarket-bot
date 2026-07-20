@@ -22,11 +22,13 @@ the ``"PONG"`` reply is non-JSON and is dropped by the malformed-frame skip.
 
 import asyncio
 import json
+import logging
 import math
 import time
 from json import JSONDecodeError
 
 _DIVERGENCE_HISTORY_LIMIT = 8
+log = logging.getLogger(__name__)
 
 
 class MarketSocket:
@@ -97,6 +99,10 @@ class MarketSocket:
                         async for frame in transport:
                             if (frame == "PONG"
                                     and self._market_silence_resnapshot_due(connected_at)):
+                                log.warning(
+                                    "market shard silent; reconnecting for fresh snapshots "
+                                    "(assets=%d)", len(self._asset_ids),
+                                )
                                 # Revoke this generation before teardown can yield.
                                 # Only the replacement subscription's real BOOK can
                                 # make it authoritative again.
