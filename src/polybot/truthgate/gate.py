@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from polybot.ingestion.news import PRIMARY
+from polybot.storage.market_memory import EventQueryTooBroad
 
 
 REASON_TRUTH_GATE_REFUSE = "truth_gate_refuse"
@@ -74,18 +75,28 @@ def _primary_matches_per_citation(citations, *, event_store, by_name):
     {citation: [(envelope, publisher_group), ...]}. Citations are matched, never
     fetched. DISCOVERY / non-allowlisted envelopes never appear (they cannot count
     toward, or defend against, anything)."""
+    citation_values = tuple(sorted(set(citations)))
+    source_names = tuple(sorted(
+        name for name, (tier, _group) in by_name.items() if tier == PRIMARY
+    ))
+    try:
+        candidates = event_store.matching_citations(
+            citation_values, source_names, max_matches=1024,
+        )
+    except EventQueryTooBroad:
+        return {citation: [] for citation in citation_values}
     primaries = []
-    for env in event_store.all():
+    for env in candidates:
         meta = by_name.get(env.source)
         if meta is None:
             continue                          # not allowlisted -> dropped
         tier, group = meta
-        if tier != PRIMARY:
+        if tier != PRIMARY or env.source_tier != PRIMARY:
             continue                          # DISCOVERY never counts / triggers
         primaries.append((env, group))
 
     per_citation = {}
-    for citation in set(citations):
+    for citation in citation_values:
         per_citation[citation] = [(env, group) for env, group in primaries
                                   if _matches_citation(env, citation)]
     return per_citation

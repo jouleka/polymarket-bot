@@ -126,3 +126,22 @@ def test_recent_by_sources_is_bounded_newest_first_for_writer_and_read_only_read
         assert [event.event_id for event in reader.recent_by_sources(
             ("primary-a", "primary-b"), offset=0, limit=2,
         )] == ["new-news", "mid-news"]
+
+
+def test_matching_citations_queries_only_exact_sources_ids_and_entities(tmp_path):
+    path = str(tmp_path / "mm.db")
+    with EventStore(path) as store:
+        store.append(_env("direct", 10, source="primary-a"))
+        store.append(_env(
+            "via-entity", 20, source="primary-b", entities=("linked",),
+        ))
+        store.append(_env("direct", 30, source="data-api"))
+        store.append(_env("irrelevant", 40, source="primary-a"))
+
+        matches = store.matching_citations(
+            ("direct", "linked"), ("primary-a", "primary-b"), max_matches=10,
+        )
+
+    assert [(event.source, event.event_id) for event in matches] == [
+        ("primary-a", "direct"), ("primary-b", "via-entity"),
+    ]
