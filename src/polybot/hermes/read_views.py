@@ -15,7 +15,8 @@ class ReadViewUnavailable(LookupError):
 class MarketReadView:
     """Bounded projection over the current fixed-universe registry generation."""
 
-    def __init__(self, registry_provider, *, default_limit=25, max_limit=50):
+    def __init__(self, registry_provider, *, default_limit=25, max_limit=50,
+                 live_token_ids=None):
         if (isinstance(default_limit, bool) or not isinstance(default_limit, int)
                 or isinstance(max_limit, bool) or not isinstance(max_limit, int)
                 or default_limit <= 0 or max_limit <= 0 or default_limit > max_limit):
@@ -23,6 +24,9 @@ class MarketReadView:
         self._provider = registry_provider
         self._default_limit = default_limit
         self._max_limit = max_limit
+        if live_token_ids is not None and not callable(live_token_ids):
+            raise TypeError("live_token_ids must be callable when configured")
+        self._live_token_ids = live_token_ids
 
     def __call__(self, *, condition_id=None, token_id=None, offset=0, limit=None):
         for name, value in (("condition_id", condition_id), ("token_id", token_id)):
@@ -39,6 +43,13 @@ class MarketReadView:
             raise ValueError("select a market by condition_id or token_id, not both")
 
         registry = self._provider.require_fresh()
+        live_tokens = None
+        if self._live_token_ids is not None:
+            values = tuple(self._live_token_ids())
+            if (len(values) != len(set(values))
+                    or any(not isinstance(value, str) or not value for value in values)):
+                raise ReadViewUnavailable("live book inventory is unavailable")
+            live_tokens = frozenset(values)
         rows = []
         for raw in self._provider.market_rows:
             market = normalize_market(raw)
@@ -89,6 +100,8 @@ class MarketReadView:
                         "label": outcome.name,
                         "token_id": outcome.token_id,
                         "outcome_slot": index,
+                        **({"live_book": outcome.token_id in live_tokens}
+                           if live_tokens is not None else {}),
                     }
                     for index, outcome in enumerate(market.outcomes)
                 ],

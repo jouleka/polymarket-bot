@@ -118,6 +118,25 @@ def test_market_reader_prioritizes_nearest_positive_deadline_before_expired_rows
     ]
 
 
+def test_market_reader_samples_shared_live_tokens_once_and_marks_each_outcome():
+    from polybot.hermes.read_views import MarketReadView
+
+    provider, _condition_id = _registry_provider()
+    calls = []
+
+    def live_tokens():
+        calls.append(True)
+        return ("11",)
+
+    page = MarketReadView(provider, live_token_ids=live_tokens)()
+
+    assert calls == [True]
+    assert page["markets"][0]["outcomes"] == [
+        {"label": "Yes", "token_id": "11", "outcome_slot": 0, "live_book": True},
+        {"label": "No", "token_id": "22", "outcome_slot": 1, "live_book": False},
+    ]
+
+
 def test_market_reader_rejects_noncanonical_selectors_instead_of_returning_empty():
     from polybot.hermes.read_views import MarketReadView
 
