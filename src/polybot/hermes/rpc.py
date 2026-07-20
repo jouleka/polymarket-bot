@@ -163,7 +163,9 @@ class ProposalRpcDispatcher:
             _exact_keys(values, set())
             return values
         if method == "get_news":
-            _exact_keys(values, set(), {"offset", "limit"})
+            _exact_keys(values, set(), {"offset", "limit", "query"})
+            if "query" in values:
+                values["query"] = _text(values["query"], "news query", 128)
             for name in ("offset", "limit"):
                 if name in values:
                     values[name] = _integer(
