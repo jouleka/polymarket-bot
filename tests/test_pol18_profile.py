@@ -825,6 +825,7 @@ def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     assert "not web search" in prompt
     assert "`citation_eligible=true`" in prompt
     assert "returned `citation_id`" in prompt
+    assert "Never synthesize a\n   proposal merely to exercise plumbing" in prompt
 
 
 def test_activation_requires_nonempty_owner_selected_model_and_provider():

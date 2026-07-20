@@ -216,7 +216,7 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             ),
         )
 
-        def proposal(intent_id):
+        def proposal(intent_id, *, citations=("citation-1", "citation-2")):
             return {
                 "intent_id": intent_id,
                 "token_id": "101",
@@ -228,8 +228,10 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
                 "size_usd_suggestion": "12",
                 "p": "0.90",
                 "p_confidence": "0.75",
-                "citations": ["citation-1", "citation-2"],
+                "citations": list(citations),
             }
+
+        queried_citations = None
 
         async def with_restarted_brain(action):
             socket_path = tmp_path / "whole-slice.sock"
@@ -308,6 +310,7 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
         })
 
         async def successful_proposal(bridge, _socket_path):
+            nonlocal queried_citations
             assert (await bridge.call_tool("get_book", {"token_id": "101"}))[
                 "midpoint"] == "0.50"
             assert (await bridge.call_tool("get_market", {"limit": 1}))[
@@ -323,6 +326,10 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             assert [event["citation_id"] for event in evidence_page["events"]] == [
                 "citation-2", "citation-1",
             ]
+            queried_citations = tuple(
+                event["citation_id"] for event in evidence_page["events"]
+                if event["citation_eligible"]
+            )
             assert all(
                 event["citation_eligible"] for event in evidence_page["events"]
             )
@@ -333,10 +340,12 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             with pytest.raises(ValueError, match="not approved"):
                 await bridge.call_tool("record_decision", {})
             assert await bridge.call_tool(
-                "propose_trade", proposal("intent-1"),
+                "propose_trade",
+                proposal("intent-1", citations=queried_citations),
             ) is True
 
         asyncio.run(with_restarted_brain(successful_proposal))
+        assert queried_citations == ("citation-2", "citation-1")
         unresolved, = first.resolution_feed.poll((subject,))
         assert unresolved.disposition.value == "UNRESOLVED"
 
