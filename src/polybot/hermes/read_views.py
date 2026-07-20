@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import unicodedata
 
 from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.ingestion.gamma import normalize_market
@@ -54,7 +55,7 @@ class NewsReadView:
         self._max_offset = max_offset
         self._max_content_chars = max_content_chars
 
-    def __call__(self, *, offset=0, limit=None):
+    def __call__(self, *, offset=0, limit=None, query=None):
         if (isinstance(offset, bool) or not isinstance(offset, int)
                 or not 0 <= offset <= self._max_offset):
             raise ValueError(f"news offset must be in [0, {self._max_offset}]")
@@ -63,12 +64,17 @@ class NewsReadView:
         if (isinstance(limit, bool) or not isinstance(limit, int)
                 or limit <= 0 or limit > self._max_limit):
             raise ValueError(f"news limit must be in [1, {self._max_limit}]")
+        if query is not None and (
+                not isinstance(query, str) or not query or len(query) > 128
+                or any(unicodedata.category(char).startswith("C") for char in query)):
+            raise ValueError("news query must be a bounded exact string")
         payload_limit = self._max_content_chars - (2 * len(_SPOTLIGHT_MARKER) + 2)
         envelopes = self._recent(
             self._source_names, offset=offset, limit=limit,
             max_content_chars=payload_limit,
             max_event_id_chars=_MAX_CITATION_CHARS,
             priority_sources=self._priority_source_names,
+            content_query=query,
         )
         rows = []
         for envelope in envelopes:
