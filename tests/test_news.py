@@ -298,10 +298,32 @@ def test_default_allowlist_all_entries_construct_with_a_group():
     and exposes a non-empty publisher_group (explicit or derived)."""
     from polybot.ingestion.allowlist import DEFAULT_ALLOWLIST
 
-    assert len(DEFAULT_ALLOWLIST) == 6
+    assert len(DEFAULT_ALLOWLIST) == 10
     for s in DEFAULT_ALLOWLIST:
         assert s.publisher_group, f"empty publisher_group for {s.name}"
     by_name = {s.name: s for s in DEFAULT_ALLOWLIST}
     assert by_name["bea-news"].publisher_group == "bea.gov"          # apps.bea.gov -> bea.gov
     assert by_name["cftc-press"].publisher_group == "cftc.gov"
     assert by_name["google-news-top"].publisher_group == "google.com"
+    assert {
+        name: (by_name[name].url, by_name[name].tier, by_name[name].publisher_group)
+        for name in ("whitehouse-news", "un-middle-east", "war-releases", "iaea-news")
+    } == {
+        "whitehouse-news": (
+            "https://www.whitehouse.gov/news/feed/", PRIMARY, "whitehouse.gov",
+        ),
+        "un-middle-east": (
+            "https://news.un.org/feed/subscribe/en/news/region/middle-east/feed/rss.xml",
+            PRIMARY,
+            "un.org",
+        ),
+        "war-releases": (
+            "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=9&Site=945&max=20",
+            PRIMARY,
+            "war.gov",
+        ),
+        "iaea-news": (
+            "https://www.iaea.org/feeds/topnews", PRIMARY, "iaea.org",
+        ),
+    }
+    assert by_name["google-news-top"].tier == DISCOVERY
