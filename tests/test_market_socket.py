@@ -537,6 +537,14 @@ def test_socket_rejects_nonfinite_market_silence_resnapshot_deadlines(seconds):
         )
 
 
+def test_socket_rejects_a_noncallable_silence_clock_at_construction():
+    """The health clock is a construction-time safety dependency; delaying this
+    failure until the first live connection would tear down the supervised runtime.
+    """
+    with pytest.raises(TypeError, match="clock_ns"):
+        MarketSocket(lambda: None, _stream(), asset_ids=["A"], clock_ns=None)
+
+
 def test_socket_marks_books_stale_on_disconnect():
     # Book built on t1, then a disconnect; t2 reconnects but sends no resync yet,
     # so the book must read stale (ERS must not size off it until a fresh snapshot).
