@@ -15,6 +15,10 @@ class _Facade:
         self.calls.append(("get_book", params))
         return {"token_id": params["token_id"], "midpoint": "0.4200"}
 
+    def get_news(self, **params):
+        self.calls.append(("get_news", params))
+        return {"events": [], **params}
+
     def propose_trade(self, *args, **params):
         self.calls.append(("propose_trade", args, params))
         return True
@@ -65,6 +69,40 @@ def test_rpc_dispatches_one_approved_read_and_preserves_decimal_strings():
         "result": {"token_id": "11", "midpoint": "0.4200"},
     }
     assert facade.calls == [("get_book", {"token_id": "11"})]
+
+
+def test_rpc_dispatches_only_bounded_news_pagination_parameters():
+    from polybot.hermes.rpc import ProposalRpcDispatcher
+
+    facade = _Facade()
+    request = _wire({
+        "version": 1,
+        "id": "news-request",
+        "method": "get_news",
+        "params": {"offset": 5, "limit": 10},
+    })
+
+    response = json.loads(ProposalRpcDispatcher(facade).handle(request))
+
+    assert response["result"] == {"events": [], "offset": 5, "limit": 10}
+    assert facade.calls == [("get_news", {"offset": 5, "limit": 10})]
+
+
+def test_rpc_rejects_news_pagination_beyond_fixed_bounds_before_facade():
+    import pytest
+
+    from polybot.hermes.rpc import ProposalRpcDispatcher, RpcProtocolError
+
+    for params in ({"offset": 1001, "limit": 1}, {"offset": 0, "limit": 51}):
+        facade = _Facade()
+        request = _wire({
+            "version": 1, "id": "news-bound", "method": "get_news",
+            "params": params,
+        })
+
+        with pytest.raises(RpcProtocolError, match="integer"):
+            ProposalRpcDispatcher(facade).handle(request)
+        assert facade.calls == []
 
 
 def test_rpc_rejects_json_float_before_the_proposal_facade():
@@ -139,6 +177,7 @@ def test_rpc_rejects_missing_and_extra_method_parameters_before_the_facade():
         ("get_book", {}),
         ("get_book", {"token_id": "11", "unexpected": True}),
         ("get_flags", {"unexpected": True}),
+        ("get_news", {"unexpected": True}),
         ("get_market", {"unexpected": True}),
         ("get_ledger", {"unexpected": True}),
         ("propose_trade", extra_proposal),

@@ -175,7 +175,14 @@ def test_root_composes_propose_only_server_without_a_second_store_or_collector(t
         flags = runtime._proposal_facade.get_flags()
         assert flags["runtime_ready"] is False
         assert flags["trading_permission"] is False
-        assert runtime._proposal_facade.get_market(limit=1)["total"] == 1
+        market = runtime._proposal_facade.get_market(limit=1)
+        assert market["total"] == 1
+        assert [outcome["live_book"] for outcome in market["markets"][0]["outcomes"]] == [
+            False, False,
+        ]
+        news_reader = runtime._proposal_facade._ProposeOnlyFacade__news_reader
+        assert news_reader._recent.__self__ is runtime._components.event_reader
+        assert runtime._proposal_facade.get_news(limit=1)["events"] == []
     finally:
         runtime.close_unstarted()
 
@@ -235,6 +242,10 @@ def test_root_advertises_only_live_books_with_current_registry_authority(tmp_pat
         runtime._registry_provider.refresh()
 
         assert runtime._proposal_facade.get_flags()["live_book_tokens"] == ["101"]
+        first_market = runtime._proposal_facade.get_market(token_id="101")["markets"][0]
+        assert [outcome["live_book"] for outcome in first_market["outcomes"]] == [
+            True, False,
+        ]
         assert runtime._proposal_facade.get_market(token_id="303")["total"] == 0
         with pytest.raises(LookupError, match="unavailable|stale"):
             runtime._proposal_facade.get_book(token_id="303")

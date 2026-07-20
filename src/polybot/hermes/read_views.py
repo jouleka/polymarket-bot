@@ -6,16 +6,99 @@ from types import SimpleNamespace
 
 from polybot.ers.market_meta import MarketMetadataUnavailable
 from polybot.ingestion.gamma import normalize_market
+from polybot.ingestion.sanitizer import sanitize
 
 
 class ReadViewUnavailable(LookupError):
     """A sanitized view has no current trustworthy value."""
 
 
+_SPOTLIGHT_MARKER = "⟦UNTRUSTED⟧"
+_MAX_CITATION_CHARS = 2048
+
+
+class NewsReadView:
+    """Bounded sanitized evidence projection over configured ingestion sources."""
+
+    def __init__(self, event_store, *, allowlist, default_limit=25, max_limit=50,
+                 max_offset=1000, max_content_chars=4096):
+        recent = getattr(event_store, "recent_by_sources", None)
+        if not callable(recent):
+            raise TypeError("news event store must expose bounded recent source reads")
+        sources = tuple(allowlist)
+        names = tuple(source.name for source in sources)
+        if (not sources or len(names) != len(set(names))
+                or any(not isinstance(name, str) or not name for name in names)):
+            raise ValueError("news allowlist must contain unique named sources")
+        if (isinstance(default_limit, bool) or not isinstance(default_limit, int)
+                or isinstance(max_limit, bool) or not isinstance(max_limit, int)
+                or default_limit <= 0 or max_limit <= 0 or default_limit > max_limit):
+            raise ValueError("news view limits must be positive and bounded")
+        if (isinstance(max_offset, bool) or not isinstance(max_offset, int)
+                or max_offset < 0):
+            raise ValueError("news offset bound must be a non-negative integer")
+        minimum_content = 2 * len(_SPOTLIGHT_MARKER) + 3
+        if (isinstance(max_content_chars, bool)
+                or not isinstance(max_content_chars, int)
+                or max_content_chars < minimum_content):
+            raise ValueError("news content bound is too small for safe spotlighting")
+        self._recent = recent
+        self._sources = sources
+        self._source_names = names
+        self._source_by_name = {source.name: source for source in sources}
+        self._default_limit = default_limit
+        self._max_limit = max_limit
+        self._max_offset = max_offset
+        self._max_content_chars = max_content_chars
+
+    def __call__(self, *, offset=0, limit=None):
+        if (isinstance(offset, bool) or not isinstance(offset, int)
+                or not 0 <= offset <= self._max_offset):
+            raise ValueError(f"news offset must be in [0, {self._max_offset}]")
+        if limit is None:
+            limit = self._default_limit
+        if (isinstance(limit, bool) or not isinstance(limit, int)
+                or limit <= 0 or limit > self._max_limit):
+            raise ValueError(f"news limit must be in [1, {self._max_limit}]")
+        payload_limit = self._max_content_chars - (2 * len(_SPOTLIGHT_MARKER) + 2)
+        envelopes = self._recent(
+            self._source_names, offset=offset, limit=limit,
+            max_content_chars=payload_limit,
+            max_event_id_chars=_MAX_CITATION_CHARS,
+        )
+        rows = []
+        for envelope in envelopes:
+            source = self._source_by_name.get(getattr(envelope, "source", None))
+            published_at = getattr(envelope, "published_at", None)
+            event_id = getattr(envelope, "event_id", None)
+            content = getattr(envelope, "content", None)
+            if (source is None
+                    or getattr(envelope, "source_tier", None) != source.tier
+                    or getattr(envelope, "trust", None) != "UNTRUSTED"
+                    or not isinstance(event_id, str) or not event_id
+                    or len(event_id) > _MAX_CITATION_CHARS
+                    or not isinstance(content, str)
+                    or (published_at is not None and (
+                        isinstance(published_at, bool) or not isinstance(published_at, int)
+                    ))):
+                continue
+            rows.append({
+                "source": source.name,
+                "source_tier": source.tier,
+                "publisher_group": source.publisher_group,
+                "citation_eligible": source.tier == "PRIMARY",
+                "citation_id": event_id,
+                "published_at": published_at,
+                "content": sanitize(content[:payload_limit]),
+            })
+        return {"offset": offset, "limit": limit, "events": rows}
+
+
 class MarketReadView:
     """Bounded projection over the current fixed-universe registry generation."""
 
-    def __init__(self, registry_provider, *, default_limit=25, max_limit=50):
+    def __init__(self, registry_provider, *, default_limit=25, max_limit=50,
+                 live_token_ids=None):
         if (isinstance(default_limit, bool) or not isinstance(default_limit, int)
                 or isinstance(max_limit, bool) or not isinstance(max_limit, int)
                 or default_limit <= 0 or max_limit <= 0 or default_limit > max_limit):
@@ -23,6 +106,9 @@ class MarketReadView:
         self._provider = registry_provider
         self._default_limit = default_limit
         self._max_limit = max_limit
+        if live_token_ids is not None and not callable(live_token_ids):
+            raise TypeError("live_token_ids must be callable when configured")
+        self._live_token_ids = live_token_ids
 
     def __call__(self, *, condition_id=None, token_id=None, offset=0, limit=None):
         for name, value in (("condition_id", condition_id), ("token_id", token_id)):
@@ -39,6 +125,13 @@ class MarketReadView:
             raise ValueError("select a market by condition_id or token_id, not both")
 
         registry = self._provider.require_fresh()
+        live_tokens = None
+        if self._live_token_ids is not None:
+            values = tuple(self._live_token_ids())
+            if (len(values) != len(set(values))
+                    or any(not isinstance(value, str) or not value for value in values)):
+                raise ReadViewUnavailable("live book inventory is unavailable")
+            live_tokens = frozenset(values)
         rows = []
         for raw in self._provider.market_rows:
             market = normalize_market(raw)
@@ -89,11 +182,17 @@ class MarketReadView:
                         "label": outcome.name,
                         "token_id": outcome.token_id,
                         "outcome_slot": index,
+                        **({"live_book": outcome.token_id in live_tokens}
+                           if live_tokens is not None else {}),
                     }
                     for index, outcome in enumerate(market.outcomes)
                 ],
             })
-        rows.sort(key=lambda item: item["condition_id"])
+        rows.sort(key=lambda item: (
+            item["seconds_to_resolution"] == 0,
+            item["seconds_to_resolution"],
+            item["condition_id"],
+        ))
         total = len(rows)
         return {
             "offset": offset,

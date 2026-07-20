@@ -1,4 +1,4 @@
-"""Exact-five-tool stdio MCP bridge to POL-17's Unix proposal endpoint."""
+"""Exact-six-tool stdio MCP bridge to POL-17's Unix proposal endpoint."""
 
 from __future__ import annotations
 
@@ -70,6 +70,17 @@ TOOL_DEFINITIONS = (
         name="get_book",
         description="Read one current shared live book; stale books fail closed.",
         inputSchema=_object({"token_id": _STRING}, required=("token_id",)),
+    ),
+    types.Tool(
+        name="get_news",
+        description=(
+            "Read bounded sanitized untrusted evidence from configured ingestion sources. "
+            "Only citation_eligible IDs may be proposed as citations."
+        ),
+        inputSchema=_object({
+            "offset": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        }),
     ),
     types.Tool(
         name="get_ledger",
