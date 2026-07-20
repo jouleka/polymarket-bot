@@ -1,7 +1,7 @@
 # VERIFICATION — POL-13 Hermes opportunity discovery correction
 
-**Date:** 2026-07-20  
-**Reviewed implementation head:** `2f60a99`  
+**Date:** 2026-07-20
+**Reviewed implementation head:** `2f60a99`
 **Result:** build PASS; installation and live verification pending
 
 ## 1. Live diagnosis

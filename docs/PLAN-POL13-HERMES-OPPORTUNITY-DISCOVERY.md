@@ -40,4 +40,3 @@ No production file or service changes occur until the reviewed branch is complet
    runtime-authority expansion.
 3. Re-review every fix, rerun the entire suite, remove mutation residue/caches, and require a clean
    tree before publication or installation.
-
