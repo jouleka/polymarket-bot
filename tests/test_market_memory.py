@@ -131,9 +131,13 @@ def test_recent_by_sources_is_bounded_newest_first_for_writer_and_read_only_read
 def test_matching_citations_queries_only_exact_sources_ids_and_entities(tmp_path):
     path = str(tmp_path / "mm.db")
     with EventStore(path) as store:
-        store.append(_env("direct", 10, source="primary-a"))
         store.append(_env(
-            "via-entity", 20, source="primary-b", entities=("linked",),
+            "direct", 10, source="primary-a", content="x" * 100_000,
+            market_links=("m" * 100_000,),
+        ))
+        store.append(_env(
+            "via-entity", 20, source="primary-b", content="y" * 100_000,
+            entities=("linked", "e" * 100_000), market_links=("n" * 100_000,),
         ))
         store.append(_env("direct", 30, source="data-api"))
         store.append(_env("irrelevant", 40, source="primary-a"))
@@ -145,3 +149,26 @@ def test_matching_citations_queries_only_exact_sources_ids_and_entities(tmp_path
     assert [(event.source, event.event_id) for event in matches] == [
         ("primary-a", "direct"), ("primary-b", "via-entity"),
     ]
+    assert [event.content for event in matches] == ["", ""]
+    assert [event.entities for event in matches] == [(), ("linked",)]
+    assert [event.market_links for event in matches] == [(), ()]
+
+
+def test_recent_sources_bounds_fields_in_sql_before_python_projection(tmp_path):
+    path = str(tmp_path / "mm.db")
+    with EventStore(path) as store:
+        store.append(_env(
+            "usable-id", 10, source="primary-a", content="x" * 100_000,
+            entities=("e" * 100_000,), market_links=("m" * 100_000,),
+        ))
+        store.append(_env("i" * 17, 20, source="primary-a", content="hidden"))
+
+        events = store.recent_by_sources(
+            ("primary-a",), offset=0, limit=10,
+            max_content_chars=32, max_event_id_chars=16,
+        )
+
+    assert [event.event_id for event in events] == ["usable-id"]
+    assert events[0].content == "x" * 32
+    assert events[0].entities == ()
+    assert events[0].market_links == ()

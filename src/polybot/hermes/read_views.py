@@ -14,6 +14,7 @@ class ReadViewUnavailable(LookupError):
 
 
 _SPOTLIGHT_MARKER = "⟦UNTRUSTED⟧"
+_MAX_CITATION_CHARS = 2048
 
 
 class NewsReadView:
@@ -59,9 +60,13 @@ class NewsReadView:
         if (isinstance(limit, bool) or not isinstance(limit, int)
                 or limit <= 0 or limit > self._max_limit):
             raise ValueError(f"news limit must be in [1, {self._max_limit}]")
-        envelopes = self._recent(self._source_names, offset=offset, limit=limit)
-        rows = []
         payload_limit = self._max_content_chars - (2 * len(_SPOTLIGHT_MARKER) + 2)
+        envelopes = self._recent(
+            self._source_names, offset=offset, limit=limit,
+            max_content_chars=payload_limit,
+            max_event_id_chars=_MAX_CITATION_CHARS,
+        )
+        rows = []
         for envelope in envelopes:
             source = self._source_by_name.get(getattr(envelope, "source", None))
             published_at = getattr(envelope, "published_at", None)
@@ -71,6 +76,7 @@ class NewsReadView:
                     or getattr(envelope, "source_tier", None) != source.tier
                     or getattr(envelope, "trust", None) != "UNTRUSTED"
                     or not isinstance(event_id, str) or not event_id
+                    or len(event_id) > _MAX_CITATION_CHARS
                     or not isinstance(content, str)
                     or (published_at is not None and (
                         isinstance(published_at, bool) or not isinstance(published_at, int)

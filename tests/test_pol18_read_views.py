@@ -275,11 +275,18 @@ def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evide
             source="discovery-a", source_tier=DISCOVERY, event_id="discovery-id",
             observed_at=10, content="discovery headline",
         ),
+        Envelope(
+            source="primary-a", source_tier=PRIMARY, event_id="x" * 2049,
+            observed_at=9, content="unsubmittable identity",
+        ),
     ]
 
     class Store:
-        def recent_by_sources(self, sources, *, offset, limit):
-            calls.append((sources, offset, limit))
+        def recent_by_sources(self, sources, *, offset, limit,
+                              max_content_chars, max_event_id_chars):
+            calls.append((
+                sources, offset, limit, max_content_chars, max_event_id_chars,
+            ))
             return events
 
     allowlist = (
@@ -293,7 +300,7 @@ def test_news_reader_returns_bounded_allowlisted_tier_consistent_sanitized_evide
         Store(), allowlist=allowlist, max_content_chars=64,
     )(offset=2, limit=3)
 
-    assert calls == [(("primary-a", "discovery-a"), 2, 3)]
+    assert calls == [(('primary-a', 'discovery-a'), 2, 3, 40, 2048)]
     assert [event["citation_id"] for event in page["events"]] == [
         "primary-id", "discovery-id",
     ]
