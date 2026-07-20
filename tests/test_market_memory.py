@@ -6,6 +6,8 @@ replay is in observed_at order with no look-ahead.
 
 import threading
 
+import pytest
+
 from polybot.core.models import Envelope
 from polybot.storage.market_memory import EventStore, ReadOnlyEventStore
 
@@ -146,6 +148,24 @@ def test_recent_sources_reserve_priority_evidence_ahead_of_discovery_flood(tmp_p
 
     assert events[0].event_id == "primary-old"
     assert [event.observed_at for event in events[1:]] == list(range(61, 12, -1))
+
+
+@pytest.mark.parametrize("override", [
+    {"priority_sources": ("outside-allowlist",)},
+    {"offset": 1001},
+    {"limit": 51},
+])
+def test_recent_sources_reject_priority_escape_and_pagination_overflow(
+        tmp_path, override):
+    with EventStore(str(tmp_path / "mm.db")) as store:
+        params = {
+            "offset": 0,
+            "limit": 1,
+            "priority_sources": ("primary-a",),
+        }
+        params.update(override)
+        with pytest.raises(ValueError):
+            store.recent_by_sources(("primary-a",), **params)
 
 
 def test_matching_citations_queries_only_exact_sources_ids_and_entities(tmp_path):

@@ -304,6 +304,10 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             assert [event["citation_id"] for event in evidence_page["events"][:2]] == [
                 "citation-2", "citation-1",
             ]
+            assert len(evidence_page["events"]) == 10
+            assert [
+                event["citation_id"] for event in evidence_page["events"][2:]
+            ] == [f"discovery-{index}" for index in range(59, 51, -1)]
             assert all(
                 event["citation_eligible"] for event in evidence_page["events"][:2]
             )
