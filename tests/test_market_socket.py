@@ -401,6 +401,96 @@ def test_silence_timer_gives_each_replacement_connection_its_full_grace():
     assert stream.last_frame_at() == retained_stamp  # PONG is never market health
 
 
+def test_silence_resnapshot_revokes_books_before_transport_close_awaits():
+    """A sibling controller task must never execute from the abandoned generation
+    while close awaits.  The transport observes the book already stale at entry.
+    Kills: moving mark_all_stale below _safe_close or relying on reconnect snapshots.
+    """
+    observed = []
+    stream = _stream()
+
+    class CloseObserver(IdleAfterFramesTransport):
+        async def close(self):
+            observed.append(stream.book_for("A").is_stale())
+            await asyncio.sleep(0)
+
+    t1 = CloseObserver([_book_frame("A", "0.60", "0.62"), "PONG"])
+
+    async def connect():
+        return t1
+
+    clock_values = iter((0, 20_000_000_001))
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(),
+        clock_ns=lambda: next(clock_values, 20_000_000_002),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=1))
+        try:
+            for _ in range(100):
+                if observed:
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert observed == [True]
+
+
+def test_repeated_silence_resnapshots_do_not_consume_divergence_budget():
+    """Quiet responsive connections are not irreconcilable book divergence.
+    Even with a one-attempt divergence budget, repeated silence refreshes continue
+    until real replacement snapshots arrive.  Kills: sharing the resync counter.
+    """
+    transports = (
+        IdleAfterFramesTransport([_book_frame("A", "0.60", "0.62"), "PONG"]),
+        IdleAfterFramesTransport([_book_frame("A", "0.61", "0.63"), "PONG"]),
+        IdleAfterFramesTransport([_book_frame("A", "0.62", "0.64")]),
+    )
+    transport_iter = iter(transports)
+
+    async def connect():
+        return next(transport_iter)
+
+    clock_values = iter((
+        0, 20_000_000_001,
+        20_000_000_002, 40_000_000_003,
+        40_000_000_004,
+    ))
+    stream = _stream()
+    socket = MarketSocket(
+        connect, stream, asset_ids=["A"], sleep=RecordingSleep(), max_resyncs=1,
+        clock_ns=lambda: next(clock_values, 40_000_000_004),
+    )
+
+    async def drive():
+        task = asyncio.create_task(socket.run(max_connections=3))
+        try:
+            for _ in range(200):
+                book = stream.book_for("A")
+                if transports[2].sent and book.best_bid() == Decimal("0.62"):
+                    break
+                await asyncio.sleep(0)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(drive())
+
+    assert all(transport.sent for transport in transports)
+    assert stream.book_for("A").best_bid() == Decimal("0.62")
+
+
 def test_socket_keepalive_send_failure_does_not_trigger_spurious_reconnect():
     # The keepalive is best-effort: if a PING send fails, that must NOT be re-raised
     # through run's teardown and mistaken for a disconnect. The receive loop is the
