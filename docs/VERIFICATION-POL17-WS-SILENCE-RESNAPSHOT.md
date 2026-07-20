@@ -56,7 +56,7 @@ finding, the complete tmpfs suite passes 2,379 tests.
 
 ## Adversarial mutation battery
 
-The isolated battery covers five safety mutations:
+The isolated battery covers seven safety mutations:
 
 | Mutation | Named test | Result |
 |---|---|---|

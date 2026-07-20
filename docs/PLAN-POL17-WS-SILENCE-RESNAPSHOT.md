@@ -13,4 +13,3 @@
 8. Push and merge, install while preserving production databases/configuration, controlled-restart
    the already-approved paper services, and verify clean reconciliation, current books, memory,
    outboxes, and persistence shape.
-
