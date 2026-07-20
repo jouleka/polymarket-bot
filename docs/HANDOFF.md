@@ -1,4 +1,4 @@
-# HANDOFF — autonomous Polymarket bot (state as of 2026-07-19)
+# HANDOFF — autonomous Polymarket bot (state as of 2026-07-20)
 
 You are taking over an in-progress build. Read this top to bottom, then read the linked docs + the
 YouTrack comments, then start at **"Your task"**. The conventions are ENFORCED — do not skip them.
@@ -806,6 +806,21 @@ missing-lock writer request was rejected without changing root auth. Both paper/
 active+enabled; the writer socket is static/on-demand with no idle instance. The first genuine cron
 job completed `ok` at 11:11:04 UTC with zero pending intents/outboxes. Continue observation
 through a natural token-refresh boundary; no signer or live-money authority exists.
+
+**UPDATE 2026-07-20 — extended soak exposed a quiet-shard L5 false halt; corrective branch under
+release review.** Both services ran for about 31.5 hours with zero process restarts or OOM, and a
+natural Codex token save proved root-only auth persistence while profile-local auth/env remained
+absent.  At 01:08:33 UTC, ERS correctly entered sticky `HALTED` with `l5_ws_down`; the live collector
+later recovered to a fresh registry and 62 usable books, but sticky safety correctly did not
+auto-resume.  All proposals, fills, executions, trades, resolutions, and outboxes remained zero;
+raw `clob-ws` persistence remained zero.  The cause is a responsive shard with no real market frame
+inside the immutable 30-second L5 window.  Branch `pol-17-ws-silence-resnapshot` makes an exact
+`PONG` trigger a proactive reconnect/resubscribe after 10 seconds, while marking books stale before
+teardown and requiring real replacement snapshots for authority.  PONG never stamps market health;
+threshold plus keepalive cadence is capped at 20 seconds to reserve at least 10 seconds before L5;
+failed recovery still reaches the unchanged sticky halt.  Strict serial TDD, 2,379 closing tests,
+and the isolated mutation battery pass; independent re-review remains before landing/install/restart.  Exact evidence is in
+[`VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md`](VERIFICATION-POL17-WS-SILENCE-RESNAPSHOT.md).
 
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and

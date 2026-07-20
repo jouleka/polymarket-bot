@@ -29,6 +29,11 @@ import time
 from json import JSONDecodeError
 
 _DIVERGENCE_HISTORY_LIMIT = 8
+# The hashed L5 market-frame deadline is 30s.  The configured PONG-driven
+# threshold + ping cadence budget may consume at most 20s, reserving >=10s for
+# close/backoff/replacement snapshots.  A delayed/missing PONG never refreshes
+# market health, so the controller still fails closed at strict >30s.
+_MAX_SILENCE_PLUS_PING_SECONDS = 20.0
 log = logging.getLogger(__name__)
 
 
@@ -51,7 +56,7 @@ class MarketSocket:
         # A responsive but market-silent shard must demand replacement book
         # snapshots before the 30s L5 last-market-frame deadline.  PONG only
         # triggers the reconnect; it never refreshes market-data health itself.
-        market_silence_resnapshot_seconds=20.0,
+        market_silence_resnapshot_seconds=10.0,
         clock_ns=time.monotonic_ns,
         # After this many CONSECUTIVE resyncs with no clean delta in between, HALT:
         # a book the resync can never reconcile is itself a fail-loud format-change
@@ -65,12 +70,21 @@ class MarketSocket:
         self._sleep = sleep
         self._backoff_base = backoff_base
         self._backoff_cap = backoff_cap
-        if ping_interval <= 0:
-            raise ValueError("ping_interval must be > 0 (a non-positive value hot-loops the keepalive)")
+        if not math.isfinite(ping_interval) or ping_interval <= 0:
+            raise ValueError(
+                "ping_interval must be finite and > 0 "
+                "(a non-positive value hot-loops the keepalive)"
+            )
         self._ping_interval = ping_interval
         if (not math.isfinite(market_silence_resnapshot_seconds)
                 or market_silence_resnapshot_seconds <= 0):
             raise ValueError("market_silence_resnapshot_seconds must be finite and > 0")
+        if (market_silence_resnapshot_seconds + ping_interval
+                > _MAX_SILENCE_PLUS_PING_SECONDS):
+            raise ValueError(
+                "market silence threshold plus ping_interval must be <= 20 seconds "
+                "to reserve the L5 recovery margin"
+            )
         self._market_silence_resnapshot_ns = market_silence_resnapshot_seconds * 1_000_000_000
         if not callable(clock_ns):
             raise TypeError("clock_ns must be callable")

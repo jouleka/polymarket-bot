@@ -16,23 +16,27 @@ produce real book snapshots must retain the existing fail-closed halt.
 
 `MarketSocket` will proactively abandon and reconnect a responsive but market-silent
 connection when an exact bare `PONG` arrives and the shard has seen no real market frame for
-20 seconds.  Reconnect is the venue-proven resnapshot path: the new connection subscribes
+10 seconds.  Reconnect is the venue-proven resnapshot path: the new connection subscribes
 again and the venue sends replacement `book` snapshots.
 
-The 20-second deadline is deliberately below the immutable 30-second
-`RiskCaps.ws_staleness_halt_seconds` limit.  It is not a new trading cap and does not change
-the hashed risk envelope.
+The configured 10-second deadline plus the 10-second keepalive cadence budget consumes at most 20
+seconds in the worst normal PONG phase, reserving at least 10 seconds before the immutable 30-second
+`RiskCaps.ws_staleness_halt_seconds` limit.  It is not a new trading cap and does not change the
+hashed risk envelope.  Construction rejects any custom threshold/cadence pair whose sum exceeds
+20 seconds.  A delayed or missing PONG never refreshes market health, so unchanged L5 still fails
+closed.
 
 ## 3. Pinned contract
 
 `MarketSocket.__init__` gains two optional keyword-only seams:
 
 ```python
-market_silence_resnapshot_seconds=20.0
+market_silence_resnapshot_seconds=10.0
 clock_ns=time.monotonic_ns
 ```
 
-Both values are validated at construction.  On each exact bare `PONG`, the socket compares
+Both values are validated at construction; the existing ping cadence must also be finite and the
+threshold plus cadence must be at most 20 seconds.  On each exact bare `PONG`, the socket compares
 `clock_ns()` with the current connection's last real-frame stamp, or with its connection stamp
 if no market frame has arrived.  At age `>= market_silence_resnapshot_seconds`, it:
 
@@ -53,7 +57,9 @@ advances `MarketStream.last_frame_at()`.
 - books are stale before reconnect teardown yields to sibling tasks;
 - the L5 30-second comparison, sticky halt, restart reconciliation, live-book re-fetch, exact
   Decimal handling, PaperSigner boundary, and all proposal/signing surfaces remain unchanged;
-- failed or snapshot-less reconnects still reach `l5_ws_down` and halt closed;
+- failed or no-real-frame reconnects still reach `l5_ws_down` and halt closed; a subscribed
+  pre-snapshot delta may prove transport/market liveness but cannot restore the stale book, so
+  execution still rejects it;
 - production keeps one collector and persists no raw websocket frames.
 
 ## 5. Acceptance
@@ -61,8 +67,9 @@ advances `MarketStream.last_frame_at()`.
 - A responsive quiet socket resubscribes before L5, and the replacement snapshot restores the
   book.
 - A pre-threshold `PONG` is ignored without reconnect and without changing `last_frame_at()`.
-- The threshold boundary is `>=`, so a scheduler tick exactly at 20 seconds cannot miss the
+- The threshold boundary is `>=`, so a scheduler tick exactly at 10 seconds cannot miss the
   safety margin.
+- A worst-phase real frame just after one PONG leaves the book fresh at the next pre-threshold
+  PONG and forces reconnect at the following PONG below 20 seconds of market silence.
 - The focused tests, complete canonical suite, and an isolated mutation of every comparison and
   authority boundary pass.
-
