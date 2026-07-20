@@ -16,6 +16,10 @@ _COLUMNS = (
 )
 
 
+class EventQueryTooBroad(RuntimeError):
+    """A citation lookup exceeded its fixed fail-closed result bound."""
+
+
 def _recent_by_sources(conn, source_names, *, offset, limit):
     sources = tuple(source_names)
     if (not sources or len(sources) != len(set(sources))
@@ -30,6 +34,36 @@ def _recent_by_sources(conn, source_names, *, offset, limit):
         "ORDER BY observed_at DESC, rowid DESC LIMIT ? OFFSET ?",
         (*sources, limit, offset),
     ).fetchall()
+    return [EventStore._row_to_envelope(row) for row in rows]
+
+
+def _matching_citations(conn, citations, source_names, *, max_matches):
+    citation_values = tuple(citations)
+    sources = tuple(source_names)
+    if (len(citation_values) > 32 or len(citation_values) != len(set(citation_values))
+            or any(not isinstance(value, str) or not value for value in citation_values)):
+        raise ValueError("citation lookup values must be bounded unique strings")
+    if (len(sources) != len(set(sources))
+            or any(not isinstance(source, str) or not source for source in sources)):
+        raise ValueError("citation lookup sources must be unique strings")
+    if (isinstance(max_matches, bool) or not isinstance(max_matches, int)
+            or not 1 <= max_matches <= 4096):
+        raise ValueError("citation lookup result bound is invalid")
+    if not citation_values or not sources:
+        return []
+    source_slots = ",".join("?" for _source in sources)
+    citation_slots = ",".join("?" for _citation in citation_values)
+    rows = conn.execute(
+        f"SELECT {_COLUMNS} FROM events "
+        f"WHERE source IN ({source_slots}) AND ("
+        f"event_id IN ({citation_slots}) OR EXISTS ("
+        "SELECT 1 FROM json_each(events.entities) AS entity "
+        f"WHERE entity.value IN ({citation_slots})"
+        ")) ORDER BY observed_at, rowid LIMIT ?",
+        (*sources, *citation_values, *citation_values, max_matches + 1),
+    ).fetchall()
+    if len(rows) > max_matches:
+        raise EventQueryTooBroad("citation lookup exceeded its fixed result bound")
     return [EventStore._row_to_envelope(row) for row in rows]
 
 
@@ -108,6 +142,12 @@ class EventStore:
             self._conn, source_names, offset=offset, limit=limit,
         )
 
+    def matching_citations(self, citations, source_names, *, max_matches=1024):
+        """Return only bounded exact citation matches for configured sources."""
+        return _matching_citations(
+            self._conn, citations, source_names, max_matches=max_matches,
+        )
+
     def max_observed_at(self):
         """Return the durable history floor, or zero for an empty store."""
         row = self._conn.execute(
@@ -166,6 +206,12 @@ class ReadOnlyEventStore:
         """Return one bounded newest-first page for exact configured sources."""
         return _recent_by_sources(
             self._conn, source_names, offset=offset, limit=limit,
+        )
+
+    def matching_citations(self, citations, source_names, *, max_matches=1024):
+        """Return only bounded exact citation matches for configured sources."""
+        return _matching_citations(
+            self._conn, citations, source_names, max_matches=max_matches,
         )
 
     def close(self):
