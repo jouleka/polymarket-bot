@@ -3,7 +3,7 @@
 Hermes is handed ONLY this facade. The safety claim is structural and IN CODE:
 the facade composes (never subclasses) an IntentStore, holds it in a
 name-mangled private attribute, and exposes EXACTLY {propose_trade, get,
-audit_log, get_market, get_book, get_ledger, get_flags}. It has no place /
+audit_log, get_market, get_book, get_news, get_ledger, get_flags}. It has no place /
 flatten / record_decision / pending attribute and no public path to mutate
 status or reach the signer. A confused-deputy Hermes can at worst enqueue a
 PROPOSED row; the deterministic ERS (not Hermes) disposes.
@@ -69,7 +69,7 @@ def test_get_and_audit_log_read_through(tmp_path):
 
 
 def test_read_tools_delegate_to_readers(tmp_path):
-    calls = {"market": [], "book": [], "ledger": [], "flags": []}
+    calls = {"market": [], "book": [], "ledger": [], "flags": [], "news": []}
 
     def _market_reader(*a, **k):
         calls["market"].append((a, k)); return "MARKET"
@@ -83,21 +83,27 @@ def test_read_tools_delegate_to_readers(tmp_path):
     def _flags_reader(*a, **k):
         calls["flags"].append((a, k)); return "FLAGS"
 
+    def _news_reader(*a, **k):
+        calls["news"].append((a, k)); return "NEWS"
+
     with _store(tmp_path) as store:
         facade = ProposeOnlyFacade(
             store, market_reader=_market_reader, book_reader=_book_reader,
             ledger_reader=_ledger_reader, flags_reader=_flags_reader,
+            news_reader=_news_reader,
         )
         assert facade.get_market("0xabc") == "MARKET"
         assert facade.get_book("t1", depth=5) == "BOOK"
         assert facade.get_ledger(category="politics") == "LEDGER"
         assert facade.get_flags("t1") == "FLAGS"
+        assert facade.get_news(offset=2) == "NEWS"
 
         # Each reader was invoked exactly once with the forwarded args/kwargs.
         assert calls["market"] == [(("0xabc",), {})]
         assert calls["book"] == [(("t1",), {"depth": 5})]
         assert calls["ledger"] == [((), {"category": "politics"})]
         assert calls["flags"] == [(("t1",), {})]
+        assert calls["news"] == [((), {"offset": 2})]
 
 
 def test_structural_sweep_no_signer_or_status_path(tmp_path):
@@ -111,7 +117,7 @@ def test_structural_sweep_no_signer_or_status_path(tmp_path):
         # (a) The public surface is EXACTLY the allowed set -- nothing more.
         allowed = {
             "propose_trade", "get", "audit_log",
-            "get_market", "get_book", "get_ledger", "get_flags",
+            "get_market", "get_book", "get_news", "get_ledger", "get_flags",
         }
         public = {name for name in dir(facade) if not name.startswith("_")}
         assert public == allowed, f"unexpected public surface: {public ^ allowed}"
@@ -163,6 +169,8 @@ def test_read_tools_fail_loud_without_reader(tmp_path):
             facade.get_ledger()
         with pytest.raises(TypeError):
             facade.get_flags("t1")
+        with pytest.raises(TypeError):
+            facade.get_news()
 
 
 def test_structural_sweep_no_s4_kill_or_op_state_surface(tmp_path):
@@ -174,10 +182,10 @@ def test_structural_sweep_no_s4_kill_or_op_state_surface(tmp_path):
     with _store(tmp_path) as store:
         facade = ProposeOnlyFacade(store)
 
-        # (a) The public surface is STILL exactly the 7 allowed names -- S4 added nothing.
+        # (a) The public surface is still only the approved proposal/read names.
         allowed = {
             "propose_trade", "get", "audit_log",
-            "get_market", "get_book", "get_ledger", "get_flags",
+            "get_market", "get_book", "get_news", "get_ledger", "get_flags",
         }
         public = {name for name in dir(facade) if not name.startswith("_")}
         assert public == allowed, f"S4 leaked public surface: {public ^ allowed}"
