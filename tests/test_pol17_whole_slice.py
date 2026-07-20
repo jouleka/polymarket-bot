@@ -157,11 +157,18 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
     config = _config(tmp_path)
     stamper = MonotonicStamper(clock=iter(range(1, 10000)).__next__)
     with EventStore(config.ingestion.db_path) as events:
-        for source, event_id in (("fed-press", "citation-1"),
-                                 ("sec-press", "citation-2")):
+        for source, event_id in (("un-middle-east", "citation-1"),
+                                 ("iaea-news", "citation-2")):
             events.append(make_envelope(
                 stamper, source=source, source_tier="PRIMARY",
-                event_id=event_id, content="reviewed evidence",
+                event_id=event_id,
+                content="Official evidence about Iran and the reviewed event",
+            ))
+        for index in range(60):
+            events.append(make_envelope(
+                stamper, source="whitehouse-news", source_tier="PRIMARY",
+                event_id=f"unrelated-primary-{index}",
+                content="Newer unrelated official release",
             ))
         for index in range(60):
             events.append(make_envelope(
@@ -299,20 +306,13 @@ def test_whole_slice_survives_apply_before_ack_restart_and_terminal_fanout(tmp_p
             assert (await bridge.call_tool("get_flags", {}))[
                 "trading_permission"] is False
             evidence_page = await bridge.call_tool(
-                "get_news", {"offset": 0, "limit": 10},
+                "get_news", {"offset": 0, "limit": 10, "query": "iran"},
             )
-            assert [event["citation_id"] for event in evidence_page["events"][:2]] == [
+            assert [event["citation_id"] for event in evidence_page["events"]] == [
                 "citation-2", "citation-1",
             ]
-            assert len(evidence_page["events"]) == 10
-            assert [
-                event["citation_id"] for event in evidence_page["events"][2:]
-            ] == [f"discovery-{index}" for index in range(59, 51, -1)]
             assert all(
-                event["citation_eligible"] for event in evidence_page["events"][:2]
-            )
-            assert not any(
-                event["citation_eligible"] for event in evidence_page["events"][2:]
+                event["citation_eligible"] for event in evidence_page["events"]
             )
             assert all(
                 event["content"].startswith("⟦UNTRUSTED⟧\n")
