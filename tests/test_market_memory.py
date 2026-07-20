@@ -128,6 +128,26 @@ def test_recent_by_sources_is_bounded_newest_first_for_writer_and_read_only_read
         )] == ["new-news", "mid-news"]
 
 
+def test_recent_sources_reserve_priority_evidence_ahead_of_discovery_flood(tmp_path):
+    path = str(tmp_path / "mm.db")
+    with EventStore(path) as store:
+        store.append(_env("primary-old", 1, source="primary-a"))
+        for observed_at in range(2, 62):
+            store.append(_env(
+                f"discovery-{observed_at}", observed_at,
+                source="discovery-a",
+            ))
+
+    with ReadOnlyEventStore(path) as reader:
+        events = reader.recent_by_sources(
+            ("primary-a", "discovery-a"), offset=0, limit=50,
+            priority_sources=("primary-a",),
+        )
+
+    assert events[0].event_id == "primary-old"
+    assert [event.observed_at for event in events[1:]] == list(range(61, 12, -1))
+
+
 def test_matching_citations_queries_only_exact_sources_ids_and_entities(tmp_path):
     path = str(tmp_path / "mm.db")
     with EventStore(path) as store:
