@@ -1,6 +1,6 @@
 # Deploy — polymarket-bot composite paper-shadow runtime
 
-POL-18's separately gated dedicated Hermes profile, exact-five-tool preflight, stopped install,
+POL-18's separately gated dedicated Hermes profile, exact-six-tool preflight, stopped install,
 activation, and rollback procedure is in [`hermes/README.md`](hermes/README.md). This document
 continues to own the composite POL-17 ingestion/ERS runtime and production persistence contract.
 

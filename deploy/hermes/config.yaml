@@ -5,7 +5,7 @@
 # Hermes box. Deployed copy lives at ~/.hermes/config.yaml on that box.
 #
 # SAFETY CONTRACT (load-bearing — reviewed alongside the ERS):
-#   * tools.include is EXACTLY the four read tools + the single INSERT-only
+#   * tools.include is EXACTLY the five read tools + the single INSERT-only
 #     write tool `propose_trade`. Hermes can at worst enqueue a PROPOSED
 #     intent; it cannot sign, size, mutate status, or reach the signer.
 #   * No signing / admin / status-mutation tool is granted.
@@ -24,6 +24,7 @@ tools:
     - propose_trade    # the ONE write tool — INSERT-only PROPOSED row
     - get_market       # read tool
     - get_book         # read tool
+    - get_news         # read tool (bounded sanitized evidence)
     - get_ledger       # read tool (resolved-market history / outcomes)
     - get_flags        # read tool (detector flags: AVOID / FLAG_ONLY)
 
