@@ -48,7 +48,8 @@ outcome contains a boolean `live_book`; the callable is sampled once per request
 ```python
 class NewsReadView:
     def __init__(self, event_store, *, allowlist, default_limit=25,
-                 max_limit=50, max_content_chars=4096): ...
+                 max_limit=50, max_offset=1000,
+                 max_content_chars=4096): ...
     def __call__(self, *, offset=0, limit=None): ...
 
 class MarketReadView:
@@ -62,7 +63,17 @@ class ProposeOnlyFacade:
 ```
 
 `None` for either new optional seam preserves existing unit/advisory construction. The production
-root supplies both seams. `get_news` accepts only bounded integer `offset` and `limit` parameters.
+root supplies both seams. `get_news` accepts only bounded integer `offset` and `limit` parameters:
+offset is in `[0, 1000]`, limit is in `[1, 50]`, citation IDs are at most 2,048 characters, and the
+complete spotlighted content field is at most 4,096 characters.
+
+Both resource bounds are enforced before Python projection. `recent_by_sources` selects only the
+bounded content prefix and citation ID from SQLite, substitutes empty unused entity/market-link
+arrays, and never allocates a full matching row merely to truncate it later. ERS citation
+verification likewise uses an exact allowlisted-source SQL query over the at-most-32 submitted
+citations instead of materializing the EventStore. It requests `max_matches + 1` rows and refuses
+the complete citation set if the 1,024-row bound is crossed, so truncation can never hide an
+ambiguous cross-publisher collision.
 
 ## 4. Safety invariants
 
@@ -73,7 +84,8 @@ root supplies both seams. `get_news` accepts only bounded integer `offset` and `
    changes trust tier; only the deterministic ERS truth gate decides whether citations count.
 4. The projection accepts only sources whose persisted tier matches the pinned allowlist tier.
 5. Every page and content field is bounded. The SQL path does not materialize the production market
-   firehose and does not add persistence or an index migration.
+   firehose and does not add persistence or an index migration. A broad exact-citation query fails
+   closed rather than treating a truncated result as complete.
 6. Market urgency is deterministic. The model cannot choose or change ordering logic.
 7. Live-book availability is sampled from POL-17's shared in-memory books; persisted midpoint rows
    never become execution authority.
@@ -97,11 +109,11 @@ review, and mutation gate. No live-money activation exists in this slice.
 2. Production-wired market rows truthfully identify live and unavailable books without a second
    collector or persisted-book authority.
 3. `get_news` returns only bounded allowlisted, tier-consistent, sanitized evidence newest first and
-   supplies the exact citation ID ERS can verify.
+   supplies the exact citation ID ERS can verify; pagination and field bounds apply before Python
+   allocation.
 4. RPC, MCP, authored config, effective inventory, cron inventory, and verifier agree on exactly six
    tools; missing or extra tools fail closed.
 5. The facade still exposes no mutation/signing path beyond unchanged `propose_trade`.
 6. The cron prompt selects nearest positive deadlines and never invents a citation or proposal.
 7. Focused tests, the canonical full suite, independent specification/security review, and isolated
    mutations all pass before any installation.
-
