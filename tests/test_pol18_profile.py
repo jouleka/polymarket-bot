@@ -822,7 +822,7 @@ def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     assert "nearest positive resolution first" in prompt
     assert "`live_book=true`" in prompt
     assert "get_news" in prompt
-    assert '`get_news(query="<one literal market-relevant term>", limit=20)`' in prompt
+    assert '`get_news(query="<one literal market-relevant term>", limit=10)`' in prompt
     assert "not web search" in prompt
     assert "`citation_eligible=true`" in prompt
     assert "returned `citation_id`" in prompt
@@ -833,10 +833,11 @@ def test_cron_prompt_skips_categories_without_reviewed_evidence_coverage():
     prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
               "cron-prompt.md").read_text(encoding="utf-8")
 
-    assert "Do not select a sports market" in prompt
-    assert "Select only politics, geopolitics, crypto, finance, or econ" in prompt
+    assert "Do not shortlist sports" in prompt
+    assert "Select only politics, geopolitics, crypto" in prompt
+    assert "finance, or econ" in prompt
     assert "configured evidence sources can genuinely bear on" in prompt
-    assert "If no such market\n   is present, stop without proposing" in prompt
+    assert "If no such market is present, stop" in prompt
 
 
 def test_cron_prompt_keeps_selection_and_tool_bounds_exact():
@@ -848,8 +849,23 @@ def test_cron_prompt_keeps_selection_and_tool_bounds_exact():
         "Do not ask for or attempt to use any tool outside the six presented to you."
     )
     assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
-        "43e1d791557aa9b4f155130bd1b024a0540378290ed6cb70e01190762ba7c3f5"
+        "9a39dab9e57d6dd026cf371c3b1198ec3a80c2921d9eadc97addd52e8e74e52c"
     )
+
+
+def test_cron_prompt_uses_a_bounded_evidence_first_candidate_shortlist():
+    prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
+              "cron-prompt.md").read_text(encoding="utf-8")
+
+    assert "shortlist of at most two" in prompt
+    assert "Each shortlisted market must" in prompt
+    assert "already contain at least one outcome marked `live_book=true`" in prompt
+    assert "Prefer geopolitics first" in prompt
+    assert "at most two `get_news` calls" in prompt
+    assert '`get_news(query="<one literal market-relevant term>", limit=10)`' in prompt
+    assert "Only after finding relevant eligible evidence" in prompt
+    assert "read one live book and the matching" in prompt
+    assert "resolved-history category" in prompt
 
 
 def test_activation_requires_nonempty_owner_selected_model_and_provider():

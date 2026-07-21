@@ -19,3 +19,14 @@
    PR.
 9. Only after the repository lands, update the existing cron's prompt through its native API while
    preserving every non-prompt field. Observe natural cycles; do not force a proposal.
+
+## Live follow-up
+
+10. Record two natural runs after first activation. If both repeat one empty-evidence candidate,
+    treat that as a liveness defect rather than waiting indefinitely.
+11. RED-test an evidence-first shortlist: one 20-market page, at most two candidates already
+    advertising a live outcome, geopolitics priority, at most two 10-item evidence reads, then one
+    book/ledger/proposal maximum.
+12. Run focused and canonical suites, independent review, and isolated prompt mutations.
+13. Land and update only the existing cron prompt, then observe two natural cycles and record whether
+    candidate/query selection changed. Never synthesize a proposal.

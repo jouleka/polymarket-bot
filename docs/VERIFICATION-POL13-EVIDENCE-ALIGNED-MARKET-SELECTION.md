@@ -77,3 +77,34 @@ This evidence authorizes no live-money action. Landing, stopped-safe service-che
 native in-place cron prompt update, and natural-cycle observation remain separate steps. The existing
 profile, model/provider inheritance, cron ID/schedule/history, exact-six tools, config/databases, and
 service memory ceilings must be preserved. No proposal may be synthesized for verification.
+
+## 6. First activation and follow-up correction
+
+PR #53 merged as `86fcf95a64838434f0c6f7232fb2619cf32f7332`. Stopped-first installation
+preserved the production config/profile/SOUL checksums, all seven database inodes and `quick_check`
+results, historical raw-firehose checksums, cron ID and every non-prompt field, and exact-six
+preflight. Both services restarted active+enabled with zero restarts/swap/pressure/OOM.
+
+Natural run 1005 used the new 20-market page, skipped sports, selected the live-book crypto market
+“Will the price of Bitcoin be above $68,000 on July 21?”, read the fresh 0.023/0.026 book, empty
+crypto ledger, and `get_news(query="Bitcoin", limit=20)`, then returned `[SILENT]`. Run 1006 repeated
+the same market/query and again returned no evidence and `[SILENT]`. This proved the sports mismatch
+closed but exposed a repeated empty-evidence candidate loop.
+
+Follow-up commit `a3575d1` replaces choose-then-query with the fixed-resource shortlist described in
+design section 6. Its prompt-contract test observed RED before implementation. Independent review
+then found that shortlist membership itself did not require an advertised live outcome; that clause
+received a second observed RED and is SHA-pinned with the complete prompt. Focused tests pass and the
+pre-review canonical checkpoint reports:
+
+```text
+2415 passed in 43.36s
+```
+
+Closing independent review at exact follow-up head
+`3c6157a383274e882755a2430f65c2ecf32cfddd` passed with no new findings; the focused profile suite
+reported 42 passed. An isolated exact-head prompt battery killed 18/18 mutations with zero survivors:
+shortlist/call/cardinality bounds, limits 10 -> 20/50, priority/category/evidence/order changes,
+multiple books/ledgers/proposals, second-page reads, extra tools, contradictory nearest-Bitcoin text,
+arbitrary edits, and removal/movement/negation of shortlist live-book membership. The tmpfs worktree
+was restored and removed. Landing and second live observation remain pending at this evidence point.
