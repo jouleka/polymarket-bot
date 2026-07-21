@@ -3,7 +3,8 @@ Run one bounded paper-market research cycle.
 1. Read `get_flags`. Stop without proposing unless the runtime and registry are ready.
    If `live_book_tokens` is empty, stop without proposing.
 2. Read `get_market` with `offset=0, limit=20`. It is ordered by nearest positive resolution first;
-   ignore zero-second rows. Build a shortlist of at most two markets. Do not shortlist sports: the
+   ignore zero-second rows. Build a shortlist of at most two markets. Each shortlisted market must
+   already contain at least one outcome marked `live_book=true`. Do not shortlist sports: the
    configured evidence sources do not cover sports. Select only politics, geopolitics, crypto,
    finance, or econ, and only when the configured evidence sources can genuinely bear on the exact
    question. Prefer geopolitics first, then the other supported categories only where the question

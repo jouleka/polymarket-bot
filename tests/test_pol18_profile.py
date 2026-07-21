@@ -849,7 +849,7 @@ def test_cron_prompt_keeps_selection_and_tool_bounds_exact():
         "Do not ask for or attempt to use any tool outside the six presented to you."
     )
     assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
-        "85253775a48731aaa51d9fdded7964bbf682b7aea48dbf5df4b0adccbb29a0a2"
+        "9a39dab9e57d6dd026cf371c3b1198ec3a80c2921d9eadc97addd52e8e74e52c"
     )
 
 
@@ -858,6 +858,8 @@ def test_cron_prompt_uses_a_bounded_evidence_first_candidate_shortlist():
               "cron-prompt.md").read_text(encoding="utf-8")
 
     assert "shortlist of at most two" in prompt
+    assert "Each shortlisted market must" in prompt
+    assert "already contain at least one outcome marked `live_book=true`" in prompt
     assert "Prefer geopolitics first" in prompt
     assert "at most two `get_news` calls" in prompt
     assert '`get_news(query="<one literal market-relevant term>", limit=10)`' in prompt
