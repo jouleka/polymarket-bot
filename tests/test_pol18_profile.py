@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import signal
@@ -845,6 +846,9 @@ def test_cron_prompt_keeps_selection_and_tool_bounds_exact():
     assert "`get_market` with `offset=0, limit=20`" in prompt
     assert prompt.rstrip().endswith(
         "Do not ask for or attempt to use any tool outside the six presented to you."
+    )
+    assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
+        "43e1d791557aa9b4f155130bd1b024a0540378290ed6cb70e01190762ba7c3f5"
     )
 
 

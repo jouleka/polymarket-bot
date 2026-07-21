@@ -23,7 +23,11 @@ from polybot.ers.market_meta import (
     ResolutionSubjectMetadata,
     StubMarketMeta,
 )
-from polybot.ers.service import PaperSigner, process_pending
+from polybot.ers.service import (
+    EVIDENCE_COVERED_CATEGORIES,
+    PaperSigner,
+    process_pending,
+)
 from polybot.ers.validator import ClusterView, OpenPosition, Portfolio
 from polybot.ingestion.orderbook import LocalBook
 
@@ -634,6 +638,28 @@ def test_pipeline_rejects_category_without_reviewed_evidence_before_any_write(
 
         assert store.get("i1").decision_reason == "evidence_category_unsupported"
         assert ledger.all() == [] and clog.all() == () and signer.placed == []
+
+
+def test_pipeline_allows_a_supported_category_through_the_evidence_gate(
+        tmp_path, monkeypatch):
+    meta = _RecordingMeta(MarketMetadata("politics", "Gamma politics question", 123))
+    pipe, ledger, clog = _pipeline(
+        tmp_path,
+        monkeypatch,
+        meta=meta,
+        evidence_categories=EVIDENCE_COVERED_CATEGORIES,
+    )
+
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=PaperSigner(),
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason != "evidence_category_unsupported"
+        assert ledger.get("i1") is not None and len(clog.all()) == 1
 
 
 @pytest.mark.parametrize("bug", [
