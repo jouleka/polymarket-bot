@@ -43,6 +43,13 @@ REASON_MARKET_META_UNAVAILABLE = "market_meta_unavailable"
 REASON_RESOLUTION_IDENTITY_UNAVAILABLE = "resolution_identity_unavailable"
 REASON_MARKET_RESOLVED = "market_resolved"
 REASON_SHADOW_EXECUTION_ERROR = "shadow_execution_error"
+REASON_EVIDENCE_CATEGORY_UNSUPPORTED = "evidence_category_unsupported"
+
+# Categories whose reviewed PRIMARY source set can currently bear on proposals. Production wires
+# this explicitly; ``None`` remains the backwards-compatible optional seam.
+EVIDENCE_COVERED_CATEGORIES = frozenset({
+    "politics", "geopolitics", "crypto", "finance", "econ",
+})
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,7 @@ class HermesPipeline:
     allowlist: object             # iterable of ingestion.news.Source (truth-gate independence surface)
     event_store: object           # storage.market_memory.EventStore (sanitized citations only)
     stamper: object               # the ONE shared core.clock.MonotonicStamper (now_ns for the gate)
+    evidence_categories: frozenset[str] | None = None
 
 
 def process_pending(store, *, book_for, portfolio, caps, signer, calib_score=Decimal(1),
@@ -292,6 +300,11 @@ def _process_intent_pipeline(intent, book_for, portfolio, caps, cluster_model, p
             or resolution_subject.token_id != intent.token_id):
         return Decision(
             "REJECT", None, None, REASON_RESOLUTION_IDENTITY_UNAVAILABLE
+        ), trade_intent
+    if (pipeline.evidence_categories is not None
+            and category not in pipeline.evidence_categories):
+        return Decision(
+            "REJECT", None, None, REASON_EVIDENCE_CATEGORY_UNSUPPORTED
         ), trade_intent
 
     # 6. Weighted log-odds fusion. Hermes's p enters ONLY as p_news, w_news live iff corroborated.
