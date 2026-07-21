@@ -22,7 +22,11 @@ from polybot.ers.lossbreaker import LossBreakers
 from polybot.ers.reconcile import ThreeWayReconciler, make_recon_provider
 from polybot.ers.restart import RestartReconciler
 from polybot.ers.safety import SafetyController
-from polybot.ers.service import HermesPipeline, PaperSigner
+from polybot.ers.service import (
+    EVIDENCE_COVERED_CATEGORIES,
+    HermesPipeline,
+    PaperSigner,
+)
 from polybot.ers.startup_selftest import verify_or_refuse
 from polybot.fusion.component_log import ComponentLog
 from polybot.fusion.engine import FusionConfig
@@ -187,6 +191,7 @@ def build_shadow_components(config, *, ingestion, registry_provider,
         allowlist=DEFAULT_ALLOWLIST,
         event_store=event_reader,
         stamper=stamper,
+        evidence_categories=EVIDENCE_COVERED_CATEGORIES,
     ))
 
     safety = construct(lambda: SafetyController(

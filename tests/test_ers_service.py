@@ -320,7 +320,7 @@ class _StubMeta(StubMarketMeta):
 
 
 def _pipeline(tmp_path, monkeypatch, *, detectors=None, truth=None, calib=None, meta=None,
-              fusion_result=None):
+              fusion_result=None, evidence_categories=None):
     """Build a HermesPipeline with fakes, monkeypatching the two module-level collaborators
     (fusion.engine.fuse and truthgate.gate.verify -- the function-local import sites in the loop)
     so we drive the loop precisely."""
@@ -344,7 +344,7 @@ def _pipeline(tmp_path, monkeypatch, *, detectors=None, truth=None, calib=None, 
         0.20)
     monkeypatch.setattr(fusion_mod, "fuse", lambda *a, **k: fr, raising=True)
 
-    pipe = HermesPipeline(
+    pipeline_args = dict(
         calib_gate=calib or _FakeCalibGate(k=Decimal("0"), clamp_to=Decimal("0.70")),
         fusion_config=object(),
         truth_gate_config=object(),
@@ -356,6 +356,9 @@ def _pipeline(tmp_path, monkeypatch, *, detectors=None, truth=None, calib=None, 
         event_store=object(),
         stamper=stamper,
     )
+    if evidence_categories is not None:
+        pipeline_args["evidence_categories"] = evidence_categories
+    pipe = HermesPipeline(**pipeline_args)
     return pipe, ledger, clog
 
 
@@ -600,6 +603,37 @@ def test_pipeline_metadata_unavailable_maps_distinct_reason_and_logs_nothing(tmp
         assert ledger.all() == []
         assert clog.all() == ()
         assert pipe.calib_gate.clamp_calls == []
+
+
+def test_pipeline_rejects_category_without_reviewed_evidence_before_any_write(
+        tmp_path, monkeypatch):
+    meta = _RecordingMeta(MarketMetadata("sports", "Gamma sports question", 123))
+    pipe, ledger, clog = _pipeline(
+        tmp_path,
+        monkeypatch,
+        meta=meta,
+        evidence_categories=frozenset({
+            "politics", "geopolitics", "crypto", "finance", "econ",
+        }),
+    )
+
+    import polybot.fusion.engine as fusion_mod
+
+    def forbidden_fusion(*args, **kwargs):
+        raise AssertionError("fusion ran for an unsupported evidence category")
+
+    monkeypatch.setattr(fusion_mod, "fuse", forbidden_fusion, raising=True)
+    with _store(str(tmp_path / "i.db")) as store:
+        store.propose_trade("i1", **_P)
+        signer = PaperSigner()
+        process_pending(
+            store, book_for={"t1": _book("0.50")}.get,
+            portfolio=Portfolio(nav=Decimal("300")), caps=RiskCaps(), signer=signer,
+            pipeline=pipe,
+        )
+
+        assert store.get("i1").decision_reason == "evidence_category_unsupported"
+        assert ledger.all() == [] and clog.all() == () and signer.placed == []
 
 
 @pytest.mark.parametrize("bug", [
