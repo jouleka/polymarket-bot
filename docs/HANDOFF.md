@@ -890,6 +890,28 @@ remains a separate reviewed integration; do not weaken truth gating or synthesiz
 Exact evidence is in
 [`VERIFICATION-POL13-PRIMARY-SOURCE-COVERAGE.md`](VERIFICATION-POL13-PRIMARY-SOURCE-COVERAGE.md).
 
+**UPDATE 2026-07-21 — evidence-aligned selection and evidence-first shortlist landed and are
+live-verified.** Natural runs 998/999 honestly selected unsupported sports, and the first correction
+then repeated an empty-evidence Bitcoin candidate. PR #53 (`86fcf95`) added the deterministic
+production category boundary; PR #54 (`ed0d964`) changed the existing bounded prompt to shortlist at
+most two live-book candidates and query evidence before selecting one outcome. The exact-six facade,
+`gpt-5.6-terra` profile, auth, cron ID/schedule/history, signer boundary, databases, and memory limits
+were preserved. Strict TDD closed the missing live-shortlist clause, the canonical suite passes 2,415
+tests, independent review passes, and 18/18 isolated mutations were killed.
+
+Natural run 1009 prioritized geopolitics, found eligible UN material, read one fresh 0.90/0.91 book,
+and enqueued the first genuine live shadow proposal. ERS correctly recorded `SKIP/no_edge`: both
+citations were from the same `un.org` publisher group, so news received zero effective weight and the
+exact forecast anchored to midpoint 0.905 below the 0.91 ask. This produced one forecast/component
+pair but zero fills, execution outboxes, executions, maker fills, or shadow trades. Run 1010 used both
+bounded candidate queries and honestly returned `[SILENT]` when independent eligible evidence was
+absent. Both services remain active+enabled with zero restarts/swap; current memory is about 118 MiB
+POL-17 plus 249 MiB Hermes, with about 4.4 GiB host memory available. All databases pass
+`quick_check`; periodic midpoints and the full trade tape remain intact with zero raw `clob-ws` rows.
+Continue the shadow observation and allow only genuine corroborated executable edge to create a fill;
+do not weaken the truth gate or synthesize activity. Exact evidence is in
+[`VERIFICATION-POL13-EVIDENCE-ALIGNED-MARKET-SELECTION.md`](VERIFICATION-POL13-EVIDENCE-ALIGNED-MARKET-SELECTION.md).
+
 **POL-4 remains the later live-money gate and is BLOCKED on the operator:** it needs a funded Polymarket deposit
 wallet on a clean non-Windows box. Keys must never touch a compromised machine. When unblocked, build and
 empirically place/cancel one minimum-size order through the official Rust client sidecar; do not infer signing

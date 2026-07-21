@@ -1,8 +1,9 @@
 # VERIFICATION — POL-13 evidence-aligned market selection
 
 **Date:** 2026-07-21
-**Implementation commits:** `1432bcf`, `babd676`, `0f168cb`, `4cf5c14`
-**Result:** build PASS; landing and live reconciliation pending
+**Implementation commits:** `1432bcf`, `babd676`, `0f168cb`, `4cf5c14`, `a3575d1`, `3c6157a`
+**Merge commits:** PR #53 `86fcf95`; PR #54 `ed0d964`
+**Result:** PASS; landed, installed, and live-verified in paper/shadow
 
 ## 1. Root cause and scope
 
@@ -73,10 +74,10 @@ reason collapse, and rejecting every configured category. Baseline and post-rest
 
 ## 5. Operational boundary
 
-This evidence authorizes no live-money action. Landing, stopped-safe service-checkout installation,
-native in-place cron prompt update, and natural-cycle observation remain separate steps. The existing
-profile, model/provider inheritance, cron ID/schedule/history, exact-six tools, config/databases, and
-service memory ceilings must be preserved. No proposal may be synthesized for verification.
+This evidence authorizes no live-money action. The existing profile, model/provider inheritance,
+cron ID/schedule/history, exact-six tools, config/databases, and service memory ceilings were
+preserved through stopped-safe service-checkout installation and the native in-place cron prompt
+update. No proposal was synthesized for verification.
 
 ## 6. First activation and follow-up correction
 
@@ -107,4 +108,49 @@ reported 42 passed. An isolated exact-head prompt battery killed 18/18 mutations
 shortlist/call/cardinality bounds, limits 10 -> 20/50, priority/category/evidence/order changes,
 multiple books/ledgers/proposals, second-page reads, extra tools, contradictory nearest-Bitcoin text,
 arbitrary edits, and removal/movement/negation of shortlist live-book membership. The tmpfs worktree
-was restored and removed. Landing and second live observation remain pending at this evidence point.
+was restored and removed.
+
+## 7. Landing, installation, and natural-cycle evidence
+
+PR #54 merged as `ed0d964`. The service checkout fast-forwarded to that merge while preserving its
+untracked production config and pre-POL-17 evidence. Because the follow-up changed only the existing
+cron prompt, documentation, and tests, POL-17 remained running and Hermes alone received an ordered
+stop/update/start. The native cron update changed only `prompt`: ID `ad1c2d9b8c30`, five-minute
+schedule, history, completed-run count, model/provider inheritance, and all other fields were
+preserved. The installed no-trailing-newline prompt SHA-256 is
+`dd5ffe6d6585c4856c8e86296c1351d01f86b34497af4e1c0e7bfaf1f0533ca5`; the repository file including
+its terminal newline is `9a39dab9e57d6dd026cf371c3b1198ec3a80c2921d9eadc97addd52e8e74e52c`.
+Exact-six profile preflight passed before restart.
+
+Natural run 1009, session `cron_ad1c2d9b8c30_20260721_090740`, demonstrated the intended positive
+discovery path without manufacturing an execution. It read flags and one 20-market page, prioritized
+geopolitics, queried `Iran` with limit 10, then read exactly one fresh book and its matching empty
+ledger. It proposed outcome `No` on “US x Iran Effective Ceasefire by July 24?” at the live 0.91 ask,
+with paper size suggestion 10.00, `p=0.93`, confidence 0.64, and two eligible UN citations. The
+proposal RPC accepted intent `cycle-707496-no-20260721`.
+
+ERS then independently re-fetched and evaluated the live book and correctly recorded `SKIP/no_edge`.
+Both citations belonged to publisher group `un.org`, so corroboration remained false,
+`w_news_effective=0`, and the exact fused forecast anchored to the 0.905 market midpoint. That was
+below the 0.91 execution ask. The result is one forecast and component-evidence row, one terminal
+skipped intent/audit row, and zero fills, execution outbox rows, executions, maker fills, or shadow
+trades. The truth gate, fresh-book authority, and sizing/execution boundaries were not weakened to
+force a paper fill.
+
+Natural run 1010, session `cron_ad1c2d9b8c30_20260721_091339`, exercised the negative path. It read
+flags and the single 20-market page, then used both permitted evidence calls (`ceasefire`, `Bitcoin`,
+each limit 10). The first returned only same-publisher eligible UN records plus ineligible discovery
+material; the second returned no records. It returned `[SILENT]` without a book, ledger, or proposal.
+The job completed `ok`, advanced to completed count 1010, and scheduled its next five-minute run.
+
+At the closing check both units were active+enabled and `NRestarts=0`. POL-17 current/peak memory was
+123,850,752/132,231,168 bytes; Hermes was 260,648,960/263,049,216 bytes. Both cgroups used zero swap
+under unchanged 768/512 MiB maximums and 128 MiB swap ceilings; the host reported about 4.4 GiB
+available. Runtime status was `RUNNING` with zero pending intents and both outboxes empty. All seven
+production databases returned `quick_check=ok` with their pre-install inodes preserved. Persistence
+contained 6,011 periodic `clob-midpoint` batches, the full 611,000-row deduplicated `data-api` tape,
+and exactly zero raw `clob-ws` rows. There were no resolution terminals, integrity halts, signing
+operations, or live-money actions.
+
+This closes the evidence-selection defect. It does not claim a profitable edge: future shadow fills
+must arise only from independently corroborated evidence and a genuine executable-price advantage.
