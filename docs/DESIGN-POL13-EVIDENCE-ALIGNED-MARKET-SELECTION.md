@@ -67,3 +67,25 @@ transient model context only, so no service memory ceiling or persistent storage
 5. Focused and canonical suites pass, independent review passes, and adversarial prompt/runtime
    mutations are killed.
 6. Deployment, cron mutation, and live observation remain separate stopped-safe operational gates.
+
+## 6. Live follow-up: evidence-bearing candidate priority
+
+The first deployment proved the category correction but exposed one narrower liveness loop. Natural
+runs 1005 and 1006 both skipped sports, then selected the same live-book crypto question, “Bitcoin
+above $68,000 on July 21,” queried literal `Bitcoin`, received zero evidence, and returned
+`[SILENT]`. The nearest supported category was still winning before evidence availability was known.
+
+The prompt therefore uses one fixed-resource evidence-first shortlist:
+
+- the same one-page 20-market input;
+- at most two non-sports candidates that already advertise a `live_book=true` outcome, with
+  geopolitics first because the reviewed current UN, White House, War/Defense, and IAEA publishers
+  directly cover it;
+- at most two distinct literal `get_news` calls with limit 10 each, preserving the previous maximum
+  of 20 returned evidence items;
+- only after relevant citation-eligible evidence is found, one fresh live book and one matching
+  ledger read; and
+- still at most one proposal, otherwise silence.
+
+This does not bypass the deterministic category gate. It reduces repeated empty candidate work while
+keeping model context, service memory, collectors, persistence, tools, and authority bounded.
