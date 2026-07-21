@@ -828,6 +828,15 @@ def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     assert "Never synthesize a\n   proposal merely to exercise plumbing" in prompt
 
 
+def test_cron_prompt_skips_categories_without_reviewed_evidence_coverage():
+    prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
+              "cron-prompt.md").read_text(encoding="utf-8")
+
+    assert "Do not select a sports market" in prompt
+    assert "politics, geopolitics, crypto, finance, or econ" in prompt
+    assert "configured evidence sources can genuinely bear on" in prompt
+
+
 def test_activation_requires_nonempty_owner_selected_model_and_provider():
     from polybot.hermes.profile_verify import verify_model_selection
 
