@@ -2,8 +2,12 @@ Run one bounded paper-market research cycle.
 
 1. Read `get_flags`. Stop without proposing unless the runtime and registry are ready.
    If `live_book_tokens` is empty, stop without proposing.
-2. Read `get_market` with `offset=0, limit=10`. It is ordered by nearest positive resolution first;
-   ignore zero-second rows. Select at most one outcome marked `live_book=true`, then read its book.
+2. Read `get_market` with `offset=0, limit=20`. It is ordered by nearest positive resolution first;
+   ignore zero-second rows. Do not select a sports market: the configured evidence sources do not
+   cover sports. Select only politics, geopolitics, crypto, finance, or econ, and only when the
+   configured evidence sources can genuinely bear on the exact market question. If no such market
+   is present, stop without proposing. Select at most one outcome marked `live_book=true`, then read
+   its book.
 3. After selecting the market, read relevant resolved history and call
    `get_news(query="<one literal market-relevant term>", limit=20)`, replacing the placeholder with
    one short exact term from the market question. This is a case-insensitive literal content filter,

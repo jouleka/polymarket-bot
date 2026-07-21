@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import signal
@@ -826,6 +827,29 @@ def test_cron_prompt_prioritizes_live_urgent_markets_and_real_citation_ids():
     assert "`citation_eligible=true`" in prompt
     assert "returned `citation_id`" in prompt
     assert "Never synthesize a\n   proposal merely to exercise plumbing" in prompt
+
+
+def test_cron_prompt_skips_categories_without_reviewed_evidence_coverage():
+    prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
+              "cron-prompt.md").read_text(encoding="utf-8")
+
+    assert "Do not select a sports market" in prompt
+    assert "Select only politics, geopolitics, crypto, finance, or econ" in prompt
+    assert "configured evidence sources can genuinely bear on" in prompt
+    assert "If no such market\n   is present, stop without proposing" in prompt
+
+
+def test_cron_prompt_keeps_selection_and_tool_bounds_exact():
+    prompt = (ROOT / "deploy" / "hermes" / "polymarket-profile" /
+              "cron-prompt.md").read_text(encoding="utf-8")
+
+    assert "`get_market` with `offset=0, limit=20`" in prompt
+    assert prompt.rstrip().endswith(
+        "Do not ask for or attempt to use any tool outside the six presented to you."
+    )
+    assert hashlib.sha256(prompt.encode("utf-8")).hexdigest() == (
+        "43e1d791557aa9b4f155130bd1b024a0540378290ed6cb70e01190762ba7c3f5"
+    )
 
 
 def test_activation_requires_nonempty_owner_selected_model_and_provider():
