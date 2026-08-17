@@ -1,13 +1,40 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "polybot"
 version = "0.0.1"
-description = "Autonomous Polymarket trading bot — ingestion layer + ERS (see docs/)"
+description = "Paper-only Polymarket strategy research and deterministic risk engine"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28",
+    "defusedxml>=0.7.1,<1",
+    "httpx>=0.28,<0.29",
     "mcp==1.28.1",
-    "websockets>=16",
+    "websockets>=16,<17",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "bandit>=1.8,<2",
+    "pip-audit>=2.9,<3",
+    "pytest>=9,<10",
+]
+
+[project.urls]
+Homepage = "https://github.com/jouleka/polymarket-bot"
+Repository = "https://github.com/jouleka/polymarket-bot"
+Issues = "https://github.com/jouleka/polymarket-bot/issues"
+
+[project.scripts]
+polybot-ingestion = "polybot.runtime.ingestion:main"
+polybot-shadow = "polybot.runtime.shadow:main"
+polybot-mcp = "polybot.hermes.mcp_bridge:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -20,6 +20,11 @@ POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 # normal disconnect raises websockets.ConnectionClosed, which is NOT an OSError,
 # so OSError alone would let the disconnect escape run() (no reconnect / resync).
 WS_RECONNECT_ON = (OSError, ConnectionClosed)
+DEFAULT_MAX_FEED_BYTES = 1_048_576
+
+
+class FeedResponseTooLarge(ValueError):
+    """Raised before an untrusted feed can exceed the configured memory budget."""
 
 
 def make_httpx_fetch(base_url=DATA_API_URL, timeout=15.0, client=None):
@@ -43,18 +48,39 @@ def make_httpx_fetch(base_url=DATA_API_URL, timeout=15.0, client=None):
     return fetch
 
 
-def make_text_fetch(timeout=15.0, client=None):
+def make_text_fetch(timeout=15.0, client=None, *, max_bytes=DEFAULT_MAX_FEED_BYTES):
     """Return an async ``fetch(url) -> text`` for the news poller (GET a feed body).
-    Follows redirects and sets a UA; raises on HTTP error (fail loud)."""
+    Refuses redirects and bodies over ``max_bytes``; raises on HTTP error (fail loud)."""
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be positive")
     owned = client is None
 
     async def fetch(url):
-        c = client or httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+        c = client or httpx.AsyncClient(timeout=timeout, follow_redirects=False,
                                         headers={"user-agent": "polybot/0.1"})
         try:
-            resp = await c.get(url)
-            resp.raise_for_status()
-            return resp.text
+            async with c.stream("GET", url, follow_redirects=False) as resp:
+                resp.raise_for_status()
+                declared = resp.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        declared_bytes = int(declared)
+                    except ValueError as exc:
+                        raise ValueError("invalid feed content-length") from exc
+                    if declared_bytes > max_bytes:
+                        raise FeedResponseTooLarge(
+                            f"feed declared length exceeds {max_bytes} bytes"
+                        )
+
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise FeedResponseTooLarge(
+                            f"feed response exceeds {max_bytes} bytes"
+                        )
+                encoding = resp.encoding or "utf-8"
+                return bytes(body).decode(encoding, errors="replace")
         finally:
             if owned:
                 await c.aclose()

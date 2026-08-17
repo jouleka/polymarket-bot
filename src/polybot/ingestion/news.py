@@ -19,8 +19,9 @@ consumes ``due_within`` and is wired later.
 """
 
 import asyncio
-import xml.etree.ElementTree as ET
 from dataclasses import replace
+
+import defusedxml.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 

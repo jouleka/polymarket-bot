@@ -7,7 +7,6 @@ observed_at <= T (no future frame may leak in). These are the properties
 calibration / shadow backtesting rely on.
 """
 
-import tempfile
 from decimal import Decimal
 
 from polybot.core.clock import MonotonicStamper
@@ -21,6 +20,7 @@ from polybot.ingestion.replay import (
     reconstruct_from_store,
 )
 from polybot.storage.market_memory import EventStore
+from tests._temp_db import temporary_db_path
 
 
 def _book(asset_id, bids, asks):
@@ -168,7 +168,7 @@ def test_reconstruct_from_store_replay_until_is_point_in_time():
     # observed_at cutoff and assert it equals the live state at that cutoff -- and
     # that a LATER frame does not leak into an earlier reconstruction.
     stamper = MonotonicStamper()
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         stream = MarketStream(stamper, sink=PersistingSink(store), asset_ids=["A"])
 
         at = {}
@@ -190,7 +190,7 @@ def test_reconstruct_from_store_ignores_non_ws_rows():
     # The store also holds Data-API rows (a different source/shape); replay must
     # reconstruct from the WS frames only and not choke on the others.
     stamper = MonotonicStamper()
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         ws = PersistingSink(store)  # source="clob-ws"
         api = PersistingSink(store, source="data-api", source_tier="VENUE")
         # interleave a Data-API-style observation (no event_type/book shape)

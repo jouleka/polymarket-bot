@@ -156,7 +156,7 @@ async def _amain(runtime: IngestionRuntime) -> None:
         try:
             loop.add_signal_handler(sig, runtime.request_stop)
         except NotImplementedError:
-            pass  # add_signal_handler is POSIX-only; the VPS is Linux, dev-on-Windows just Ctrl-C's
+            pass  # add_signal_handler is POSIX-only; unsupported platforms use Ctrl-C directly
     await runtime.run()
 
 

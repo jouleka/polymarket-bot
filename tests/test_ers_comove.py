@@ -1,7 +1,6 @@
 """S3 / POL-5 slice 3 -- co-move estimator + ClusterModel + per-cluster cap."""
 
 import json
-import tempfile
 from decimal import Decimal
 
 import pytest
@@ -11,6 +10,7 @@ from polybot.ers.comove import ClusterModel, build_bar_series, correlation
 from polybot.ingestion.midpoint import MIDPOINT_SCHEMA, MIDPOINT_SOURCE
 from polybot.ers.validator import ClusterView
 from polybot.storage.market_memory import EventStore
+from tests._temp_db import temporary_db_path
 
 
 def _bars(*mids):
@@ -133,7 +133,7 @@ def _mid_env(observed_at, books, *, market_links=None, published_at=None):
 
 
 def test_build_bar_series_reads_midpoint_batches_and_uses_bar_close():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.60", "0.62", "0.61"),
             "B": ("0.30", "0.32", "0.31"),
@@ -155,7 +155,7 @@ def test_build_bar_series_reads_midpoint_batches_and_uses_bar_close():
 
 
 def test_build_bar_series_same_bar_omission_keeps_earlier_token_observation():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.60", "0.62", "0.61"),
             "B": ("0.30", "0.32", "0.31"),
@@ -171,7 +171,7 @@ def test_build_bar_series_same_bar_omission_keeps_earlier_token_observation():
 
 
 def test_build_bar_series_same_bar_omission_keeps_earlier_first_token_observation():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.60", "0.62", "0.61"),
             "B": ("0.30", "0.32", "0.31"),
@@ -187,7 +187,7 @@ def test_build_bar_series_same_bar_omission_keeps_earlier_first_token_observatio
 
 
 def test_build_bar_series_midpoints_respect_until_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {"A": ("0.60", "0.62", "0.61")}))
         store.append(_mid_env(1000, {"A": ("0.70", "0.72", "0.71")}))
         store.append(_mid_env(2000, {"A": ("0.80", "0.82", "0.81")}))
@@ -198,7 +198,7 @@ def test_build_bar_series_midpoints_respect_until_cutoff():
 
 
 def test_build_bar_series_forced_midpoint_respects_nonzero_until_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {"A": ("0.60", "0.62", "0.61")}))
         store.append(_mid_env(1000, {"A": ("0.70", "0.72", "0.71")}))
         store.append(_mid_env(2000, {"A": ("0.80", "0.82", "0.81")}))
@@ -214,7 +214,7 @@ def test_build_bar_series_forced_midpoint_respects_nonzero_until_cutoff():
 
 
 def test_build_bar_series_until_zero_is_a_real_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(1, {"A": ("0.60", "0.62", "0.61")}))
 
         bars = build_bar_series(store, bar_ns=1000, until=0)
@@ -223,7 +223,7 @@ def test_build_bar_series_until_zero_is_a_real_cutoff():
 
 
 def test_build_bar_series_forced_midpoint_until_zero_is_a_real_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(1, {"A": ("0.60", "0.62", "0.61")}))
 
         bars = build_bar_series(
@@ -237,7 +237,7 @@ def test_build_bar_series_forced_midpoint_until_zero_is_a_real_cutoff():
 
 
 def test_build_bar_series_explicit_raw_until_zero_is_a_real_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 1))
 
         bars = build_bar_series(store, bar_ns=1000, until=0, source="clob-ws")
@@ -247,7 +247,7 @@ def test_build_bar_series_explicit_raw_until_zero_is_a_real_cutoff():
 
 @pytest.mark.parametrize("source", ["clob-ws", "diagnostic-ws"])
 def test_build_bar_series_explicit_raw_modes_respect_nonzero_until_cutoff(source):
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env(
             "A", _book_frame("A", "0.60", "0.62"), 0, source=source,
         ))
@@ -264,7 +264,7 @@ def test_build_bar_series_explicit_raw_modes_respect_nonzero_until_cutoff(source
 
 
 def test_build_bar_series_uses_observed_at_not_published_at_for_bar_index():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(
             1000,
             {"A": ("0.60", "0.62", "0.61")},
@@ -277,7 +277,7 @@ def test_build_bar_series_uses_observed_at_not_published_at_for_bar_index():
 
 
 def test_build_bar_series_uses_observed_at_for_every_token_in_batch():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(
             1000,
             {
@@ -296,7 +296,7 @@ def test_build_bar_series_uses_observed_at_for_every_token_in_batch():
 
 
 def test_build_bar_series_auto_selection_uses_only_rows_before_until():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("RAW", _book_frame("RAW", "0.60", "0.62"), 0))
         store.append(_mid_env(2000, {"A": ("0.70", "0.72", "0.71")}))
 
@@ -306,7 +306,7 @@ def test_build_bar_series_auto_selection_uses_only_rows_before_until():
 
 
 def test_build_bar_series_empty_midpoint_batch_still_suppresses_raw_fallback():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("RAW", _book_frame("RAW", "0.60", "0.62"), 0))
         store.append(_mid_env(10, {}))
 
@@ -316,7 +316,7 @@ def test_build_bar_series_empty_midpoint_batch_still_suppresses_raw_fallback():
 
 
 def test_build_bar_series_does_not_forward_fill_omitted_midpoint():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.60", "0.62", "0.61"),
             "B": ("0.30", "0.32", "0.31"),
@@ -332,7 +332,7 @@ def test_build_bar_series_does_not_forward_fill_omitted_midpoint():
 
 
 def test_build_bar_series_does_not_selectively_forward_fill_first_token():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.60", "0.62", "0.61"),
             "B": ("0.30", "0.32", "0.31"),
@@ -348,7 +348,7 @@ def test_build_bar_series_does_not_selectively_forward_fill_first_token():
 
 
 def test_build_bar_series_auto_never_merges_raw_and_midpoint_rows():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("RAW", _book_frame("RAW", "0.90", "0.92"), 0))
         store.append(_mid_env(10, {"A": ("0.50", "0.52", "0.51")}))
 
@@ -362,7 +362,7 @@ def test_build_bar_series_auto_never_merges_raw_and_midpoint_rows():
 
 
 def test_build_bar_series_auto_detects_snapshot_before_later_raw_row():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {"A": ("0.50", "0.52", "0.51")}))
         store.append(_ws_env("RAW", _book_frame("RAW", "0.90", "0.92"), 10))
 
@@ -372,7 +372,7 @@ def test_build_bar_series_auto_detects_snapshot_before_later_raw_row():
 
 
 def test_build_bar_series_uses_decoded_payload_not_market_links():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(
             0,
             {"A": ("0.50", "0.52", "0.51")},
@@ -385,7 +385,7 @@ def test_build_bar_series_uses_decoded_payload_not_market_links():
 
 
 def test_build_bar_series_market_links_cannot_filter_later_payload_token():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(
             0,
             {
@@ -415,14 +415,14 @@ def test_build_bar_series_fails_loud_on_malformed_midpoint_batch():
         }),
         market_links=("A",),
     )
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(malformed)
         with pytest.raises(ValueError, match="midpoint"):
             build_bar_series(store, bar_ns=1000)
 
 
 def test_build_bar_series_validates_later_token_in_midpoint_batch():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.50", "0.52", "0.51"),
             "B": ("0.30", "0.32", "0.99"),
@@ -432,7 +432,7 @@ def test_build_bar_series_validates_later_token_in_midpoint_batch():
 
 
 def test_build_bar_series_validates_first_token_in_multi_token_batch():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {
             "A": ("0.50", "0.52", "0.99"),
             "B": ("0.30", "0.32", "0.31"),
@@ -453,7 +453,7 @@ def test_build_bar_series_fails_loud_on_malformed_later_midpoint_batch():
         }),
         market_links=("A",),
     )
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_mid_env(0, {"A": ("0.50", "0.52", "0.51")}))
         store.append(malformed)
         with pytest.raises(ValueError, match="midpoint"):
@@ -461,7 +461,7 @@ def test_build_bar_series_fails_loud_on_malformed_later_midpoint_batch():
 
 
 def test_build_bar_series_auto_falls_back_to_legacy_raw_store():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
         store.append(_ws_env("A", _book_frame("A", "0.50", "0.52"), 10))
         store.append(_ws_env("A", _book_frame("A", "0.70", "0.72"), 1000))
@@ -472,7 +472,7 @@ def test_build_bar_series_auto_falls_back_to_legacy_raw_store():
 
 
 def test_build_bar_series_forced_midpoint_source_returns_empty_without_batches():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
 
         bars = build_bar_series(store, bar_ns=1000, source=MIDPOINT_SOURCE)
@@ -481,7 +481,7 @@ def test_build_bar_series_forced_midpoint_source_returns_empty_without_batches()
 
 
 def test_build_bar_series_unknown_explicit_source_does_not_replay_clob_ws():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
 
         bars = build_bar_series(store, bar_ns=1000, source="unknown-source")
@@ -490,7 +490,7 @@ def test_build_bar_series_unknown_explicit_source_does_not_replay_clob_ws():
 
 
 def test_build_bar_series_replays_alternate_explicit_raw_source():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env(
             "A",
             _book_frame("A", "0.60", "0.62"),
@@ -504,7 +504,7 @@ def test_build_bar_series_replays_alternate_explicit_raw_source():
 
 
 def test_build_bar_series_alternate_explicit_source_respects_until_zero():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env(
             "A",
             _book_frame("A", "0.60", "0.62"),
@@ -523,7 +523,7 @@ def test_build_bar_series_alternate_explicit_source_respects_until_zero():
 
 
 def test_build_bar_series_alternate_explicit_source_uses_same_bar_close():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env(
             "A", _book_frame("A", "0.60", "0.62"), 0, source="diagnostic-ws",
         ))
@@ -537,7 +537,7 @@ def test_build_bar_series_alternate_explicit_source_uses_same_bar_close():
 
 
 def test_build_bar_series_alternate_source_closes_every_token_in_same_bar():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env(
             "A", _book_frame("A", "0.60", "0.62"), 0, source="diagnostic-ws",
         ))
@@ -560,7 +560,7 @@ def test_build_bar_series_alternate_source_closes_every_token_in_same_bar():
 
 
 def test_build_bar_series_alternate_explicit_source_is_exclusive_in_mixed_store():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("RAW", _book_frame("RAW", "0.90", "0.92"), 0))
         store.append(_ws_env(
             "ALT", _book_frame("ALT", "0.60", "0.62"), 10, source="diagnostic-ws",
@@ -572,7 +572,7 @@ def test_build_bar_series_alternate_explicit_source_is_exclusive_in_mixed_store(
 
 
 def test_build_bar_series_takes_last_midpoint_in_each_bar():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))     # bar0, mid .61
         store.append(_ws_env("A", _book_frame("A", "0.50", "0.52"), 10))    # bar0, mid .51 (last)
         store.append(_ws_env("A", _book_frame("A", "0.70", "0.72"), 1000))  # bar1, mid .71
@@ -581,7 +581,7 @@ def test_build_bar_series_takes_last_midpoint_in_each_bar():
 
 
 def test_build_bar_series_tracks_multiple_assets():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
         store.append(_ws_env("B", _book_frame("B", "0.30", "0.32"), 5))
         store.append(_ws_env("A", _book_frame("A", "0.64", "0.66"), 1000))
@@ -592,7 +592,7 @@ def test_build_bar_series_tracks_multiple_assets():
 
 
 def test_build_bar_series_respects_until_cutoff():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))     # bar0
         store.append(_ws_env("A", _book_frame("A", "0.70", "0.72"), 1000))  # bar1
         store.append(_ws_env("A", _book_frame("A", "0.80", "0.82"), 2000))  # bar2 (excluded)
@@ -601,7 +601,7 @@ def test_build_bar_series_respects_until_cutoff():
 
 
 def test_build_bar_series_skips_non_ws_rows():
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         store.append(_ws_env("A", _book_frame("A", "0.60", "0.62"), 0))
         store.append(Envelope(source="data-api", source_tier="VENUE", event_id="t1",
                               observed_at=5, content=json.dumps({"id": "t1"}), market_links=("Z",)))

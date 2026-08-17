@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import grp
 import logging
+from pathlib import Path
 import signal
 import sys
 
@@ -23,7 +24,6 @@ from polybot.runtime.shadow_root import build_shadow_runtime
 
 
 log = logging.getLogger("polybot.shadow")
-LOCK_PATH = "/srv/polybot/app/data/shadow-runtime.lock"
 
 
 def build_production_runtime(
@@ -39,7 +39,8 @@ def build_production_runtime(
             runtime_config.ingestion,
             timeout=runtime_config.rpc_timeout_seconds,
         )
-    lock = lock_factory(LOCK_PATH)
+    lock_path = str(Path(config.ingestion.db_path).with_name("shadow-runtime.lock"))
+    lock = lock_factory(lock_path)
     lock.acquire()
     lock_owned = True
     gamma = None

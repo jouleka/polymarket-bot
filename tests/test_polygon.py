@@ -7,7 +7,6 @@ verified against actual chain data, not a hand-built guess.
 
 import asyncio
 import json
-import tempfile
 
 from polybot.core.clock import MonotonicStamper
 from polybot.ingestion.polygon import (
@@ -20,6 +19,7 @@ from polybot.ingestion.polygon import (
     decode_log,
 )
 from polybot.storage.market_memory import EventStore
+from tests._temp_db import temporary_db_path
 
 # Real ERC-1155 logs from the ConditionalTokens contract.
 _TS_LOG = json.loads(
@@ -101,7 +101,7 @@ class _FakeRPC:
 
 def test_poll_once_persists_each_log_as_a_ground_truth_envelope():
     rpc = _FakeRPC(logs=[_TS_LOG, _TB_LOG])
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         watcher = PolygonLogWatcher(rpc, MonotonicStamper(), store)
 
         n = asyncio.run(watcher.poll_once(100, 200))
@@ -118,7 +118,7 @@ def test_poll_once_persists_each_log_as_a_ground_truth_envelope():
 
 def test_poll_once_is_idempotent_on_repolled_overlap():
     rpc = _FakeRPC(logs=[_TS_LOG, _TB_LOG])
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         watcher = PolygonLogWatcher(rpc, MonotonicStamper(), store)
 
         asyncio.run(watcher.poll_once(100, 200))
@@ -129,7 +129,7 @@ def test_poll_once_is_idempotent_on_repolled_overlap():
 
 def test_poll_once_filters_by_the_discovered_addresses_and_topics():
     rpc = _FakeRPC(logs=[])
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         watcher = PolygonLogWatcher(rpc, MonotonicStamper(), store)
 
         asyncio.run(watcher.poll_once(10, 20))
@@ -144,7 +144,7 @@ def test_poll_once_filters_by_the_discovered_addresses_and_topics():
 
 def test_run_advances_the_confirmed_head_in_bounded_chunks():
     rpc = _FakeRPC(head=1000, logs=[])
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         watcher = PolygonLogWatcher(rpc, MonotonicStamper(), store)
 
         async def noop(_):
@@ -181,7 +181,7 @@ def test_poll_once_archives_a_malformed_log_raw_and_keeps_going():
     malformed = {"topics": [TRANSFER_SINGLE], "data": "0x",  # truncated -> decode raises
                  "blockNumber": "0x10", "transactionHash": "0xdead", "logIndex": "0x1"}
     rpc = _FakeRPC(logs=[good, malformed, _TB_LOG])
-    with EventStore(tempfile.mktemp(suffix=".db")) as store:
+    with EventStore(temporary_db_path()) as store:
         watcher = PolygonLogWatcher(rpc, MonotonicStamper(), store)
 
         n = asyncio.run(watcher.poll_once(1, 2))

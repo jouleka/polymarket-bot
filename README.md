@@ -1,50 +1,122 @@
 # polymarket-bot
 
-Autonomous 24/7 Polymarket trading bot. The **Hermes** agent is the reasoning brain; a
-**deterministic Execution & Risk Service (ERS)** is the hands. There is **no human-in-the-loop
-confirm** — deterministic guardrails replace it, with Telegram as notify + remote kill only.
+[![CI](https://github.com/jouleka/polymarket-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/jouleka/polymarket-bot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/jouleka/polymarket-bot/actions/workflows/codeql.yml/badge.svg)](https://github.com/jouleka/polymarket-bot/actions/workflows/codeql.yml)
 
-**Status (2026-07-11):** the deterministic S1–S9 engine and corrected D4a ingestion/downsample
-runtime are on `main`. POL-14's immutable Gamma `MarketRegistry` and fail-closed ERS integration
-landed via [PR #1](https://github.com/jouleka/polymarket-bot/pull/1); merged `main` passes **1,482
-tests**, a **64/64 required mutation ledger**, and a **19/19 bounded equivalent sweep**. The VPS
-ingestion service remains **stopped and disabled**; the
-full paper/shadow runtime, deployed propose-only brain, and live signer are not complete. Build
-tracking is in YouTrack **POL**.
+An experimental, paper-only research system for evaluating automated strategies on Polymarket.
+It combines market and news ingestion, deterministic execution and risk controls, resolution and
+settlement tracking, simulated execution, and a propose-only reasoning-agent bridge.
 
-## Read first
-1. [`docs/CONTEXT.md`](docs/CONTEXT.md) — everything a human or LLM needs to onboard (verified facts,
-   decisions, landmines). **Start here.**
-2. [`docs/specs/2026-06-24-autonomous-polymarket-bot-design.md`](docs/specs/2026-06-24-autonomous-polymarket-bot-design.md)
-   — the full master design.
+> [!WARNING]
+> This project is unaudited research software. It does not currently include a live signer, wallet
+> integration, or live order-submission path. It makes no claim of profitability and must not be
+> used with real funds.
 
-## The safety model, in one sentence
-Hermes only ever calls **read tools + one write tool `propose_trade(...)`** that does nothing but
-INSERT a *pending* proposal row. A separate deterministic service re-validates every field,
-re-prices off the live book, re-sizes (¼-Kelly), runs all risk caps, and is the **only** thing that
-ever signs or submits. **Hermes never holds a key and can never move money** — mandatory, because
-Hermes's approval gate covers only shell commands and its MCP tool calls are *not* gated.
+## Current status
 
-## Honest stance
-The null hypothesis is that this system is **break-even-to-slightly-negative** after fees, spread,
-slippage, capital lockup, and adverse UMA resolution. ~80% of traders lose; no open-source Polymarket
-bot has a credible profit claim. **Its first job is to not blow up, and to prove a net edge in shadow
-mode before risking more than a small test wallet.** If nothing clears its bar in shadow, the correct
-outcome is *do not deploy.*
+| Capability | Status |
+| --- | --- |
+| Market, order-book, news, and resolution ingestion | Implemented |
+| Immutable market registry and deterministic ERS checks | Implemented |
+| Paper execution, accounting, and shadow evidence | Implemented |
+| Propose-only reasoning-agent bridge | Implemented |
+| Live signing and order submission | Not implemented |
+| Production readiness or independent security audit | Not complete |
 
-## Remaining build order
+The repository is under active development. The full runtime and some integration tests rely on
+Linux-specific process and Unix-socket security features.
 
-The pure S1–S9 components are built. The owner-approved remaining sequence is:
+## Safety and authority model
 
-`POL-15` resolution/settlement feed → `POL-16` shadow-execution wiring → `POL-17` continuous
-ERS/harness runtime → `POL-18` isolated propose-only Hermes brain →
-≤2-week paper/shadow run → `POL-4` live signing gate.
+The reasoning layer can read curated market context and submit a proposed trade. It cannot approve,
+sign, or submit an order. A separate deterministic Execution and Risk Service (ERS) validates and
+re-prices proposals, applies sizing and risk limits, and records simulated outcomes.
 
-POL-4 is blocked on a funded wallet on a clean non-Windows machine. Nothing in the current runtime
-signs or moves money.
+The current signer implementation is paper-only. No private key or wallet credential should ever be
+stored in this repository.
 
-Nothing touches real money until **S4 is tested** (kill path against a wedged process) and **S9 has
-run a full shadow period** with net-positive, calibrated, out-of-sample results.
+## Architecture
 
-## Tracking
-YouTrack project: <https://tracker.example.invalid/projects/POL>
+```text
+market/news sources
+        |
+        v
+ingestion + market registry ---> curated read views
+        |                              |
+        v                              v
+resolution tracking            propose-only agent
+        |                              |
+        +-------------> ERS <----------+
+                         |
+                         v
+                 paper execution
+                         |
+                         v
+              shadow evidence + P&L
+```
+
+The main packages live under `src/polybot/`:
+
+- `ingestion`, `runtime`, and `resolution` collect and normalize external state.
+- `ers` owns deterministic validation, safety controls, and lifecycle supervision.
+- `harness` records paper fills, evidence, and simulated P&L.
+- `hermes` exposes curated reads and a propose-only bridge.
+- `calibration`, `detectors`, `fusion`, `maker`, and `truthgate` contain research components used
+  to assess signals and simulated decisions.
+
+## Local setup
+
+Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) are required. Linux is the supported
+platform for the complete runtime and test contract.
+
+```bash
+git clone https://github.com/jouleka/polymarket-bot.git
+cd polymarket-bot
+uv sync --locked --extra dev
+```
+
+Run the tests with:
+
+```bash
+uv run --locked pytest
+```
+
+On macOS, Linux-only supervision and peer-credential tests are expected not to run successfully.
+Do not treat a partial macOS result as release verification.
+
+The generic configuration in [`deploy/config.example.toml`](deploy/config.example.toml) uses local
+paper-mode data paths and public, unauthenticated market sources. Copy it before changing values:
+
+```bash
+cp deploy/config.example.toml config.local.toml
+mkdir -p data /tmp/polybot
+chmod 700 data /tmp/polybot
+uv run --locked polybot-shadow --config config.local.toml
+```
+
+This command performs network reads and simulated accounting only. It has no signer, wallet, or live
+order client.
+
+## Project boundaries
+
+- Paper and shadow evaluation only.
+- No financial, investment, or legal advice.
+- No guarantee that upstream APIs, market rules, fee schedules, or venue availability remain
+  unchanged.
+- No deployment credential, private key, wallet seed, token, or production host detail belongs in
+  source control.
+
+## Security
+
+Please do not open a public issue for a suspected vulnerability. Follow [SECURITY.md](SECURITY.md)
+for supported versions and private reporting instructions.
+
+## Contributing
+
+This repository is not yet accepting production-use claims or live-trading integrations. Focused
+bug reports and reproducible paper-mode improvements are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+Released under the [MIT License](LICENSE).

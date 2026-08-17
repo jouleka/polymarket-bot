@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Published Conditional Tokens smart-contract address"
+paths = ['''^src/polybot/ingestion/polygon\.py$''']
+regexTarget = "line"
+regexes = ['''^CONDITIONAL_TOKENS = "0x[0-9A-Fa-f]{40}"''']

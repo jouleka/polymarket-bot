@@ -4,11 +4,16 @@
 *.key
 *.pem
 secrets/
-**/secret*
+secret.*
+*.secret
+*.secrets
 wallet*.json
 keystore/
 config/caps.signed*
 config/*.local.*
+config.local.toml
+auth.json
+.op.env
 
 # ── Python ──────────────────────────────────────────────────────────────
 __pycache__/
@@ -19,6 +24,9 @@ venv/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
+build/
+.coverage
+htmlcov/
 
 # ── Node (if any TS tooling / Rust-client bindings) ─────────────────────
 node_modules/

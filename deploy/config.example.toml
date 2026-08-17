@@ -1,27 +1,26 @@
-# polymarket-bot composite paper-shadow runtime config.
-# Copy to /srv/polybot/app/config.toml and adjust; read by
-# polybot.runtime.shadow_config.load_shadow_config.
+# Generic local paper-shadow runtime config.
+# Copy to config.local.toml and adjust; read by polybot.runtime.shadow_config.load_shadow_config.
 # Any field can be overridden by an env var POLYBOT_INGEST_<FIELD_UPPERCASE>
-#   (e.g. POLYBOT_INGEST_UNIVERSE_MAX_MARKETS=400), which the systemd .env (EnvironmentFile) can carry.
+#   (e.g. POLYBOT_INGEST_UNIVERSE_MAX_MARKETS=400), which a local environment can carry.
 
-db_path = "/srv/polybot/app/data/market_memory.db"   # versioned midpoint batches + full deduplicated trade tape (no raw CLOB frames)
+db_path = "./data/market_memory.db"   # versioned midpoint batches + full deduplicated trade tape (no raw CLOB frames)
 universe_max_markets = 200            # start conservative (top-N active binary markets by 24h volume); widen once proven
 max_assets_per_shard = 25             # bound one divergence/resync to 25 token books
 snapshot_interval_seconds = 60.0      # persist one global midpoint batch per minute; every WS frame still updates live books
 data_api_enabled = true               # also poll the Data API /trades tape
 data_api_interval_seconds = 2.0
 data_api_limit = 500                  # /trades page size
-heartbeat_path = "/srv/polybot/app/data/heartbeat"   # liveness file (out-of-process readable)
+heartbeat_path = "./data/heartbeat"   # liveness file (out-of-process readable)
 heartbeat_interval_seconds = 5.0
 log_level = "INFO"
 
 [shadow]
-intents_db_path = "/srv/polybot/app/data/intents.db"
-forecasts_db_path = "/srv/polybot/app/data/forecasts.db"
-components_db_path = "/srv/polybot/app/data/components.db"
-maker_db_path = "/srv/polybot/app/data/maker.db"
-shadow_db_path = "/srv/polybot/app/data/shadow.db"
-resolution_db_path = "/srv/polybot/app/data/resolution.db"
+intents_db_path = "./data/intents.db"
+forecasts_db_path = "./data/forecasts.db"
+components_db_path = "./data/components.db"
+maker_db_path = "./data/maker.db"
+shadow_db_path = "./data/shadow.db"
+resolution_db_path = "./data/resolution.db"
 cycle_interval_seconds = 1.0
 registry_refresh_seconds = 300.0
 registry_max_age_seconds = 900.0
@@ -30,9 +29,7 @@ news_poll_seconds = 60.0
 rpc_timeout_seconds = 15.0
 readiness_timeout_seconds = 60.0
 outbox_batch_limit = 100
-status_path = "/run/polybot/shadow-status.json"
-proposal_socket_path = "/run/polybot-proposal/proposal.sock"
-proposal_socket_group = "polybot-proposal"
+status_path = "/tmp/polybot/shadow-status.json"
 proposal_max_per_minute = 20
 proposal_request_timeout_seconds = 2.0
 

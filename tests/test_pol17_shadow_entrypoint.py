@@ -50,6 +50,7 @@ def test_production_builder_wires_paper_root_and_transfers_adapter_ownership():
 
 def test_production_builder_acquires_singleton_before_any_adapter_or_store():
     trace = []
+    lock_paths = []
     lock = SimpleNamespace(
         acquire=lambda: trace.append("lock"),
         release=lambda: trace.append("unlock"),
@@ -72,7 +73,7 @@ def test_production_builder_acquires_singleton_before_any_adapter_or_store():
         history_stamper_factory=lambda _path: trace.append("history") or object(),
         health_stamper_factory=lambda: object(),
         news_fetch_factory=lambda **_kwargs: object(),
-        lock_factory=lambda _path: lock,
+        lock_factory=lambda path: lock_paths.append(path) or lock,
         readiness_factory=lambda: object(),
         root_builder=lambda _config, **kwargs: (
             trace.append("stores") or runtime
@@ -81,6 +82,7 @@ def test_production_builder_acquires_singleton_before_any_adapter_or_store():
     )
 
     assert built is runtime
+    assert lock_paths == ["/data/shadow-runtime.lock"]
     assert trace[:5] == ["lock", "gamma", "providers", "history", "stores"]
 
 
