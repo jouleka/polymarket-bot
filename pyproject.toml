@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     "defusedxml>=0.7.1,<1",
     "httpx>=0.28,<0.29",
-    "mcp==1.28.1",
+    "mcp==1.30.0",
     "websockets>=16,<17",
 ]
 
